@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from renforge.editor_live_common import DEMO_COPY_IGNORE
 from renforge.editor_style_color_runner import (
     FIXTURE_SCREEN,
     TARGET_ID,
@@ -25,7 +26,7 @@ _DEMO = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
 @pytest.fixture
 def demo_copy(tmp_path: Path) -> Path:
     destination = tmp_path / "demo"
-    shutil.copytree(_DEMO, destination, ignore=shutil.ignore_patterns("*.rpyc", "cache"))
+    shutil.copytree(_DEMO, destination, ignore=DEMO_COPY_IGNORE)
     inject_editor_style_resources(destination)
     return destination
 
@@ -144,6 +145,8 @@ def test_style_color_live_product_path_pass(demo_copy: Path) -> None:
     assert generations["post_undo"] >= generations["pre_undo"] + 1
 
     assert report["restore"]["byte_identical"] is True
+    buttons = report["style_button_clicks"]
+    assert buttons["ok"] is True, buttons
     assert report["verdict"] == "pass"
     assert report["verdict_reason"] is None
     assert TARGET_ID == "style_color_target"

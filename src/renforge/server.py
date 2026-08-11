@@ -103,7 +103,7 @@ def _register_tools(app: Any) -> None:
         *,
         version: str = "stable",
         warp: str | None = None,
-        editor: bool = False,
+        editor: bool = True,
         display: str = "auto",
         audio: str = "auto",
         savedir: str | None = None,
@@ -113,7 +113,15 @@ def _register_tools(app: Any) -> None:
         session: dict[str, Any] | None = None,
         cancel_event: threading.Event | None = None,
     ) -> dict:
-        canonical_editor = True
+        canonical_editor = bool(editor)
+        session_cfg = dict(session or {})
+        effective_savedir = session_cfg.get("savedir", savedir)
+        effective_persistent = str(session_cfg.get("persistent", persistent) or "existing")
+        effective_cleanup = (
+            session_cfg["cleanup_on_stop"]
+            if isinstance(session_cfg.get("cleanup_on_stop"), bool)
+            else cleanup_on_stop
+        )
         if cancel_event is not None and cancel_event.is_set():
             return live.cancelled_launch_result(phase="detecting_environment")
         from .dashboard_client import (
@@ -121,12 +129,19 @@ def _register_tools(app: Any) -> None:
             stop_game as stop_via_dashboard,
         )
 
-        # Dashboard owns its own display process; only warp/version are delegated.
+        # None = no matching dashboard. Any dict (including failure) is final:
+        # never fall back to a local launch after a contacted dashboard errors.
         delegated = launch_via_dashboard(
             project_path,
             version=version,
             warp=warp,
             editor=canonical_editor,
+            display=display,
+            audio=audio,
+            savedir=effective_savedir if isinstance(effective_savedir, str) else None,
+            persistent=effective_persistent,
+            cleanup_on_stop=bool(effective_cleanup),
+            timeout=timeout,
         )
         if delegated is not None:
             if cancel_event is not None and cancel_event.is_set():
@@ -169,9 +184,9 @@ def _register_tools(app: Any) -> None:
             editor=canonical_editor,
             display=display,
             audio=audio,
-            savedir=savedir,
-            persistent=persistent,
-            cleanup_on_stop=cleanup_on_stop,
+            savedir=effective_savedir if isinstance(effective_savedir, str) else None,
+            persistent=effective_persistent,
+            cleanup_on_stop=bool(effective_cleanup),
             timeout=timeout,
             session=session,
             cancel_event=cancel_event,
@@ -181,19 +196,27 @@ def _register_tools(app: Any) -> None:
         from .dashboard_client import stop_game as stop_via_dashboard
 
         delegated = stop_via_dashboard(project_path)
+        # Contacted dashboard failure is final; None means no dashboard.
         return delegated if delegated is not None else live.stop_game(project_path)
 
-    def _start_launch(project_path: str, **kwargs: Any) -> dict:
-        kwargs["editor"] = True
+    def _launch_status(project_path: str) -> dict:
+        from .dashboard_client import launch_status as status_via_dashboard
 
-        def _launch(cancel_event: threading.Event) -> dict:
+        delegated = status_via_dashboard(project_path)
+        return delegated if delegated is not None else live.launch_status(project_path)
+
+    def _start_launch(project_path: str, **kwargs: Any) -> dict:
+        requested_editor = bool(kwargs.get("editor", True))
+        kwargs["editor"] = requested_editor
+
+        def _launch(project_root: Path, cancel_event: threading.Event) -> dict:
             return _launch_game(
-                project_path,
+                str(project_root),
                 cancel_event=cancel_event,
                 **kwargs,
             )
 
-        return live.start_launch(project_path, _launch, editor=True)
+        return live.start_launch(project_path, _launch, editor=requested_editor)
 
     def _context_payload() -> dict[str, Any]:
         dashboard = session_registry.active_dashboard()
@@ -214,6 +237,27 @@ def _register_tools(app: Any) -> None:
             "active_project": active_project,
             "project_source": project_source,
             "dashboard": dashboard,
+            "live_editor": {
+                "enabled_by_default": True,
+                "launch_tool": "renforge_launch",
+                "guide": "docs/LIVE_EDITOR.md",
+                "summary": (
+                    "In-game Live Editor is injected by default on "
+                    "renforge_launch. Preview is runtime-only until Save; "
+                    "locked targets stay inspectable. Use only public MCP "
+                    "tools — never private editor_task0_* handlers."
+                ),
+                "agent_workflow": [
+                    "renforge_info",
+                    "renforge_launch",
+                    "renforge_launch_status",
+                    "renforge_screenshot",
+                    "renforge_scene_tree",
+                    "renforge_click_at",
+                    "renforge_click_element",
+                    "renforge_stop",
+                ],
+            },
         }
         if active_project is None:
             payload["hint"] = (
@@ -365,7 +409,7 @@ def _register_tools(app: Any) -> None:
         project_path: str,
         warp: str = "",
         version: str = "stable",
-        editor: bool = False,
+        editor: bool = True,
         display: str = "auto",
         audio: str = "auto",
         savedir: str = "",
@@ -373,7 +417,15 @@ def _register_tools(app: Any) -> None:
         cleanup_on_stop: bool = True,
         timeout: float = 0,
     ) -> dict:
-        """Launch or reuse a game; set warp to a Ren'Py file:line target.
+        """Launch or reuse a game with the Live Editor enabled by default.
+
+        Pass ``editor=False`` to launch intentionally without the visual editor.
+
+        After launch, poll ``renforge_launch_status`` until ready, then observe
+        with a fresh ``renforge_screenshot`` or ``renforge_scene_tree`` before
+        any click. Use ``renforge_click_at`` or ``renforge_click_element`` with
+        a current ``frame_id`` guard; verify the result, then ``renforge_stop``.
+        See docs/LIVE_EDITOR.md. Optional ``warp`` is a Ren'Py file:line target.
 
         The call waits at most 20 seconds for readiness, then returns
         ``status="starting"`` while startup continues in the background. Poll
@@ -421,7 +473,7 @@ def _register_tools(app: Any) -> None:
             name="renforge_launch_status",
             params={"project_path": project_path},
             project_root=project_path,
-            fn=live.launch_status,
+            fn=_launch_status,
             args=(project_path,),
             kwargs={},
         )
@@ -1696,9 +1748,12 @@ def create_app() -> Any:
         "an overlay. renforge_launch returns status=starting after 20 seconds "
         "instead of exceeding common MCP timeouts; poll renforge_launch_status "
         "until ready or failed. It uses display/audio=auto and accepts "
-        "savedir=temporary for isolated sessions. For "
-        "live iteration, use renforge_control(action=\"reload_script\") after "
-        "edits, renforge_wait_until for one bounded condition, and "
+        "savedir=temporary for isolated sessions; pass editor=false only when "
+        "a session without the visual editor is intentional. For "
+        "live iteration after external .rpy edits, use "
+        "renforge_control(action=\"reload_script\"); Live Editor Save already "
+        "reloads and attests its own changes. Use renforge_wait_until for one "
+        "bounded condition, and "
         "renforge_get_errors after risky actions or a stopped process."
     )
     try:

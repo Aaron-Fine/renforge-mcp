@@ -9,6 +9,7 @@ Ren'Py's main-thread ``periodic_callbacks``) executes it and returns the reply.
 from __future__ import annotations
 
 import base64
+import contextlib
 import threading
 import time
 import types
@@ -30,9 +31,12 @@ def _load_editor_body():
     raw = Path(__file__).resolve().parents[1] / "src/renforge/bridge/editor.rpy"
     lines = raw.read_text(encoding="utf-8").splitlines()
     start = lines.index("init 1100 python:")
-    return "\n".join(
-        line[4:] if line.startswith("    ") else line for line in lines[start + 1 :]
-    )
+    body = []
+    for line in lines[start + 1 :]:
+        if line and not line.startswith("    ") and not line.startswith("#"):
+            break
+        body.append(line[4:] if line.startswith("    ") else line)
+    return "\n".join(body)
 
 
 class _FakeWidget:
@@ -208,7 +212,19 @@ def _fake_renpy(store):
 
 @pytest.fixture
 def running_bridge(tmp_path, monkeypatch):
-    monkeypatch.setenv("RENFORGE_BRIDGE_TOKEN", "runtime-token")
+    import stat
+
+    from renforge.bridge.control import read_bridge_info, write_starting_bridge_info
+
+    project_root = tmp_path.resolve(strict=True)
+    session_id = "a" * 32
+    token = "b" * 64
+
+    write_starting_bridge_info(project_root, session_id=session_id, token=token)
+
+    monkeypatch.setenv("RENFORGE_BRIDGE_TOKEN", token)
+    monkeypatch.setenv("RENFORGE_BRIDGE_SESSION_ID", session_id)
+    monkeypatch.setenv("RENFORGE_BRIDGE_PROJECT_ROOT", str(project_root))
     monkeypatch.setenv("RENFORGE_BRIDGE_PORT", "0")
 
     store = types.SimpleNamespace(score=7, player_name="Rin", _hidden="x")
@@ -225,7 +241,7 @@ def running_bridge(tmp_path, monkeypatch):
     store.QuickLoad = _QuickLoad()
 
     renpy = _fake_renpy(store)
-    renpy.config.basedir = str(tmp_path)
+    renpy.config.basedir = str(project_root)
 
     class _FakeEvent:
         def __init__(self, event_type, attributes=None):
@@ -282,20 +298,297 @@ def running_bridge(tmp_path, monkeypatch):
     pump_thread = threading.Thread(target=pump, daemon=True)
     pump_thread.start()
 
-    # Wait for the listener to publish bridge.json (as the real launcher does).
-    info_path = tmp_path / ".renforge" / "bridge.json"
+    # Wait for the listener to publish ready metadata under the private control path.
+    info_path = project_root / ".renforge" / "control" / "bridge.json"
+    ready_info = None
     for _ in range(300):
-        if info_path.exists():
+        try:
+            ready_info = read_bridge_info(
+                project_root,
+                require_ready=True,
+                expected_session_id=session_id,
+            )
             break
+        except Exception:
+            pass
         time.sleep(0.01)
+    assert ready_info is not None, "bridge did not publish valid ready metadata"
+    assert ready_info.session_id == session_id
+    assert ready_info.token == token
+    assert ready_info.project_root == str(project_root)
+    assert ready_info.host == "127.0.0.1"
+    assert 1 <= ready_info.port <= 65535
+    # POSIX private mode is 0600. Windows st_mode is not a real Unix mode
+    # (often 0o666); ownership is enforced via the protected DACL instead.
+    import os
 
-    client = BridgeClient.from_project(tmp_path)
-    env = types.SimpleNamespace(client=client, store=store, renpy=renpy, globs=globs)
+    if os.name != "nt":
+        mode = stat.S_IMODE(info_path.lstat().st_mode)
+        assert mode == 0o600
+    else:
+        from renforge.util.files import _win_validate_protected_dacl
+
+        _win_validate_protected_dacl(info_path)
+    assert not info_path.is_symlink()
+    assert not (project_root / ".renforge" / "bridge.json").exists()
+
+    client = BridgeClient(
+        BridgeConfig(
+            host=ready_info.host,
+            port=ready_info.port,
+            token=ready_info.token,
+        )
+    )
+    env = types.SimpleNamespace(
+        client=client,
+        store=store,
+        renpy=renpy,
+        globs=globs,
+        project_root=project_root,
+        session_id=session_id,
+        token=token,
+    )
     yield env
 
     stop.set()
     bridge.stop.set()
 
+
+def test_listener_listens_before_publishing_ready_metadata() -> None:
+    """Clients must never observe a ready record before accept() can succeed."""
+    body = _load_bridge_body()
+    start = body.index("def _renforge_listener")
+    end = body.index("def _renforge_install_callbacks", start)
+    listener = body[start:end]
+
+    assert listener.index("server.listen(5)") < listener.index(
+        "if not _renforge_publish_ready"
+    )
+
+
+def _seed_starting_bridge(project_root: Path, *, session_id: str, token: str) -> None:
+    from renforge.bridge.control import write_starting_bridge_info
+
+    write_starting_bridge_info(project_root, session_id=session_id, token=token)
+
+
+def _exec_bridge_with_env(tmp_path, monkeypatch, *, env: dict[str, str], seed_starting=True):
+    import io
+    import sys
+
+    project_root = tmp_path.resolve(strict=True)
+    session_id = env.get("RENFORGE_BRIDGE_SESSION_ID", "a" * 32)
+    token = env.get("RENFORGE_BRIDGE_TOKEN", "b" * 64)
+    if seed_starting:
+        _seed_starting_bridge(project_root, session_id=session_id if len(session_id) == 32 else "a" * 32, token=token if len(token) == 64 else "b" * 64)
+
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    if "RENFORGE_BRIDGE_PROJECT_ROOT" not in env:
+        monkeypatch.setenv("RENFORGE_BRIDGE_PROJECT_ROOT", str(project_root))
+    if "RENFORGE_BRIDGE_PORT" not in env:
+        monkeypatch.setenv("RENFORGE_BRIDGE_PORT", "0")
+
+    store = types.SimpleNamespace()
+    renpy = _fake_renpy(store)
+    renpy.config.basedir = str(project_root)
+
+    pygame = types.ModuleType("pygame_sdl2")
+    pygame.event = types.SimpleNamespace(Event=object, post=lambda *_a, **_k: None)
+    monkeypatch.setitem(sys.modules, "pygame_sdl2", pygame)
+    sys.modules.pop("_renforge_runtime", None)
+
+    stderr = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", stderr)
+
+    globs = {"__name__": "bridge_rpy", "renpy": renpy}
+    exec(compile(_load_bridge_body(), "bridge.rpy", "exec"), globs)
+    runtime = sys.modules.get("_renforge_runtime")
+    bridge = getattr(runtime, "bridge", None)
+    return project_root, bridge, stderr
+
+
+def test_bridge_publishes_ready_under_private_control_path(running_bridge):
+    info_path = running_bridge.project_root / ".renforge" / "control" / "bridge.json"
+    assert info_path.exists()
+    assert not (running_bridge.project_root / ".renforge" / "bridge.json").exists()
+    assert running_bridge.client.ping().get("pong") is True
+
+
+def test_bridge_startup_emits_info_conflict_when_starting_record_missing(tmp_path, monkeypatch):
+    project_root, bridge, stderr = _exec_bridge_with_env(
+        tmp_path,
+        monkeypatch,
+        env={
+            "RENFORGE_BRIDGE_TOKEN": "b" * 64,
+            "RENFORGE_BRIDGE_SESSION_ID": "a" * 32,
+            "RENFORGE_BRIDGE_PROJECT_ROOT": str(tmp_path.resolve(strict=True)),
+        },
+        seed_starting=False,
+    )
+    assert bridge is not None
+    for _ in range(300):
+        if bridge.stop.is_set():
+            break
+        time.sleep(0.01)
+    assert bridge.stop.is_set()
+    assert "RENFORGE_BRIDGE_STARTUP_ERROR=BRIDGE_INFO_CONFLICT\n" in stderr.getvalue()
+    assert not (project_root / ".renforge" / "control" / "bridge.json").exists()
+    assert not (project_root / ".renforge" / "bridge.json").exists()
+
+
+def test_bridge_startup_emits_identity_mismatch_when_session_differs(tmp_path, monkeypatch):
+    project_root = tmp_path.resolve(strict=True)
+    _seed_starting_bridge(project_root, session_id="a" * 32, token="b" * 64)
+    _, bridge, stderr = _exec_bridge_with_env(
+        tmp_path,
+        monkeypatch,
+        env={
+            "RENFORGE_BRIDGE_TOKEN": "b" * 64,
+            "RENFORGE_BRIDGE_SESSION_ID": "c" * 32,
+            "RENFORGE_BRIDGE_PROJECT_ROOT": str(project_root),
+        },
+        seed_starting=False,
+    )
+    assert bridge is not None
+    for _ in range(300):
+        if bridge.stop.is_set():
+            break
+        time.sleep(0.01)
+    assert bridge.stop.is_set()
+    assert stderr.getvalue() == "RENFORGE_BRIDGE_STARTUP_ERROR=BRIDGE_MANIFEST_IDENTITY_MISMATCH\n"
+    # Reserved starting record remains untouched on identity failure.
+    payload = (project_root / ".renforge" / "control" / "bridge.json").read_text(encoding="utf-8")
+    assert '"state":"starting"' in payload or '"state": "starting"' in payload
+
+
+def test_bridge_startup_emits_identity_mismatch_for_invalid_env_identity(tmp_path, monkeypatch):
+    project_root = tmp_path.resolve(strict=True)
+    cases = [
+        {
+            "RENFORGE_BRIDGE_TOKEN": "not-a-token",
+            "RENFORGE_BRIDGE_SESSION_ID": "a" * 32,
+            "RENFORGE_BRIDGE_PROJECT_ROOT": str(project_root),
+        },
+        {
+            "RENFORGE_BRIDGE_TOKEN": "b" * 64,
+            "RENFORGE_BRIDGE_SESSION_ID": "short",
+            "RENFORGE_BRIDGE_PROJECT_ROOT": str(project_root),
+        },
+        {
+            "RENFORGE_BRIDGE_TOKEN": "b" * 64,
+            "RENFORGE_BRIDGE_SESSION_ID": "a" * 32,
+            "RENFORGE_BRIDGE_PROJECT_ROOT": "",
+        },
+        {
+            "RENFORGE_BRIDGE_TOKEN": "b" * 64,
+            "RENFORGE_BRIDGE_SESSION_ID": "a" * 32,
+            "RENFORGE_BRIDGE_PROJECT_ROOT": "relative/path",
+        },
+    ]
+    for env in cases:
+        _, bridge, stderr = _exec_bridge_with_env(
+            tmp_path,
+            monkeypatch,
+            env=env,
+            seed_starting=False,
+        )
+        assert bridge is None
+        assert stderr.getvalue() == "RENFORGE_BRIDGE_STARTUP_ERROR=BRIDGE_MANIFEST_IDENTITY_MISMATCH\n"
+
+
+def test_bridge_startup_rejects_non_canonical_project_root(tmp_path, monkeypatch):
+    project_root = tmp_path.resolve(strict=True)
+    _seed_starting_bridge(project_root, session_id="a" * 32, token="b" * 64)
+    alias = tmp_path.parent / (tmp_path.name + "-alias")
+    if alias.exists() or alias.is_symlink():
+        alias.unlink()
+    alias.symlink_to(project_root, target_is_directory=True)
+    _, bridge, stderr = _exec_bridge_with_env(
+        tmp_path,
+        monkeypatch,
+        env={
+            "RENFORGE_BRIDGE_TOKEN": "b" * 64,
+            "RENFORGE_BRIDGE_SESSION_ID": "a" * 32,
+            "RENFORGE_BRIDGE_PROJECT_ROOT": str(alias),
+        },
+        seed_starting=False,
+    )
+    assert bridge is None
+    assert stderr.getvalue() == "RENFORGE_BRIDGE_STARTUP_ERROR=BRIDGE_MANIFEST_IDENTITY_MISMATCH\n"
+
+
+def test_bridge_startup_emits_info_conflict_when_bridge_info_is_symlink(tmp_path, monkeypatch):
+    project_root = tmp_path.resolve(strict=True)
+    control = project_root / ".renforge" / "control"
+    import os
+
+    if os.name == "nt":
+        from renforge.util.files import ensure_private_directory
+
+        ensure_private_directory(control)
+    else:
+        control.mkdir(parents=True)
+        os.chmod(control, 0o700)
+    victim = project_root / "victim.json"
+    victim.write_text("{}", encoding="utf-8")
+    _seed_starting_bridge(project_root, session_id="a" * 32, token="b" * 64)
+    info_path = control / "bridge.json"
+    info_path.unlink()
+    info_path.symlink_to(victim)
+
+    _, bridge, stderr = _exec_bridge_with_env(
+        tmp_path,
+        monkeypatch,
+        env={
+            "RENFORGE_BRIDGE_TOKEN": "b" * 64,
+            "RENFORGE_BRIDGE_SESSION_ID": "a" * 32,
+            "RENFORGE_BRIDGE_PROJECT_ROOT": str(project_root),
+        },
+        seed_starting=False,
+    )
+    assert bridge is not None
+    for _ in range(300):
+        if bridge.stop.is_set():
+            break
+        time.sleep(0.01)
+    assert bridge.stop.is_set()
+    assert stderr.getvalue() == "RENFORGE_BRIDGE_STARTUP_ERROR=BRIDGE_INFO_CONFLICT\n"
+    assert victim.read_text(encoding="utf-8") == "{}"
+
+
+def test_bridge_startup_emits_info_conflict_when_renforge_ancestor_is_symlink(tmp_path, monkeypatch):
+    project_root = tmp_path.resolve(strict=True)
+    real_control_parent = project_root / "real-renforge"
+    real_control_parent.mkdir()
+    import os
+
+    os.chmod(real_control_parent, 0o700)
+    (project_root / ".renforge").symlink_to(real_control_parent, target_is_directory=True)
+    # Place a control dir under the linked tree so only the .renforge ancestor is the link.
+    control = real_control_parent / "control"
+    control.mkdir()
+    os.chmod(control, 0o700)
+    (control / "bridge.json").write_text("{}", encoding="utf-8")
+    os.chmod(control / "bridge.json", 0o600)
+
+    _, bridge, stderr = _exec_bridge_with_env(
+        tmp_path,
+        monkeypatch,
+        env={
+            "RENFORGE_BRIDGE_TOKEN": "b" * 64,
+            "RENFORGE_BRIDGE_SESSION_ID": "a" * 32,
+            "RENFORGE_BRIDGE_PROJECT_ROOT": str(project_root),
+        },
+        seed_starting=False,
+    )
+    assert bridge is not None
+    for _ in range(300):
+        if bridge.stop.is_set():
+            break
+        time.sleep(0.01)
+    assert bridge.stop.is_set()
+    assert stderr.getvalue() == "RENFORGE_BRIDGE_STARTUP_ERROR=BRIDGE_INFO_CONFLICT\n"
 
 def test_ping_roundtrips_through_main_thread(running_bridge):
     assert running_bridge.client.ping().get("pong") is True
@@ -479,7 +772,7 @@ def test_screenshot_reports_when_the_aspect_ratio_is_unavailable(running_bridge)
 def test_bad_token_is_rejected(running_bridge):
     port = running_bridge.client._config.port
     wrong = BridgeClient(BridgeConfig(port=port, token="WRONG"))
-    assert wrong.request("ping").get("error") == "bad_token"
+    assert wrong.request("ping").get("error") == "authentication_failed"
 
 
 def test_advance_posts_dismiss_event(running_bridge):
@@ -1032,13 +1325,19 @@ def test_editor_mouse_up_applies_final_drag_position_without_motion(
 
         down = pygame.event.Event(
             pygame.MOUSEBUTTONDOWN,
-            {"button": 1, "pos": tuple(center), "mod": pygame.KMOD_NONE},
+            {
+                "button": 1,
+                # SDL reports physical Retina pixels while Displayable.event
+                # receives Ren'Py's already-normalized logical coordinates.
+                "pos": (center[0] * 2, center[1] * 2),
+                "mod": pygame.KMOD_NONE,
+            },
         )
         up = pygame.event.Event(
             pygame.MOUSEBUTTONUP,
             {
                 "button": 1,
-                "pos": (center[0] + 40, center[1] + 30),
+                "pos": ((center[0] + 40) * 2, (center[1] + 30) * 2),
                 "mod": pygame.KMOD_NONE,
             },
         )
@@ -2496,6 +2795,78 @@ def test_editor_reselect_resize_and_reset_use_the_selected_target_size(running_b
     assert state.targets[target_key]["size"] == [110, 22]
 
 
+def test_editor_select_widget_keeps_the_requested_identity_when_widgets_overlap(
+    running_bridge, monkeypatch
+):
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    for name in (
+        "RENFORGE_EDITOR_HOST",
+        "RENFORGE_EDITOR_PORT",
+        "RENFORGE_EDITOR_TOKEN",
+        "RENFORGE_EDITOR_PROTOCOL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    renpy.config.after_load_callbacks = []
+    renpy.Displayable = object
+    renpy.Render = lambda width, height: types.SimpleNamespace(
+        width=width, height=height
+    )
+    renpy.IgnoreEvent = type("IgnoreEvent", (Exception,), {})
+    renpy.show_screen = lambda *args, **kwargs: None
+    exec(compile(_load_editor_body(), "editor.rpy", "exec"), globs)
+    try:
+        behind = {
+            "rect": [10, 20, 100, 20],
+            "runtime_key": {"screen": "overlap_screen", "widget_id": "behind"},
+            "editor_owned": False,
+        }
+        top = {
+            "rect": [10, 20, 100, 20],
+            "runtime_key": {"screen": "overlap_screen", "widget_id": "top"},
+            "editor_owned": False,
+        }
+        state = globs["_renforge_editor_state"]()
+        state.active = True
+        state.editor_session_screen = None
+        for widget_id in ("behind", "top"):
+            state.targets[widget_id] = {
+                "analysis_id": "analysis-" + widget_id,
+                "source_key": {},
+                "capabilities": {"move": True},
+                "screen": "overlap_screen",
+                "widget_id": widget_id,
+                "runtime_baseline": [10, 20],
+                "source_position": [10, 20],
+                "position": [10, 20],
+                "dirty": False,
+            }
+
+        globs["_renforge_editor_focus_candidates"] = lambda: [behind, top]
+        globs["_renforge_editor_all_candidates"] = lambda: [behind, top]
+        globs["_renforge_editor_hit_candidates"] = lambda _x, _y: [top, behind]
+        globs["_renforge_editor_candidate_hit"] = lambda *_args: True
+        globs["_renforge_editor_validate_runtime_key"] = lambda _key: None
+        globs["_renforge_editor_observation_for_candidate"] = lambda candidate: (
+            {"runtime_key": candidate["runtime_key"]},
+            None,
+        )
+        globs["_renforge_editor_target_key"] = lambda key: key["widget_id"]
+        globs["_renforge_editor_set_label"] = lambda _x, _y: None
+
+        selected = globs["_renforge_editor_select_widget"](
+            "overlap_screen", "behind"
+        )
+
+        assert selected["ok"] is True
+        assert selected["selected"]["widget_id"] == "behind"
+        assert state.selected_widget_id == "behind"
+        assert state.editor_session_screen is None
+    finally:
+        globs["_renforge_editor_stop_coordinator"]()
+
+
 def test_editor_status_exposes_current_host_capabilities(
     running_bridge,
     monkeypatch,
@@ -2523,6 +2894,340 @@ def test_editor_status_exposes_current_host_capabilities(
 
         state.current_analysis_id = None
         assert globs["_renforge_editor_h_status"]({})["current_capabilities"] == {}
+    finally:
+        globs["_renforge_editor_stop_coordinator"]()
+
+
+def test_editor_discovers_anonymous_text_from_screen_cache(
+    running_bridge,
+    monkeypatch,
+) -> None:
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    for name in (
+        "RENFORGE_EDITOR_HOST",
+        "RENFORGE_EDITOR_PORT",
+        "RENFORGE_EDITOR_TOKEN",
+        "RENFORGE_EDITOR_PROTOCOL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    ScreenDisplayable = type("ScreenDisplayable", (), {})
+    Text = type("Text", (), {})
+    widget = Text()
+    widget._location = ("game/screens.rpy", 236)
+    widget.style = types.SimpleNamespace(color="#ffffff", xpos=140, ypos=240)
+    screen = ScreenDisplayable()
+    screen.children = [widget]
+    screen.child = widget
+    screen.offsets = [(140, 240)]
+    screen.widgets = {}
+    screen.cache = {1786330708373445: types.SimpleNamespace(displayable=widget)}
+    renpy.text = types.SimpleNamespace(text=types.SimpleNamespace(Text=Text))
+    renpy.display.screen = types.SimpleNamespace(
+        get_screen=lambda name: screen if name == "exploration_scene" else None
+    )
+    renpy.config.after_load_callbacks = []
+    renpy.Displayable = object
+    renpy.Render = lambda width, height: types.SimpleNamespace(width=width, height=height)
+    renpy.IgnoreEvent = type("IgnoreEvent", (Exception,), {})
+
+    exec(compile(_load_editor_body(), "editor.rpy", "exec"), globs)
+    try:
+        globs["_renforge_editor_active_game_screens"] = lambda: ["exploration_scene"]
+        globs["_renforge_editor_measure_text_rect"] = lambda _screen, _widget: [140, 240, 402, 27]
+        globs["_renforge_editor_ui_color"] = lambda _name: "#ffffff"
+
+        candidates = globs["_renforge_editor_text_candidates"]()
+
+        assert len(candidates) == 1
+        key = candidates[0]["runtime_key"]
+        assert key["widget_id"] is None
+        assert key["source_location"] == ["game/screens.rpy", 236]
+        assert key["locator"] == {
+            "kind": "source",
+            "source_location": ["game/screens.rpy", 236],
+            "statement_kind": "text",
+        }
+        assert candidates[0]["measurement_method"] == "scene_tree_text"
+        rows = globs["_renforge_editor_tree_rows"]()["rows"]
+        text_row = next(row for row in rows if row.get("label") == "text")
+        assert text_row["id"] == ""
+        assert text_row["selectable"] is True
+        assert text_row["runtime_key"] == key
+    finally:
+        globs["_renforge_editor_stop_coordinator"]()
+
+
+def test_editor_text_candidates_skip_labels_inside_focusable_targets(
+    running_bridge,
+    monkeypatch,
+) -> None:
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    for name in (
+        "RENFORGE_EDITOR_HOST",
+        "RENFORGE_EDITOR_PORT",
+        "RENFORGE_EDITOR_TOKEN",
+        "RENFORGE_EDITOR_PROTOCOL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    Text = type("Text", (), {})
+
+    class Button:
+        def __init__(self, child):
+            self.children = [child]
+            self.child = child
+
+    label = Text()
+    button = Button(label)
+    renpy.text = types.SimpleNamespace(text=types.SimpleNamespace(Text=Text))
+    renpy.config.after_load_callbacks = []
+    renpy.Displayable = object
+
+    exec(compile(_load_editor_body(), "editor.rpy", "exec"), globs)
+    try:
+        globs["_renforge_editor_active_game_screens"] = lambda: ["test_screen"]
+        globs["_renforge_editor_widget_map"] = lambda _screen: (object(), {})
+        globs["_renforge_editor_screen_instances"] = lambda *_args: {
+            "entries": {1: {"displayable": label}}
+        }
+        globs["_renforge_editor_focus_candidates"] = lambda: [
+            {"focused_widget": button}
+        ]
+        globs["_renforge_editor_measure_text_rect"] = lambda *_args: [10, 20, 80, 24]
+        globs["_renforge_editor_runtime_key_from_text_widget"] = lambda *_args: (
+            {"screen": "test_screen", "widget_id": None, "source_location": None, "ancestry": []},
+            "MISSING_SOURCE_LOCATION",
+            label,
+        )
+        globs["_renforge_editor_style_color_from_widget"] = lambda _widget: "#fff"
+
+        assert globs["_renforge_editor_text_candidates"]() == []
+    finally:
+        globs["_renforge_editor_stop_coordinator"]()
+
+
+def test_editor_tree_marks_only_exact_runtime_representation_selected(
+    running_bridge,
+    monkeypatch,
+) -> None:
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    for name in (
+        "RENFORGE_EDITOR_HOST",
+        "RENFORGE_EDITOR_PORT",
+        "RENFORGE_EDITOR_TOKEN",
+        "RENFORGE_EDITOR_PROTOCOL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    renpy.config.after_load_callbacks = []
+    renpy.Displayable = object
+    exec(compile(_load_editor_body(), "editor.rpy", "exec"), globs)
+    try:
+        class Node:
+            def __init__(self, label: str, children=()):
+                self.label = label
+                self.children = list(children)
+
+        child = Node("text")
+        parent = Node("button", [child])
+        focus_key = {
+            "screen": "test_screen",
+            "widget_id": "task0_target",
+            "source_location": ["game/screens.rpy", 12],
+            "instance_discriminator": {"kind": "static", "instance_count": 1},
+            "ancestry": [{"type": "Button"}],
+        }
+        text_key = {
+            **focus_key,
+            "ancestry": [{"type": "Button"}, {"type": "Text"}],
+        }
+        globs["_renforge_editor_children"] = lambda node: node.children
+        globs["_renforge_editor_tree_kind"] = lambda node: (
+            ("B", "button", "interactive")
+            if node is parent
+            else ("T", "text", "content")
+        )
+        globs["_renforge_editor_tree_snippet"] = lambda *_args: ""
+        globs["_renforge_editor_tree_badge_color"] = lambda _badge: "#fff"
+
+        def selected_rows(selected_id, selected_runtime_key, runtime_by_object):
+            rows = []
+            globs["_renforge_editor_tree_walk"](
+                parent,
+                0,
+                (),
+                {id(child): "task0_target"},
+                runtime_by_object,
+                rows,
+                selected_id,
+                selected_runtime_key,
+                "test_screen",
+                "test_screen",
+                set(),
+                {"total": 0, "count_truncated": False, "depth_truncated": False},
+            )
+            return [row for row in rows if row.get("selected")]
+
+        selected = selected_rows(
+            "task0_target",
+            focus_key,
+            {id(parent): focus_key, id(child): text_key},
+        )
+        assert len(selected) == 1
+        assert selected[0]["runtime_key"] == focus_key
+
+        legacy_id_selected = selected_rows("task0_target", None, {})
+        assert len(legacy_id_selected) == 1
+        assert legacy_id_selected[0]["label"] == "text"
+
+        anonymous_selected = selected_rows(
+            None,
+            text_key,
+            {id(parent): focus_key, id(child): text_key},
+        )
+        assert len(anonymous_selected) == 1
+        assert anonymous_selected[0]["runtime_key"] == text_key
+    finally:
+        globs["_renforge_editor_stop_coordinator"]()
+
+
+def test_editor_anonymous_text_preview_moves_the_resolved_runtime_widget(
+    running_bridge,
+    monkeypatch,
+) -> None:
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    for name in (
+        "RENFORGE_EDITOR_HOST",
+        "RENFORGE_EDITOR_PORT",
+        "RENFORGE_EDITOR_TOKEN",
+        "RENFORGE_EDITOR_PROTOCOL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    renpy.config.after_load_callbacks = []
+    renpy.Displayable = object
+    renpy.Render = lambda width, height: types.SimpleNamespace(width=width, height=height)
+    renpy.IgnoreEvent = type("IgnoreEvent", (Exception,), {})
+    renpy.show_screen = lambda *_args, **_kwargs: None
+    renpy.redraw = lambda *_args, **_kwargs: None
+
+    exec(compile(_load_editor_body(), "editor.rpy", "exec"), globs)
+    try:
+        key = {
+            "screen": "exploration_scene",
+            "invocation_path": "exploration_scene",
+            "widget_id": None,
+            "source_location": ["game/screens.rpy", 236],
+            "locator": {
+                "kind": "source",
+                "source_location": ["game/screens.rpy", 236],
+                "statement_kind": "text",
+            },
+            "instance_discriminator": {"kind": "static", "instance_count": 1, "ordinal": 100000},
+            "ancestry": [],
+        }
+        widget = types.SimpleNamespace(
+            _location=("game/screens.rpy", 236),
+            style=types.SimpleNamespace(xpos=140, ypos=240),
+        )
+        runtime_cache = types.SimpleNamespace(displayable=widget, constant=True)
+        screen = types.SimpleNamespace(widgets={}, cache={1: runtime_cache})
+        renpy.display.screen = types.SimpleNamespace(
+            get_screen=lambda name: screen if name == "exploration_scene" else None
+        )
+        ast_node = types.SimpleNamespace(keyword_values={"xpos": 140, "ypos": 240})
+        candidate = {
+            "runtime_key": key,
+            "focused_widget": widget,
+            "editor_owned": False,
+            "rect": [140, 240, 402, 27],
+        }
+        globs["_renforge_editor_all_candidates"] = lambda: [candidate]
+        globs["_renforge_editor_text_candidates"] = lambda: [candidate]
+        globs["_renforge_editor_ast_node_for_runtime_key"] = lambda _screen, _key: ast_node
+        state = globs["_renforge_editor_state"]()
+        state.selected_screen = "exploration_scene"
+        state.selected_widget_id = None
+        state.selected_runtime_key = key
+        target_key = globs["_renforge_editor_target_key"](key)
+        state.selected_target_key = target_key
+        state.selected_lock_reason = None
+        state.current_capabilities = {"move": True}
+        state.targets[target_key] = {
+            "analysis_id": "analysis-anonymous-text",
+            "source_key": {"position_mode": "xy"},
+            "capabilities": {"move": True},
+            "runtime_key": key,
+            "screen": "exploration_scene",
+            "widget_id": None,
+            "runtime_baseline": [140, 240],
+            "source_position": [140, 240],
+            "position": [140, 240],
+            "dirty": False,
+        }
+
+        moved = globs["_renforge_editor_apply_preview"](
+            196,
+            284,
+            shift=False,
+            allow_snap=False,
+            record=False,
+        )
+
+        assert moved["ok"] is True
+        assert ast_node.keyword_values["xpos"] == 196
+        assert ast_node.keyword_values["ypos"] == 284
+        assert runtime_cache.constant is None
+        assert state.targets[target_key]["dirty"] is True
+    finally:
+        globs["_renforge_editor_stop_coordinator"]()
+
+
+def test_editor_focus_candidate_identity_does_not_require_an_authored_id(
+    running_bridge,
+    monkeypatch,
+) -> None:
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    for name in (
+        "RENFORGE_EDITOR_HOST",
+        "RENFORGE_EDITOR_PORT",
+        "RENFORGE_EDITOR_TOKEN",
+        "RENFORGE_EDITOR_PROTOCOL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    ScreenDisplayable = type("ScreenDisplayable", (), {})
+    Button = type("Button", (), {})
+    widget = Button()
+    widget._location = ("game/screens.rpy", 250)
+    widget.style = types.SimpleNamespace()
+    screen = ScreenDisplayable()
+    screen.children = [widget]
+    screen.widgets = {}
+    screen.cache = {99: types.SimpleNamespace(displayable=widget)}
+    focus = _FakeFocus("Anonymous action", 100, 300, 180, 40, widget=widget)
+    focus.screen_name = "exploration_scene"
+    renpy.display.focus.focus_list[:] = [focus]
+    renpy.display.screen = types.SimpleNamespace(
+        get_screen=lambda name: screen if name == "exploration_scene" else None
+    )
+    renpy.config.after_load_callbacks = []
+    renpy.Displayable = object
+    renpy.Render = lambda width, height: types.SimpleNamespace(width=width, height=height)
+    renpy.IgnoreEvent = type("IgnoreEvent", (Exception,), {})
+
+    exec(compile(_load_editor_body(), "editor.rpy", "exec"), globs)
+    try:
+        candidate = globs["_renforge_editor_focus_candidates"]()[0]
+        key = candidate["runtime_key"]
+        assert candidate["resolve_error"] is None
+        assert key["widget_id"] is None
+        assert key["source_location"] == ["game/screens.rpy", 250]
+        assert key["locator"]["kind"] == "source"
     finally:
         globs["_renforge_editor_stop_coordinator"]()
 
@@ -2565,3 +3270,335 @@ def test_editor_locked_selection_clears_current_host_capabilities(
         assert globs["_renforge_editor_h_status"]({})["current_capabilities"] == {}
     finally:
         globs["_renforge_editor_stop_coordinator"]()
+
+
+def test_editor_lock_ui_never_exposes_internal_codes_or_expands_canvas_label(
+    running_bridge,
+    monkeypatch,
+) -> None:
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    for name in (
+        "RENFORGE_EDITOR_HOST",
+        "RENFORGE_EDITOR_PORT",
+        "RENFORGE_EDITOR_TOKEN",
+        "RENFORGE_EDITOR_PROTOCOL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    renpy.config.after_load_callbacks = []
+    renpy.Displayable = object
+    renpy.Render = lambda width, height: types.SimpleNamespace(
+        width=width,
+        height=height,
+    )
+    renpy.IgnoreEvent = type("IgnoreEvent", (Exception,), {})
+    exec(compile(_load_editor_body(), "editor.rpy", "exec"), globs)
+    try:
+        strings = {
+            "lock.locked": "Locked",
+            "lock.reason.xpos_literal_required": "Position must use a literal xpos value.",
+        }
+        globs["_renforge_editor_t"] = lambda key: strings.get(key, "[[%s]]" % key)
+        state = globs["_renforge_editor_state"]()
+        state.selected_widget_id = "demo_locked_expr"
+        state.selected_runtime_key = {
+            "screen": "village_gate_choices",
+            "widget_id": "demo_locked_expr",
+            "source_location": ["game/screens.rpy", 239],
+        }
+        state.selected_screen = "village_gate_choices"
+        state.selected_rect = [22, 440, 329, 35]
+        state.selected_original_position = [22, 440]
+        state.preview_position = None
+        state.selected_lock_reason = "XPOS_LITERAL_REQUIRED"
+        state.opacity = 1.0
+
+        globs["_renforge_editor_set_label"](22, 440)
+
+        far_label = globs["_renforge_editor_label_snapshot"]()
+        assert far_label["text"] == (
+            "id=demo_locked_expr x=22 y=440"
+        )
+        assert far_label["alpha"] == 1.0
+        globs["_renforge_editor_set_label"](
+            int(far_label["x"]) + int(far_label["w"]) // 2,
+            int(far_label["y"]) + int(far_label["h"]) // 2,
+        )
+        assert globs["_renforge_editor_label_snapshot"]()["alpha"] == 0.2
+        assert globs["_renforge_editor_lock_detail"]() == (
+            "Locked — Position must use a literal xpos value."
+        )
+    finally:
+        globs["_renforge_editor_stop_coordinator"]()
+
+
+def test_editor_tree_summary_reports_cross_screen_duplicate_ids(
+    running_bridge,
+    monkeypatch,
+) -> None:
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    for name in (
+        "RENFORGE_EDITOR_HOST",
+        "RENFORGE_EDITOR_PORT",
+        "RENFORGE_EDITOR_TOKEN",
+        "RENFORGE_EDITOR_PROTOCOL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    renpy.config.after_load_callbacks = []
+    renpy.Displayable = object
+    exec(compile(_load_editor_body(), "editor.rpy", "exec"), globs)
+    try:
+        globs["_renforge_editor_active_game_screens"] = lambda: [
+            "screen_a",
+            "screen_b",
+        ]
+        widget_maps = {
+            "screen_a": {"shared": object(), "unique": object()},
+            "screen_b": {"shared": object()},
+        }
+        globs["_renforge_editor_widget_map"] = lambda screen_name: (
+            object(),
+            widget_maps[screen_name],
+        )
+        globs["_renforge_editor_tree_rows"] = lambda: {
+            "rows": [
+                {"truncated": True},
+            ],
+            "total": 1200,
+            "count_truncated": True,
+            "depth_truncated": True,
+        }
+
+        assert globs["_renforge_editor_tree_summary"]() == {
+            "total": 1200,
+            "count_truncated": True,
+            "depth_truncated": True,
+            "terminal_row_count": 1,
+            "duplicate_widget_screens": {"shared": ["screen_a", "screen_b"]},
+        }
+    finally:
+        globs["_renforge_editor_stop_coordinator"]()
+
+
+def test_bridge_rpy_windows_read_write_adapter_and_version_enforcement(tmp_path: Path, monkeypatch) -> None:
+    import json
+    import os
+
+    store = types.SimpleNamespace()
+    renpy = _fake_renpy(store)
+    renpy.config.basedir = str(tmp_path)
+    globs = {"__name__": "bridge_rpy", "renpy": renpy}
+    globs["builtins"] = __builtins__ if isinstance(__builtins__, dict) else __builtins__.__dict__
+    exec(compile(_load_bridge_body(), "bridge.rpy", "exec"), globs)
+
+    project_root = str(tmp_path)
+    control_dir = tmp_path / ".renforge" / "control"
+    if os.name == "nt":
+        from renforge.util.files import ensure_private_directory
+
+        # Real Windows path: private control must carry the protected DACL.
+        ensure_private_directory(control_dir)
+    else:
+        control_dir.mkdir(parents=True, exist_ok=True)
+        if hasattr(os, "chmod"):
+            os.chmod(control_dir, 0o700)
+
+    bridge_info_file = control_dir / "bridge.json"
+
+    # Test reading starting info with invalid version types (bool, float, str, None)
+    for bad_ver in [True, 1.0, "1", None]:
+        payload = {
+            "schema_version": bad_ver,
+            "protocol_version": 1,
+            "state": "starting",
+            "session_id": "0" * 32,
+            "project_root": project_root,
+            "host": "127.0.0.1",
+            "port": 0,
+            "token": "0" * 64,
+        }
+        if os.name == "nt":
+            from renforge.util.files import atomic_write_private_json
+
+            atomic_write_private_json(bridge_info_file, payload, max_bytes=16 * 1024)
+        else:
+            bridge_info_file.write_text(json.dumps(payload), encoding="utf-8")
+            if hasattr(os, "chmod"):
+                os.chmod(bridge_info_file, 0o600)
+
+        with pytest.raises(OSError, match="bridge info version is invalid"):
+            globs["_renforge_bridge_read_starting_info"](project_root)
+
+    # Test Windows adapter execution path via seam mocking of Win32 wrappers
+    calls = {
+        "create_file": [],
+        "close_handle": [],
+        "get_file_type": [],
+        "get_handle_attrs": [],
+        "read_handle": [],
+        "write_handle": [],
+        "flush_handle": [],
+        "replace_file": [],
+        "set_dacl": [],
+        "val_dacl": [],
+    }
+
+    dummy_handle = 1001
+    file_contents = {}
+
+    def fake_create_file(path, access, share_mode, creation_disposition, flags_and_attrs):
+        calls["create_file"].append({
+            "path": str(path),
+            "access": access,
+            "share_mode": share_mode,
+            "creation_disposition": creation_disposition,
+            "flags_and_attrs": flags_and_attrs,
+        })
+        return dummy_handle
+
+    def fake_close_handle(handle):
+        calls["close_handle"].append(handle)
+
+    def fake_get_file_type(handle):
+        calls["get_file_type"].append(handle)
+        return 1  # FILE_TYPE_DISK
+
+    def fake_get_handle_attrs(handle):
+        calls["get_handle_attrs"].append(handle)
+        return 0o20  # FILE_ATTRIBUTE_ARCHIVE (not a reparse point)
+
+    def fake_read_handle(handle, max_bytes):
+        calls["read_handle"].append((handle, max_bytes))
+        path = calls["create_file"][-1]["path"]
+        with open(path, "rb") as f:
+            return f.read()
+
+    def fake_write_handle(handle, data):
+        calls["write_handle"].append((handle, data))
+        path = calls["create_file"][-1]["path"]
+        file_contents[path] = data
+        # In-place ready rewrite writes through the open handle path.
+        with open(path, "wb") as f:
+            f.write(data)
+
+    def fake_flush_handle(handle):
+        calls["flush_handle"].append(handle)
+
+    def fake_replace_file(replaced_path, replacement_path, flags=1):
+        calls["replace_file"].append({
+            "replaced": str(replaced_path),
+            "replacement": str(replacement_path),
+            "flags": flags,
+        })
+        if str(replacement_path) in file_contents:
+            content = file_contents[str(replacement_path)]
+        elif os.path.exists(replacement_path):
+            with open(replacement_path, "rb") as f:
+                content = f.read()
+        else:
+            content = b""
+        with open(replaced_path, "wb") as f:
+            f.write(content)
+        if os.path.exists(replacement_path):
+            os.unlink(replacement_path)
+
+    def fake_win_set_dacl(p):
+        calls["set_dacl"].append(str(p))
+
+    def fake_win_val_dacl(p):
+        calls["val_dacl"].append(str(p))
+
+    def fake_truncate_handle(handle):
+        calls.setdefault("truncate_handle", []).append(handle)
+
+    @contextlib.contextmanager
+    def simulate_nt():
+        old_name = os.name
+        os.name = "nt"
+        try:
+            yield
+        finally:
+            os.name = old_name
+
+    globs["_renforge_bridge_win_create_file"] = fake_create_file
+    globs["_renforge_bridge_win_close_handle"] = fake_close_handle
+    globs["_renforge_bridge_win_get_file_type"] = fake_get_file_type
+    globs["_renforge_bridge_win_get_handle_attributes"] = fake_get_handle_attrs
+    globs["_renforge_bridge_win_read_handle"] = fake_read_handle
+    globs["_renforge_bridge_win_write_handle"] = fake_write_handle
+    globs["_renforge_bridge_win_flush_handle"] = fake_flush_handle
+    globs["_renforge_bridge_win_replace_file"] = fake_replace_file
+    globs["_renforge_bridge_win_truncate_handle"] = fake_truncate_handle
+    globs["_renforge_bridge_win_set_protected_dacl"] = fake_win_set_dacl
+    globs["_renforge_bridge_win_validate_protected_dacl"] = fake_win_val_dacl
+    globs["_renforge_bridge_win_is_reparse"] = lambda p: False
+
+    # Write valid starting info
+    starting_payload = {
+        "schema_version": 1,
+        "protocol_version": 1,
+        "state": "starting",
+        "session_id": "a" * 32,
+        "project_root": project_root,
+        "host": "127.0.0.1",
+        "port": 0,
+        "token": "b" * 64,
+    }
+    bridge_info_file.write_text(json.dumps(starting_payload), encoding="utf-8")
+    if hasattr(os, "chmod") and os.name != "nt":
+        os.chmod(bridge_info_file, 0o600)
+
+    # Validate read_starting_info under simulated Windows
+    with simulate_nt():
+        read_data = globs["_renforge_bridge_read_starting_info"](project_root)
+    assert read_data["state"] == "starting"
+    assert len(calls["create_file"]) == 1
+    assert calls["create_file"][0]["access"] == 0x80000000
+    assert calls["create_file"][0]["share_mode"] == 1
+    assert calls["create_file"][0]["creation_disposition"] == 3
+    assert calls["create_file"][0]["flags_and_attrs"] == 0x00200000
+    assert dummy_handle in calls["close_handle"]
+
+    # Write ready info under simulated Windows
+    ready_payload = dict(starting_payload)
+    ready_payload["state"] = "ready"
+    ready_payload["port"] = 65000
+
+    with simulate_nt():
+        globs["_renforge_bridge_write_ready_info"](project_root, ready_payload)
+    assert len(calls["create_file"]) == 2
+    # Ready publish overwrites the reserved starting file in place.
+    assert calls["create_file"][1]["access"] == 0xC0000000
+    assert calls["create_file"][1]["share_mode"] == 0x00000007
+    assert calls["create_file"][1]["creation_disposition"] == 3  # OPEN_EXISTING
+    assert calls["create_file"][1]["flags_and_attrs"] == 0x00000080
+    assert len(calls["flush_handle"]) == 1
+    assert len(calls.get("truncate_handle", [])) == 1
+    assert len(calls["replace_file"]) == 0
+    assert len(calls["write_handle"]) >= 1
+    assert json.loads(bridge_info_file.read_text(encoding="utf-8"))["port"] == 65000
+
+    # Additional Win32 edge cases testing: reparse point rejection and cleanup on BaseException
+    # 1. Reparse point rejection on starting handle
+    def fake_reparse_handle_attrs(handle):
+        return 0x400  # FILE_ATTRIBUTE_REPARSE_POINT
+    globs["_renforge_bridge_win_get_handle_attributes"] = fake_reparse_handle_attrs
+    calls["close_handle"].clear()
+    with pytest.raises(OSError, match="reparse point"):
+        with simulate_nt():
+            globs["_renforge_bridge_read_starting_info"](project_root)
+    assert len(calls["close_handle"]) == 1
+
+    # 2. Cleanup on BaseException during handle read
+    globs["_renforge_bridge_win_get_handle_attributes"] = fake_get_handle_attrs
+    def failing_read(handle, max_bytes):
+        raise KeyboardInterrupt("Simulated interrupt during read")
+    globs["_renforge_bridge_win_read_handle"] = failing_read
+    calls["close_handle"].clear()
+    with pytest.raises(KeyboardInterrupt):
+        with simulate_nt():
+            globs["_renforge_bridge_read_starting_info"](project_root)
+    assert len(calls["close_handle"]) == 1

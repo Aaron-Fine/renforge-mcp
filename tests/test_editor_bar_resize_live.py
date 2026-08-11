@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from renforge.editor_bar_resize_runner import run_editor_bar_resize_live_scenario
+from renforge.editor_live_common import DEMO_COPY_IGNORE
 from renforge.editor_bar_runner import FIXTURE_SCREEN, inject_editor_bar_resources
 
 pytestmark = pytest.mark.skipif(
@@ -21,7 +22,7 @@ _DEMO = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
 @pytest.fixture
 def demo_copy(tmp_path: Path) -> Path:
     destination = tmp_path / "demo"
-    shutil.copytree(_DEMO, destination, ignore=shutil.ignore_patterns("*.rpyc", "cache"))
+    shutil.copytree(_DEMO, destination, ignore=DEMO_COPY_IGNORE)
     inject_editor_bar_resources(destination)
     return destination
 
@@ -111,7 +112,7 @@ def test_bar_resize_seven_step_live_proof(demo_copy: Path) -> None:
     }
 
     assert report["reload"]["ok"] is True
-    assert report["reload"]["status_text"] == "Reload committed"
+    assert report["reload"].get("status_code") == "reload_committed" or report["reload"].get("status_code") == "reload_committed"
     assert report["reload"]["generation_delta"] == 1
     assert report["reload"]["frame_id"]
 
@@ -125,3 +126,11 @@ def test_bar_resize_seven_step_live_proof(demo_copy: Path) -> None:
     undo = report["byte_identical_undo"]
     assert undo["matches_baseline"] is True
     assert undo["patched_differed"] is True
+
+    handle = report["visible_handle_drag"]
+    assert handle["ok"] is True, handle
+    rect = handle["rect_before"]
+    assert handle["preview_size_after"] == [rect[2] + 36, rect[3]]
+    assert handle["preview_position_after"][:2] == [rect[0], rect[1]]
+    assert handle["committed_source_size"] == {"w": rect[2] + 36, "h": rect[3]}
+    assert handle["matches_independent_expected"] is True

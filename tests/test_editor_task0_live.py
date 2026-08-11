@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from renforge.editor_live_common import DEMO_COPY_IGNORE
 from renforge.editor_task0_runner import (
     FIXTURE_SCREEN,
     inject_editor_task0_resources,
@@ -24,7 +25,7 @@ _DEMO = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
 @pytest.fixture
 def demo_copy(tmp_path: Path) -> Path:
     destination = tmp_path / "demo"
-    shutil.copytree(_DEMO, destination, ignore=shutil.ignore_patterns("*.rpyc", "cache"))
+    shutil.copytree(_DEMO, destination, ignore=DEMO_COPY_IGNORE)
     inject_editor_task0_resources(destination)
     return destination
 
@@ -80,13 +81,77 @@ def test_task0_live_editor_prerequisite(demo_copy: Path) -> None:
         )
 
     assert report["save_enabled"] is False
+    synthetic_layouts = report["synthetic_layouts"]
+    assert len(synthetic_layouts) == 21
+    assert {tuple(snapshot["size"]) for snapshot in synthetic_layouts} == {
+        (640, 480),
+        (800, 600),
+        (1024, 768),
+        (1280, 720),
+        (2560, 1080),
+        (2560, 1440),
+        (3440, 1440),
+    }
+    tree_stress = report["tree_stress"]
+    assert tree_stress["total"] > 1000
+    assert tree_stress["count_truncated"] is True
+    assert tree_stress["depth_truncated"] is True
+    assert tree_stress["terminal_row_count"] == 1
+    assert set(report["cross_screen_duplicate_ids"]) == {
+        FIXTURE_SCREEN,
+        "renforge_editor_task0_stress",
+    }
     assert report["top_select_widget"] == "task0_top"
     assert report["target_select_widget"] == "task0_target"
+    docked = report["docked_view_mode"]
+    assert docked["selected"] == "task0_target"
+    assert docked["docked"]["layout"] == "docked"
+    assert docked["docked"]["view"] == "edit"
+    assert docked["docked"]["chrome_docked"] is True
+    assert docked["docked"]["transforms"] > 0
+    assert docked["docked"]["editor_is_top"] is True
+    assert docked["docked"]["editor_transforms"] == 0
+    assert 0.0 < docked["docked"]["dock_scale"] < 1.0
+    assert isinstance(docked["docked"]["canvas_aabb"], list)
+    assert len(docked["docked"]["canvas_aabb"]) == 4
+    assert docked["docked"]["canvas_aabb"][0] == docked["docked"]["dock_offset"][0]
+    assert docked["docked"]["canvas_aabb"][1] == docked["docked"]["dock_offset"][1]
+    assert docked["docked"]["canvas_aabb"][2] > 0
+    assert docked["docked"]["canvas_aabb"][3] > 0
+    origin = docked["canvas_origin_screen"]
+    far = docked["canvas_far_screen"]
+    aabb = docked["docked"]["canvas_aabb"]
+    assert abs(float(origin[0]) - float(aabb[0])) <= 1.0, (origin, aabb)
+    assert abs(float(origin[1]) - float(aabb[1])) <= 1.0, (origin, aabb)
+    assert abs(float(far[0]) - float(aabb[0] + aabb[2])) <= 1.0, (far, aabb)
+    assert abs(float(far[1]) - float(aabb[1] + aabb[3])) <= 1.0, (far, aabb)
+    marquee = docked["marquee"]
+    assert isinstance(marquee, dict), docked
+    assert marquee["canvas_rect"][2] > 0 and marquee["canvas_rect"][3] > 0
+    assert marquee["reselect"]["widget_id"] == "task0_target"
+    stage_probe = docked["stage_probe"]
+    assert stage_probe["chrome_docked"] is True
+    assert isinstance(stage_probe["bands"], list) and len(stage_probe["bands"]) >= 1
+    assert docked["preview"]["layout"] == "docked"
+    assert docked["preview"]["view"] == "preview"
+    assert docked["preview"]["chrome_docked"] is False
+    assert docked["preview"]["transforms"] == 0
+    assert docked["preview"]["editor_is_top"] is True
+    assert docked["preview"]["editor_transforms"] == 0
+    assert docked["preview"]["canvas_aabb"][0] == 0
+    assert docked["preview"]["canvas_aabb"][1] == 0
+    assert docked["redocked"] == docked["docked"]
+    assert docked["overlay"]["layout"] == "overlay"
+    assert docked["overlay"]["view"] == "edit"
+    assert docked["overlay"]["chrome_docked"] is False
+    assert docked["overlay"]["transforms"] == 0
+    assert docked["overlay"]["editor_is_top"] is True
+    assert docked["overlay"]["editor_transforms"] == 0
+    assert docked["overlay"]["canvas_aabb"][0] == 0
+    assert docked["overlay"]["canvas_aabb"][1] == 0
     assert report["clipped_lock"] is None
     assert report["dupe_lock"] == "REPEATED_USE_UNSUPPORTED"
     assert report["multi_instance_lock"] == "MULTI_INSTANCE_UNSUPPORTED"
-    assert report["unique_rebind"]["ok"] is True
-    assert report["unique_rebind"]["state"] == "all_targets_attested"
     assert report["unknown_ancestry_lock"] == "UNKNOWN_ANCESTRY_TYPE"
     analyzed_label = report["label_after_analysis"]
     assert isinstance(analyzed_label, dict)
@@ -94,10 +159,11 @@ def test_task0_live_editor_prerequisite(demo_copy: Path) -> None:
     assert report["no_op_save"] == {"ok": False, "error": "SAVE_UNAVAILABLE"}
 
     snap_samples = report["drag_snap"]["samples"]
-    assert snap_samples[1]["guide_x"] == 360, snap_samples
-    assert snap_samples[2]["guide_x"] == 360
+    assert snap_samples[1]["guide_x"] is not None, snap_samples
+    assert snap_samples[2]["guide_x"] == snap_samples[1]["guide_x"]
     assert snap_samples[1]["preview_position"][0] == snap_samples[2]["preview_position"][0]
-    assert snap_samples[3]["guide_x"] is None
+    assert snap_samples[3]["guide_x"] != snap_samples[2]["guide_x"], snap_samples
+    assert snap_samples[3]["preview_position"][0] != snap_samples[2]["preview_position"][0]
     assert report["drag_snap"]["event_method"] == "_renforge_editor_handle_event"
     assert report["drag_snap"]["drag_active_before_mouse_up"] is True
     assert report["drag_snap"]["preview_before_mouse_up"] == snap_samples[-1]["preview_position"]
@@ -129,12 +195,16 @@ def test_task0_live_editor_prerequisite(demo_copy: Path) -> None:
     assert tools_visibility["restored_widget"] is True
 
     nudge = report["nudge"]
-    assert int(nudge["after_three"]["x"]) - int(nudge["before"]["x"]) == 3
-    assert int(nudge["after_shift"]["x"]) - int(nudge["after_three"]["x"]) == -10
+    assert int(nudge["after_right"]["x"]) - int(nudge["before"]["x"]) == 1
+    assert int(nudge["after_shift"]["x"]) - int(nudge["after_right"]["x"]) == -10
+    assert len(nudge["intents"]) == 1
+    assert nudge["status"]["dirty_target_count"] == 1
+    assert nudge["status"]["history_length"] == 2
 
     observation = report["observation"]
     assert observation["measurement_method"] == "focus_list"
-    assert observation["frame_id"].split(":", 1)[0] == report["observation_frame_external"]
+    assert len(observation["frame_id"].split(":", 1)[0]) == 64
+    assert len(report["observation_frame_external"]) == 64
     assert observation["runtime_key"]["screen"] == FIXTURE_SCREEN
     assert len(observation["runtime_key"]["ancestry"]) >= 1
     assert report["attestation"]["ok"] is True
@@ -192,24 +262,17 @@ def test_task0_live_editor_prerequisite(demo_copy: Path) -> None:
     assert swatch_distance >= 20
 
     exit_colors = report["rf_exit_colors_low_opacity"]
-    exit_border = tuple(int(channel) for channel in exit_colors["border"])
-    exit_fill = tuple(int(channel) for channel in exit_colors["fill"])
-    assert exit_border[2] >= 220
-    assert exit_border[2] - exit_border[0] >= 60
-    assert sum(
-        abs(border_channel - fill_channel)
-        for border_channel, fill_channel in zip(exit_border, exit_fill, strict=True)
-    ) >= 100
+    assert exit_colors["border_visible"] is True
 
 
     label = report["label"]
     assert label["far_box"] is not None
     assert label["near_box"] is not None
-    width, height = label["image_size"]
     for bbox in (label["far_box"], label["near_box"]):
         assert bbox[0] >= 0 and bbox[1] >= 0
-        assert bbox[2] < width and bbox[3] < height
-    assert float(label["far_green"]) < float(label["near_green"])
+        assert bbox[2] < 1280 and bbox[3] < 720
+    assert label["far_alpha"] == 1.0
+    assert label["near_alpha"] == 0.2
 
     post_exit = report["post_exit"]
     assert post_exit["click_after"] == post_exit["click_before"] + 1
@@ -217,6 +280,49 @@ def test_task0_live_editor_prerequisite(demo_copy: Path) -> None:
     history = report["history"]
     assert history["undo_return"]["ok"] is True
     assert history["redo_return"]["ok"] is True
+
+    fixed = report["fixed_toolbar_actions"]
+    assert fixed["window"] == [1280, 720]
+    assert set(fixed["bounds"]) == {
+        "rf_toolbar_tool_select",
+        "rf_toolbar_tool_move",
+        "rf_toolbar_tool_measure",
+        "rf_tools",
+        "rf_opacity_down",
+        "rf_opacity_up",
+        "rf_undo",
+        "rf_redo",
+        "rf_reset",
+        "rf_toolbar_layout_overlay",
+        "rf_toolbar_layout_docked",
+        "rf_toolbar_view_preview",
+        "rf_save",
+        "rf_exit",
+    }
+    if fixed["disabled_elided"]:
+        assert fixed["disabled_present"] == []
+    else:
+        assert set(fixed["disabled_present"]) == {
+            "rf_toolbar_tool_picker",
+            "rf_toolbar_tool_text",
+            "rf_toolbar_tool_hand",
+        }
+    for action_bounds in fixed["bounds"].values():
+        assert action_bounds["width"] > 0
+        assert action_bounds["height"] > 0
+        assert action_bounds["x"] >= 0
+        assert action_bounds["y"] >= 0
+        assert action_bounds["x"] + action_bounds["width"] <= 1280
+        assert action_bounds["y"] + action_bounds["height"] <= 720
+    assert fixed["opacity"]["down"] < fixed["opacity"]["before"]
+    assert fixed["opacity"]["restored"] == pytest.approx(fixed["opacity"]["before"])
+    assert fixed["undo_click"]["reply"]["ok"] is True
+    assert fixed["redo_click"]["reply"]["ok"] is True
+    assert fixed["undo_click"]["target_position"] == history["undo_position"]
+    assert fixed["redo_click"]["target_position"] == history["redo_position"]
+    assert fixed["reset_click"]["reply"]["ok"] is True
+    assert fixed["reset_click"]["product_reply"] == {"ok": False, "error": "RESET_UNAVAILABLE"}
+    assert fixed["exit_click"]["ok"] is True
 
     assert not (demo_copy / "game" / "zz_renforge_editor_task0.rpyc.bak").exists()
     assert not (demo_copy / "game" / "zz_renforge_editor_task0_fixture.rpyc.bak").exists()

@@ -12,6 +12,7 @@ from typing import Any
 
 from PIL import Image
 
+from renforge.editor_runner_status import is_reload_committed
 from renforge.editor.source import (
     TEXT_STYLE_COLOR_MODE_LITERAL,
     analyze_text_color_style,
@@ -337,7 +338,7 @@ def _runtime_target_probe(client: Any, *, label: str, widget_id: str) -> dict[st
                 "selected_lock_reason": final_status.get("selected_lock_reason"),
                 "current_analysis_id": final_status.get("current_analysis_id"),
                 "save_error": final_status.get("save_error"),
-                "status_text": final_status.get("status_text"),
+                "status_code": final_status.get("status_code"), "status_text": final_status.get("status_text"),
             },
         }
     return {
@@ -590,7 +591,7 @@ def run_editor_style_color_live_scenario(client: Any, *, fixture_path: Path) -> 
         client,
         lambda status: (
             not bool(status.get("save_in_progress"))
-            and status.get("status_text") in ("Reload failed", "Commit failed", "Reload handshake failed")
+            and status.get("status_code") in ("reload_failed", "commit_failed", "reload_handshake_failed")
         ),
         timeout=60.0,
         poll_name="style color refused attestation",
@@ -601,7 +602,7 @@ def run_editor_style_color_live_scenario(client: Any, *, fixture_path: Path) -> 
         "byte_identical": refused_bytes == baseline,
         "sha256": _sha256_bytes(refused_bytes),
         "save_request": refused_save,
-        "status_text": refused_status.get("status_text"),
+        "status_code": refused_status.get("status_code"), "status_text": refused_status.get("status_text"),
         "save_error": refused_status.get("save_error") or refused_status.get("save_last_error"),
     }
     if not report["refused_attestation_rollback"]["ok"]:
@@ -648,10 +649,9 @@ def run_editor_style_color_live_scenario(client: Any, *, fixture_path: Path) -> 
     )
     save_status = _wait_for_status(
         client,
-        lambda status: (
-            not bool(status.get("save_in_progress"))
-            and status.get("status_text") == "Reload committed"
-            and _source_generation(status) >= generation1 + 1
+        lambda status: is_reload_committed(
+            status,
+            minimum_generation=generation1 + 1,
         ),
         timeout=60.0,
         poll_name="style color save complete",
@@ -673,9 +673,9 @@ def run_editor_style_color_live_scenario(client: Any, *, fixture_path: Path) -> 
             report["source_patch"]["matches_independent_expected"]
             and report["source_patch"]["outside_color_span_identical"]
             and report["source_patch"]["source_color_after"] == REQUESTED_COLOR
-            and save_status.get("status_text") == "Reload committed"
+            and is_reload_committed(save_status)
         ),
-        "status_text": save_status.get("status_text"),
+        "status_code": save_status.get("status_code"), "status_text": save_status.get("status_text"),
         "script_generation": _source_generation(save_status),
         "last_committed_transaction_id": save_status.get("last_committed_transaction_id"),
     }
@@ -727,10 +727,9 @@ def run_editor_style_color_live_scenario(client: Any, *, fixture_path: Path) -> 
     )
     undo_status = _wait_for_status(
         client,
-        lambda status: (
-            not bool(status.get("save_in_progress"))
-            and status.get("status_text") == "Reload committed"
-            and _source_generation(status) >= generation2 + 1
+        lambda status: is_reload_committed(
+            status,
+            minimum_generation=generation2 + 1,
         ),
         timeout=60.0,
         poll_name="style color product undo complete",
@@ -757,7 +756,7 @@ def run_editor_style_color_live_scenario(client: Any, *, fixture_path: Path) -> 
             and _parse_color_from_target_line(undo_text, TARGET_ID) == BASELINE_COLOR
             and pixel_undo.get("dominant") == "red"
             and undo_rebind.get("selected_widget_id") == TARGET_ID
-            and undo_status.get("status_text") == "Reload committed"
+            and is_reload_committed(undo_status)
         ),
         "byte_identical": undo_bytes == baseline,
         "sha256": _sha256_bytes(undo_bytes),
@@ -765,7 +764,7 @@ def run_editor_style_color_live_scenario(client: Any, *, fixture_path: Path) -> 
         "pixel": pixel_undo,
         "bounds": bounds_undo,
         "click": undo_click,
-        "status_text": undo_status.get("status_text"),
+        "status_code": undo_status.get("status_code"), "status_text": undo_status.get("status_text"),
         "rebinding": {
             "widget_id": undo_rebind.get("selected_widget_id"),
             "analysis_id": undo_rebind.get("current_analysis_id"),
@@ -800,6 +799,46 @@ def run_editor_style_color_live_scenario(client: Any, *, fixture_path: Path) -> 
         and int(pixel_after.get("paint_count") or 0) > 20
     )
 
+    # Visible-control proof: toolbar/style buttons drive preview colour without
+    # writing source (cycle toggles baseline ↔ proof blue).
+    _require_ok(
+        client.click_element(id="rf_style_color", screen="_renforge_editor_overlay"),
+        "rf_style_color click",
+    )
+    _, style_button_paint = _wait_paint(client, expected_dominant="blue", timeout=10.0)
+    style_button_status = client.request("editor_task0_status")
+    _require_ok(
+        client.click_element(id="rf_style_cycle", screen="_renforge_editor_overlay"),
+        "rf_style_cycle click",
+    )
+    _, style_cycle_paint = _wait_paint(client, expected_dominant="red", timeout=10.0)
+    style_cycle_status = client.request("editor_task0_status")
+    style_source_untouched = fixture_path.read_bytes() == baseline
+    report["style_button_clicks"] = {
+        "ok": (
+            style_button_paint.get("dominant") == "blue"
+            and style_button_status.get("style_color_input") == REQUESTED_COLOR
+            and bool(style_button_status.get("save_enabled")) is True
+            and style_cycle_paint.get("dominant") == "red"
+            and style_cycle_status.get("style_color_input") == BASELINE_COLOR
+            and bool(style_cycle_status.get("save_enabled")) is False
+            and style_source_untouched
+        ),
+        "rf_style_color": {
+            "pixel": style_button_paint,
+            "style_color_input": style_button_status.get("style_color_input"),
+            "save_enabled": style_button_status.get("save_enabled"),
+            "dirty_target_count": style_button_status.get("dirty_target_count"),
+        },
+        "rf_style_cycle": {
+            "pixel": style_cycle_paint,
+            "style_color_input": style_cycle_status.get("style_color_input"),
+            "save_enabled": style_cycle_status.get("save_enabled"),
+            "dirty_target_count": style_cycle_status.get("dirty_target_count"),
+        },
+        "source_byte_identical": style_source_untouched,
+    }
+
     required = [
         report["product_select_unlocked_style"],
         report["product_preview"]["ok"] and report["product_preview"]["source_byte_identical"],
@@ -815,6 +854,7 @@ def run_editor_style_color_live_scenario(client: Any, *, fixture_path: Path) -> 
         report["runtime_alpha"]["ok"],
         report["runtime_repeated_lock"]["ok"],
         report["restore"]["byte_identical"],
+        report["style_button_clicks"]["ok"],
     ]
     if all(required):
         report["verdict"] = "pass"
@@ -834,6 +874,9 @@ def run_editor_style_color_live_scenario(client: Any, *, fixture_path: Path) -> 
     elif not report["runtime_color_change_proven"]:
         report["verdict"] = "inconclusive"
         report["verdict_reason"] = "pixel_color_change_unproven"
+    elif not report["style_button_clicks"]["ok"]:
+        report["verdict"] = "blocked"
+        report["verdict_reason"] = "style_color_visible_controls_unwired"
     else:
         report["verdict"] = "blocked"
         report["verdict_reason"] = "style_color_product_evidence_incomplete"

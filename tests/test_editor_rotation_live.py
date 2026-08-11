@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from renforge.editor_live_common import DEMO_COPY_IGNORE
 from renforge.editor_rotation_runner import (
     FIXTURE_SCREEN,
     inject_editor_rotation_resources,
@@ -25,7 +26,7 @@ _DEMO = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
 @pytest.fixture
 def demo_copy(tmp_path: Path) -> Path:
     destination = tmp_path / "demo"
-    shutil.copytree(_DEMO, destination, ignore=shutil.ignore_patterns("*.rpyc", "cache"))
+    shutil.copytree(_DEMO, destination, ignore=DEMO_COPY_IGNORE)
     inject_editor_rotation_resources(destination)
     return destination
 
@@ -117,7 +118,7 @@ def test_rotation_product_path_pass(demo_copy: Path) -> None:
 
     assert report["product_undo"]["ok"] is True
     assert report["write_chain"]["ok"] is True
-    assert report["write_chain"]["status_text"] == "Reload committed"
+    assert report["write_chain"].get("status_code") == "reload_committed"
     assert report["write_chain"]["generation_delta"] == 1
     assert report["write_chain"]["matches_independent_expected"] is True
     assert report["write_chain"]["post_save_rebind_lock_reason"] is None

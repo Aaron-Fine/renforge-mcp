@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from renforge.editor_live_common import DEMO_COPY_IGNORE
 from renforge.editor_offset_runner import (
     FIXTURE_SCREEN,
     inject_editor_offset_resources,
@@ -24,7 +25,7 @@ _DEMO = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
 @pytest.fixture
 def demo_copy(tmp_path: Path) -> Path:
     destination = tmp_path / "demo"
-    shutil.copytree(_DEMO, destination, ignore=shutil.ignore_patterns("*.rpyc", "cache"))
+    shutil.copytree(_DEMO, destination, ignore=DEMO_COPY_IGNORE)
     inject_editor_offset_resources(destination)
     return destination
 
@@ -100,7 +101,7 @@ def test_offset_seven_step_live_proof(demo_copy: Path) -> None:
     assert patch["source_position_after"] == patch["expected_source_position"]
 
     assert report["reload"]["ok"] is True
-    assert report["reload"]["status_text"] == "Reload committed"
+    assert report["reload"].get("status_code") == "reload_committed" or report["reload"].get("status_code") == "reload_committed"
     assert report["reload"]["generation_delta"] == 1
 
     assert all(abs(int(value)) <= 1 for value in report["pixel_agreement"]["delta"])

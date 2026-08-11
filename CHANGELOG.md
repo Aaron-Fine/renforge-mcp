@@ -3,10 +3,19 @@
 All notable RenForge releases are recorded here. Versions follow semantic
 versioning.
 
-## [0.7.0] - Unreleased
+## [0.7.0] - 2026-08-11
 
 ### Added
 
+- **Live Editor (headline capability).** Launch with the in-game visual editor
+  **enabled by default** (`renforge_launch`): select controls from the canvas
+  or scene tree, inspect editable vs locked targets, preview layout changes at
+  runtime, and **Save** source-safe edits to guarded `.rpy` files. Locked and
+  unsupported targets remain inspectable with clear reasons. Public guide:
+  [docs/LIVE_EDITOR.md](docs/LIVE_EDITOR.md). `renforge_info` /
+  `renforge_context` advertise a structured `live_editor` capability
+  (default-on, launch tool, agent workflow) so agents discover the feature
+  without private `editor_task0_*` handlers.
 - **Scene perception suite for non-multimodal agents.** `renforge_scene_tree`
   reports the whole frame as structured, logical-coordinate nodes — every layer
   displayable, focusable control, and (unlike `renforge_list_ui_elements`)
@@ -34,6 +43,26 @@ versioning.
 
 ### Fixed
 
+- Conflict-preserving source publication: commits and rollbacks exchange source
+  files with an atomic CAS primitive, retain original/staged/displaced evidence
+  on conflict, and never fall back to unconditional overwrite.
+- Private bridge and artifact lifecycle: schema-3 ownership manifests, authenticated
+  quit, deferred teardown with `SHUTDOWN_INCOMPLETE`, and dashboard/direct launch
+  as a single lifecycle owner.
+- Live editor interactions: status codes with localized HUD text, clear-selection,
+  intent-based unsaved counts, effective inspector properties, structural z-order
+  mutex, responsive layout metrics, tree truncation, and shipped editor assets.
+- Bridge readiness is now published only after the listener accepts connections,
+  eliminating a startup race that could surface as intermittent connection refusals.
+- `renforge_launch` keeps the Live Editor enabled by default while honoring an
+  explicit `editor=false` opt-out across dashboard and direct launch paths.
+- Live Editor tree selection now highlights only the exact runtime representation;
+  live-proof runners preserve structured reload codes and target focusable button
+  padding when validating locks, eliminating false failures in the 21-suite gate.
+- The working-tree Live Editor launcher now reads and atomically restamps schema-3
+  artifact manifests instead of the removed editor-session manifest.
+- Windows TEMP dashboard discovery now uses a process-stable user digest, and
+  Windows source CAS fails closed if `ReplaceFileW` is unavailable.
 - The `test` extra now installs `httpx2>=2.0.0`, the client backend required by
   current Starlette `TestClient`, instead of falling back to deprecated `httpx`
   compatibility and emitting `StarletteDeprecationWarning`.

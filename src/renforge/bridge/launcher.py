@@ -1,16 +1,15 @@
 """Launch a Ren'Py project with the RenForge bridge injected.
 
 Injects ``bridge.rpy`` into ``<project>/game/``, starts the game, waits for the
-bridge to publish ``<project>/.renforge/bridge.json``, and returns a connected
-:class:`~renforge.bridge.client.BridgeClient`. Closing the session force-kills
-the game and removes the injected file.
+bridge to publish ready metadata under ``<project>/.renforge/control/bridge.json``,
+and returns a connected :class:`~renforge.bridge.client.BridgeClient`. Closing the
+session force-kills the game and removes owned control metadata and injected files.
 """
 
 from __future__ import annotations
 
 import errno
 import json
-import hashlib
 import os
 import secrets
 import shutil
@@ -31,39 +30,84 @@ from ..launch_env import (
 )
 from ..project import RenpyProject
 from ..sdk import RenpySdk
-from .client import BridgeClient
+from .artifacts import (
+    ArtifactOwnershipError,
+    allocate_and_materialize,
+    remove_owned_artifacts,
+)
+from .client import BridgeClient, BridgeConfig, BridgeProtocolError
+from .control import read_bridge_info, write_starting_bridge_info
 from ..editor import BridgeRuntimeProbe, EditorCoordinator, EditorEndpoint
-from ..editor.paths import atomic_write_file
+from ..util.files import PrivatePathError, ensure_private_directory
 
 _BRIDGE_RESOURCE: Path = Path(__file__).parent / "bridge.rpy"
-_INJECTED_NAME: str = "renforge_bridge.rpy"
-_SESSION_INIT_NAME: str = "00renforge_session.rpy"
 _EDITOR_RESOURCE: Path = Path(__file__).parent / "editor.rpy"
-_EDITOR_INJECTED_PREFIX: str = "zzrenforge_editor_"
-_EDITOR_MANIFEST_NAME: str = "editor-session.json"
+_EDITOR_SCREENS_RESOURCE: Path = Path(__file__).parent / "screens"
+_EDITOR_ASSETS_RESOURCE: Path = Path(__file__).parent / "editor_assets"
+_EDITOR_DEFAULT_LANGUAGE: str = "en"
+_EDITOR_SUPPORTED_LANGUAGES: tuple[str, ...] = ("en", "zh-CN")
+# Languages Ren'Py's bundled font cannot draw: its own documentation says it
+# omits Chinese, Japanese and Korean for size reasons.
+_EDITOR_CJK_LANGUAGES: frozenset[str] = frozenset({"zh-CN"})
+
+_BRIDGE_STARTUP_ERROR_PREFIX: str = "RENFORGE_BRIDGE_STARTUP_ERROR="
+_BRIDGE_STARTUP_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "BRIDGE_MANIFEST_PUBLICATION_FAILED",
+        "BRIDGE_INFO_CONFLICT",
+        "BRIDGE_MANIFEST_IDENTITY_MISMATCH",
+    }
+)
+
+
+class _LockPathUnsafe(Exception):
+    """Lock path failed private-path validation; never repair."""
 
 
 class ProjectBridgeLock:
-    """A non-blocking, process-wide lock for one project's bridge artifacts."""
+    """A non-blocking, process-wide lock for one project's bridge artifacts.
 
-    def __init__(self, path: Path):
-        self.path = path
+    Owns ``<canonical-root>/.renforge/control/bridge.lock``. ``acquire()``
+    validates/creates the private control directory before touching the lock.
+    """
+
+    def __init__(self, project_root: Path):
+        self.project_root = Path(project_root)
+        self.path = self.project_root / ".renforge" / "control" / "bridge.lock"
         self._file: Any | None = None
         self.is_deferred = False
+        self.owned_session_id: str | None = None
 
     def acquire(self) -> None:
         if self._file is not None:
             return
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            lock_file = self.path.open("a+b")
+            ensure_private_directory(self.path.parent)
+        except PrivatePathError as exc:
+            raise LaunchError(
+                "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
+                exc.message,
+                phase="preparing_control_directory",
+                suggested_fix="Remove unsafe paths under .renforge/control and retry.",
+            ) from exc
+
+        try:
+            lock_file = self._open_lock_file()
+        except _LockPathUnsafe as exc:
+            raise LaunchError(
+                "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
+                str(exc),
+                phase="preparing_control_directory",
+                suggested_fix="Remove unsafe paths under .renforge/control and retry.",
+            ) from exc
         except OSError as exc:
             raise LaunchError(
                 "BRIDGE_PROJECT_LOCK_FAILED",
                 f"Could not open the project bridge lock: {exc}",
                 phase="acquiring_project_lock",
-                suggested_fix="Check write permissions under .renforge/.",
+                suggested_fix="Check write permissions under .renforge/control/.",
             ) from exc
+
         try:
             self._lock_file(lock_file)
         except OSError as exc:
@@ -71,18 +115,20 @@ class ProjectBridgeLock:
                 lock_file.close()
             except OSError:
                 pass
-            if exc.errno in {errno.EACCES, errno.EAGAIN}:
+            if self._is_lock_contention(exc):
                 raise LaunchError(
                     "BRIDGE_PROJECT_LOCKED",
-                    f"Another RenForge bridge session is active for {self.path.parent.parent}.",
+                    f"Another RenForge bridge session is active for {self.project_root}.",
                     phase="acquiring_project_lock",
-                    suggested_fix="Stop the existing session before launching another for this project.",
+                    suggested_fix=(
+                        "Stop the existing session before launching another for this project."
+                    ),
                 ) from exc
             raise LaunchError(
                 "BRIDGE_PROJECT_LOCK_FAILED",
                 f"Could not lock the project bridge: {exc}",
                 phase="acquiring_project_lock",
-                suggested_fix="Check write permissions under .renforge/.",
+                suggested_fix="Check write permissions under .renforge/control/.",
             ) from exc
         self._file = lock_file
 
@@ -94,6 +140,189 @@ class ProjectBridgeLock:
             self._unlock_file(lock_file)
         finally:
             lock_file.close()
+
+    def _open_lock_file(self) -> Any:
+        if os.name == "nt":
+            return self._open_lock_file_windows()
+        return self._open_lock_file_posix()
+
+    def _open_lock_file_posix(self) -> Any:
+        import stat as stat_mod
+
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        try:
+            fd = os.open(str(self.path), flags, 0o600)
+        except OSError as exc:
+            if self._posix_open_is_unsafe(exc):
+                raise _LockPathUnsafe(f"bridge lock path is unsafe: {self.path}") from exc
+            raise
+
+        try:
+            st = os.fstat(fd)
+            if not stat_mod.S_ISREG(st.st_mode):
+                raise _LockPathUnsafe(f"bridge lock is not a regular file: {self.path}")
+            if st.st_uid != os.geteuid():
+                raise _LockPathUnsafe(
+                    f"bridge lock is not owned by the current user: {self.path}"
+                )
+            if (st.st_mode & 0o777) != 0o600:
+                raise _LockPathUnsafe(f"bridge lock mode must be 0600: {self.path}")
+            try:
+                path_st = os.lstat(str(self.path))
+            except OSError as exc:
+                raise _LockPathUnsafe(f"bridge lock path is unsafe: {self.path}") from exc
+            if stat_mod.S_ISLNK(path_st.st_mode):
+                raise _LockPathUnsafe(f"bridge lock must not be a symlink: {self.path}")
+            if path_st.st_dev != st.st_dev or path_st.st_ino != st.st_ino:
+                raise _LockPathUnsafe(
+                    f"bridge lock identity changed during open: {self.path}"
+                )
+            return os.fdopen(fd, "r+b", closefd=True)
+        except _LockPathUnsafe:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+        except OSError as exc:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise _LockPathUnsafe(f"bridge lock path is unsafe: {self.path}") from exc
+
+    def _posix_open_is_unsafe(self, exc: OSError) -> bool:
+        if exc.errno in {errno.ELOOP, getattr(errno, "EMLINK", -1)}:
+            return True
+        if exc.errno in {errno.EPERM, errno.EACCES} and self.path.is_symlink():
+            return True
+        message = str(exc).lower()
+        if "symbolic link" in message or "symlink" in message:
+            return True
+        try:
+            if self.path.is_symlink():
+                return True
+        except OSError:
+            pass
+        return False
+
+    def _open_lock_file_windows(self) -> Any:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        from ..util import files as private_files
+
+        if self.path.is_symlink() or (
+            self.path.exists() and private_files._win_is_reparse(self.path)
+        ):
+            raise _LockPathUnsafe(f"bridge lock must not be a reparse point: {self.path}")
+
+        GENERIC_READ = 0x80000000
+        GENERIC_WRITE = 0x40000000
+        FILE_SHARE_READ = 0x00000001
+        FILE_SHARE_WRITE = 0x00000002
+        OPEN_ALWAYS = 4
+        FILE_ATTRIBUTE_NORMAL = 0x00000080
+        FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+        FILE_TYPE_DISK = 0x0001
+        INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+        ERROR_ALREADY_EXISTS = 183
+
+        create_file = ctypes.windll.kernel32.CreateFileW  # type: ignore[attr-defined]
+        create_file.restype = wintypes.HANDLE
+        handle = create_file(
+            str(self.path),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+        if handle == INVALID_HANDLE_VALUE:
+            error = ctypes.GetLastError()
+            raise OSError(error, f"CreateFileW failed for {self.path}")
+
+        created_new = ctypes.GetLastError() != ERROR_ALREADY_EXISTS
+        try:
+            file_type = ctypes.windll.kernel32.GetFileType(handle)  # type: ignore[attr-defined]
+            if file_type != FILE_TYPE_DISK:
+                raise _LockPathUnsafe(f"bridge lock is not a regular file: {self.path}")
+
+            class BY_HANDLE_FILE_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("dwFileAttributes", wintypes.DWORD),
+                    ("ftCreationTime", wintypes.FILETIME),
+                    ("ftLastAccessTime", wintypes.FILETIME),
+                    ("ftLastWriteTime", wintypes.FILETIME),
+                    ("dwVolumeSerialNumber", wintypes.DWORD),
+                    ("nFileSizeHigh", wintypes.DWORD),
+                    ("nFileSizeLow", wintypes.DWORD),
+                    ("nNumberOfLinks", wintypes.DWORD),
+                    ("nFileIndexHigh", wintypes.DWORD),
+                    ("nFileIndexLow", wintypes.DWORD),
+                ]
+
+            info = BY_HANDLE_FILE_INFORMATION()
+            # Prefer c_void_p for the out-struct (POINTER identity is flaky when
+            # the Structure class is defined inside the function). Skip binding
+            # when tests inject a plain Python method without .argtypes.
+            get_info = ctypes.windll.kernel32.GetFileInformationByHandle  # type: ignore[attr-defined]
+            if hasattr(get_info, "argtypes"):
+                get_info.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+                get_info.restype = wintypes.BOOL
+            if not get_info(handle, ctypes.byref(info)):
+                raise OSError(
+                    ctypes.GetLastError(),
+                    f"GetFileInformationByHandle failed for {self.path}",
+                )
+            FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+            FILE_ATTRIBUTE_DIRECTORY = 0x10
+            if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT:
+                raise _LockPathUnsafe(
+                    f"bridge lock must not be a reparse point: {self.path}"
+                )
+            if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY:
+                raise _LockPathUnsafe(f"bridge lock is not a regular file: {self.path}")
+
+            # CRT owns the HANDLE after open_osfhandle; do not CloseHandle it.
+            fd = msvcrt.open_osfhandle(int(handle), os.O_RDWR)
+            handle = None
+            try:
+                lock_file = os.fdopen(fd, "r+b", closefd=True)
+            except BaseException:
+                os.close(fd)
+                raise
+            try:
+                if created_new:
+                    private_files._win_set_protected_dacl(self.path)
+                private_files._win_validate_protected_dacl(self.path)
+            except BaseException as exc:
+                try:
+                    lock_file.close()
+                except OSError:
+                    pass
+                if isinstance(exc, _LockPathUnsafe):
+                    raise
+                raise _LockPathUnsafe(
+                    f"bridge lock DACL is unsafe: {self.path}"
+                ) from exc
+            return lock_file
+        finally:
+            if handle is not None:
+                ctypes.windll.kernel32.CloseHandle(handle)  # type: ignore[attr-defined]
+
+    @staticmethod
+    def _is_lock_contention(exc: OSError) -> bool:
+        if exc.errno in {errno.EACCES, errno.EAGAIN, getattr(errno, "EWOULDBLOCK", errno.EAGAIN)}:
+            return True
+        winerror = getattr(exc, "winerror", None)
+        if winerror in {33, 32}:  # ERROR_LOCK_VIOLATION / ERROR_SHARING_VIOLATION
+            return True
+        return False
 
     @staticmethod
     def _lock_file(lock_file: Any) -> None:
@@ -126,213 +355,149 @@ class ProjectBridgeLock:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+
 _DEFERRED_LOCKS: set[ProjectBridgeLock] = set()
 
-def _editor_manifest_path(project_root: Path) -> Path:
-    return project_root / ".renforge" / _EDITOR_MANIFEST_NAME
+def _editor_screen_sources() -> list[Path]:
+    """The region screens, in a stable order.
+
+    One file per panel is what makes the UI work parallel: six authors touch six
+    files instead of queueing on one. Ren'Py does not care how the source was
+    organised, so they are concatenated at injection time.
+    """
+    if not _EDITOR_SCREENS_RESOURCE.is_dir():
+        return []
+    return sorted(_EDITOR_SCREENS_RESOURCE.glob("*.rpy"))
 
 
-def _inject_editor_artifact(project: RenpyProject) -> Path:
-    payload = _EDITOR_RESOURCE.read_bytes()
-    for _attempt in range(32):
-        basename = f"{_EDITOR_INJECTED_PREFIX}{secrets.token_hex(8)}.rpy"
-        source_path = project.game_dir / basename
-        sibling_names = (basename, f"{basename}c", f"{basename}c.bak")
-        sibling_paths = [project.game_dir / name for name in sibling_names]
-        absent_before = {name: not path.exists() for name, path in zip(sibling_names, sibling_paths)}
-        if not all(absent_before.values()):
-            continue
-        if any(path.is_symlink() for path in sibling_paths):
-            continue
-        try:
-            descriptor = os.open(source_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        except FileExistsError:
-            continue
-        try:
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            manifest = {
-                "schema_version": 1,
-                "basename": basename,
-                "source_sha256": hashlib.sha256(payload).hexdigest(),
-                "absent_before": {
-                    "rpy": absent_before[basename],
-                    "rpyc": absent_before[f"{basename}c"],
-                    "rpyc_bak": absent_before[f"{basename}c.bak"],
-                },
-            }
-            atomic_write_file(
-                _editor_manifest_path(project.root),
-                json.dumps(manifest, separators=(",", ":")).encode("utf-8"),
-            )
-            return source_path
-        except BaseException:
+def _editor_payload() -> bytes:
+    """The single artifact injected into the game, built from every source file.
+
+    Keeping one injected file keeps one manifest entry, one digest, one cleanup
+    path — the whole ownership contract stays as narrow as it was — while the
+    sources stay split for the people writing them.
+    """
+    parts = [_EDITOR_RESOURCE.read_bytes()]
+    for path in _editor_screen_sources():
+        parts.append(b"\n\n" + path.read_bytes())
+    return b"".join(parts)
+
+
+def _editor_asset_sources() -> list[tuple[str, Path]]:
+    """Every shipped editor asset, as ``(relative posix path, absolute source)``.
+
+    The editor used to be a lone ``.rpy``. Rounded frames, icons and the locale
+    catalogues cannot be expressed in screen language, so they travel beside it
+    as real files. An absent or empty resource directory is normal and yields no
+    assets, which keeps the whole asset path inert until something ships in it.
+    """
+    if not _EDITOR_ASSETS_RESOURCE.is_dir():
+        return []
+    return [
+        (path.relative_to(_EDITOR_ASSETS_RESOURCE).as_posix(), path)
+        for path in sorted(_EDITOR_ASSETS_RESOURCE.rglob("*"))
+        if path.is_file()
+    ]
+
+
+def _editor_font_candidates() -> tuple[Path, ...]:
+    """System fonts that cover Chinese, most likely first, by platform."""
+    if sys.platform == "darwin":
+        names = (
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/Supplemental/Songti.ttc",
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        )
+    elif os.name == "nt":
+        names = (
+            "C:/Windows/Fonts/msyh.ttc",
+            "C:/Windows/Fonts/simhei.ttf",
+            "C:/Windows/Fonts/simsun.ttc",
+        )
+    else:
+        names = (
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/arphic/uming.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        )
+    return tuple(Path(name) for name in names)
+
+
+def _prepare_editor_asset_payloads() -> tuple[list[tuple[str, bytes]], str]:
+    """Ship editor assets (and optional CJK font) as ``(relative path, bytes)``."""
+    files: list[tuple[str, bytes]] = []
+    for relative, source in _editor_asset_sources():
+        files.append((relative, source.read_bytes()))
+    font_relative = ""
+    if _editor_language() in _EDITOR_CJK_LANGUAGES:
+        for candidate in _editor_font_candidates():
             try:
-                source_path.unlink()
-            except FileNotFoundError:
-                pass
-            raise
-    raise LaunchError(
-        "EDITOR_ARTIFACT_COLLISION",
-        "Could not allocate a collision-free editor injection filename.",
-        phase="injecting_editor",
-    )
+                if not candidate.is_file():
+                    continue
+                payload = candidate.read_bytes()
+            except OSError:
+                continue
+            font_relative = "fonts/cjk%s" % (candidate.suffix.lower() or ".ttf")
+            files.append((font_relative, payload))
+            break
+    files.sort(key=lambda item: item[0])
+    return files, font_relative
 
 
-def _remove_editor_artifacts(project_root: Path) -> None:
-    manifest_path = _editor_manifest_path(project_root)
-    # Symlink check first: exists() follows symlinks and is False for a dangling
-    # one, which would read a tampered manifest as absent and return, leaving the
-    # symlink behind once the lock is released. Same invariant as the artifacts.
-    if manifest_path.is_symlink():
-        raise RuntimeError("editor artifact manifest became a symlink")
-    if not manifest_path.exists():
-        return
-    if not manifest_path.is_file():
-        raise RuntimeError("editor artifact manifest is not a regular file")
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"editor artifact manifest is invalid: {exc}") from exc
+def _editor_language() -> str:
+    """The editor's interface language, which follows RenForge — never the game.
 
-    if not isinstance(manifest, dict):
-        raise RuntimeError("editor artifact manifest is not a JSON object")
-
-    basename = manifest.get("basename")
-    expected_sha256 = manifest.get("source_sha256")
-    absence = manifest.get("absent_before") if isinstance(manifest.get("absent_before"), dict) else {}
-    if not isinstance(absence, dict):
-        absence = {}
-
-    if not isinstance(basename, str) or Path(basename).name != basename or not basename.startswith(
-        _EDITOR_INJECTED_PREFIX
-    ) or not basename.endswith(".rpy"):
-        raise RuntimeError("editor artifact manifest failed ownership validation")
-
-    if not isinstance(expected_sha256, str):
-        raise RuntimeError("editor artifact manifest failed ownership validation")
-
-    if len(expected_sha256) != 64:
-        raise RuntimeError("editor artifact manifest failed ownership validation")
-
-    try:
-        int(expected_sha256, 16)
-    except ValueError as exc:
-        raise RuntimeError("editor artifact manifest failed ownership validation") from exc
-
-    should_remove_compiled = {
-        "rpyc": bool(absence.get("rpyc", False)),
-        "rpyc_bak": bool(absence.get("rpyc_bak", False)),
-    }
-
-    source_path = project_root / "game" / basename
-    # Every step below tolerates an already-absent artifact. Cleanup is retried
-    # by BridgeSession.close() and the deferred reaper, so a partial failure must
-    # never leave a state where the next attempt aborts on an artifact the
-    # previous attempt already removed — that would strand the project lock
-    # forever. Ownership is proven by the validated manifest and basename above,
-    # plus the digest whenever the source is still present.
-    #
-    # Each symlink check runs *before* its exists() guard: exists() follows
-    # symlinks and is False for a dangling one, so a tampered artifact would
-    # otherwise read as absent, get skipped, and be left behind once the manifest
-    # is gone. Tampering is the one condition that must stay fail-closed.
-    if source_path.is_symlink():
-        raise RuntimeError("editor source artifact became a symlink")
-    if source_path.exists():
-        if not source_path.is_file():
-            raise RuntimeError("editor source artifact is not a regular file")
-        if hashlib.sha256(source_path.read_bytes()).hexdigest() != expected_sha256:
-            raise RuntimeError("editor source artifact changed after injection")
-
-    sibling_path = source_path.with_name(f"{basename}c")
-    sibling_backup_path = source_path.with_name(f"{basename}c.bak")
-
-    if should_remove_compiled["rpyc"]:
-        if sibling_path.is_symlink():
-            raise RuntimeError("editor compiled artifact became a symlink")
-        if sibling_path.exists():
-            if not sibling_path.is_file():
-                raise RuntimeError("editor compiled artifact is not a regular file")
-            sibling_path.unlink()
-
-    if should_remove_compiled["rpyc_bak"]:
-        if sibling_backup_path.is_symlink():
-            raise RuntimeError("editor compiled backup artifact became a symlink")
-        if sibling_backup_path.exists():
-            if not sibling_backup_path.is_file():
-                raise RuntimeError("editor compiled backup artifact is not a regular file")
-            sibling_backup_path.unlink()
-
-    source_path.unlink(missing_ok=True)
-    manifest_path.unlink(missing_ok=True)
+    Changing the host game's language would rebuild its styles and replay its
+    translation blocks, so the overlay carries its own catalogue instead.
+    """
+    requested = os.environ.get("RENFORGE_LANG", "").strip()
+    return requested if requested in _EDITOR_SUPPORTED_LANGUAGES else _EDITOR_DEFAULT_LANGUAGE
 
 
-def _editor_environment(endpoint: EditorEndpoint) -> dict[str, str]:
+def _editor_environment(
+    endpoint: EditorEndpoint, *, assets_dirname: str, font_relative: str = ""
+) -> dict[str, str]:
+    language = _editor_language()
+    # A language with no font to draw it renders as empty boxes. Readable
+    # English is a better answer than an interface the user cannot read at all.
+    if language in _EDITOR_CJK_LANGUAGES and not font_relative:
+        language = _EDITOR_DEFAULT_LANGUAGE
     return {
         "RENFORGE_EDITOR_HOST": endpoint.host,
         "RENFORGE_EDITOR_PORT": str(endpoint.port),
         "RENFORGE_EDITOR_TOKEN": endpoint.token,
         "RENFORGE_EDITOR_PROTOCOL": str(endpoint.protocol_version),
+        "RENFORGE_EDITOR_ASSETS": assets_dirname,
+        "RENFORGE_EDITOR_LANG": language,
+        "RENFORGE_EDITOR_FONT": font_relative,
     }
 
 
-def remove_bridge_artifacts(project_root: Path) -> None:
-    """Delete every file the bridge injects or leaves behind on ``project_root``.
+def remove_bridge_artifacts(
+    project_root: Path,
+    *,
+    expected_session_id: str | None = None,
+    remove_bridge_info: bool = True,
+) -> bool:
+    """Remove schema-3 owned session artifacts after full ownership validation.
 
-    The caller must hold the project's :class:`ProjectBridgeLock` unless this is
-    a legacy maintenance or test cleanup. Missing files are ignored, so cleanup
-    remains idempotent.
+    Returns ``False`` when no ownership manifest exists and ``True`` after a
+    complete proven removal. Legacy fixed names, ``traceback.txt``,
+    ``errors.txt``, and unowned pre-migration metadata are never touched.
+    ``remove_bridge_info=False`` removes only source and asset artifacts.
     """
-    game_dir = project_root / "game"
-    for path in (
-        game_dir / _INJECTED_NAME,  # renforge_bridge.rpy
-        game_dir / (_INJECTED_NAME + "c"),  # renforge_bridge.rpyc
-        game_dir / (_INJECTED_NAME + "c.bak"),  # renforge_bridge.rpyc.bak
-        game_dir / _SESSION_INIT_NAME,
-        game_dir / (_SESSION_INIT_NAME + "c"),
-        game_dir / (_SESSION_INIT_NAME + "c.bak"),
-        project_root / ".renforge" / "bridge.json",
-        project_root / "traceback.txt",
-        project_root / "errors.txt",
-    ):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-    _remove_editor_artifacts(project_root)
-
-
-def _write_session_init(project: RenpyProject, *, savedir: str | None) -> Path | None:
-    """Inject an early init file that redirects the save directory when needed."""
-    if not savedir:
-        return None
-    path = project.game_dir / _SESSION_INIT_NAME
-    # init -1500 runs before most game options; env is the authority so the
-    # same file works if a session is resumed with a different path.
-    path.write_text(
-        "\n".join(
-            [
-                "init -1500 python:",
-                "    import os",
-                "    _renforge_savedir = os.environ.get('RENFORGE_SAVEDIR')",
-                "    if _renforge_savedir:",
-                "        config.savedir = _renforge_savedir",
-                "    _renforge_persistent = os.environ.get('RENFORGE_PERSISTENT_MODE')",
-                "    if _renforge_persistent == 'empty':",
-                "        # Keep persistent empty for isolated agent sessions.",
-                "        try:",
-                "            renpy.loadsave.location.unlink('persistent')",
-                "        except Exception:",
-                "            pass",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    return path
+    try:
+        return remove_owned_artifacts(
+            Path(project_root),
+            expected_session_id=expected_session_id,
+            remove_bridge_info=remove_bridge_info,
+        )
+    except ArtifactOwnershipError as exc:
+        # Preserve fail-closed cleanup for BridgeSession retries.
+        raise RuntimeError(exc.message) from exc
 
 
 class BridgeSession:
@@ -452,7 +617,12 @@ class BridgeSession:
                 pass
 
         try:
-            remove_bridge_artifacts(self._project_root)
+            expected = (
+                self._project_lock.owned_session_id
+                if self._project_lock is not None
+                else None
+            )
+            remove_bridge_artifacts(self._project_root, expected_session_id=expected)
             cleaned["bridge_artifacts"] = True
         except Exception:
             failed.append("bridge_artifacts")
@@ -480,6 +650,112 @@ def _raise_if_cancelled(cancel_event: threading.Event | None, *, phase: str) -> 
             "Launch was cancelled.",
             phase=phase,
         )
+
+
+def _is_bridge_token(value: str | None) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(ch in "0123456789abcdef" for ch in value)
+    )
+
+
+class _BoundedPipeReader:
+    """Drain one child pipe into a bounded ring and watch for startup markers."""
+
+    def __init__(
+        self,
+        stream: Any | None,
+        *,
+        watch_startup: bool = False,
+        startup_event: threading.Event | None = None,
+        startup_code: list[str | None] | None = None,
+    ):
+        self._stream = stream
+        self._watch_startup = watch_startup
+        self._startup_event = startup_event
+        self._startup_code = startup_code
+        self._chunks: list[bytes] = []
+        self._size = 0
+        self._line_buffer = bytearray()
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        if stream is not None:
+            self._thread = threading.Thread(
+                target=self._run,
+                name="renforge-bridge-pipe-reader",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def _run(self) -> None:
+        stream = self._stream
+        if stream is None:
+            return
+        try:
+            while True:
+                if hasattr(stream, "read1"):
+                    chunk = stream.read1(4096)
+                elif hasattr(stream, "fileno"):
+                    try:
+                        chunk = os.read(stream.fileno(), 4096)
+                    except (OSError, AttributeError):
+                        chunk = stream.read(4096)
+                else:
+                    chunk = stream.read(4096)
+                if not chunk:
+                    break
+                self._append(chunk)
+                if self._watch_startup:
+                    self._scan_startup_chunk(chunk)
+        except Exception:
+            pass
+
+    def _append(self, chunk: bytes) -> None:
+        with self._lock:
+            self._chunks.append(chunk)
+            self._size += len(chunk)
+            while self._size > 64 * 1024 and self._chunks:
+                dropped = self._chunks.pop(0)
+                self._size -= len(dropped)
+
+    def _scan_startup_chunk(self, chunk: bytes) -> None:
+        if self._startup_event is None or self._startup_event.is_set():
+            return
+        with self._lock:
+            self._line_buffer.extend(chunk)
+            if len(self._line_buffer) > 64 * 1024:
+                self._line_buffer = self._line_buffer[-64 * 1024 :]
+            while b"\n" in self._line_buffer:
+                line_bytes, _, rest = self._line_buffer.partition(b"\n")
+                self._line_buffer = bytearray(rest)
+                if line_bytes.endswith(b"\r"):
+                    line_bytes = line_bytes[:-1]
+                line_str = line_bytes.decode("utf-8", "replace")
+                if line_str.startswith(_BRIDGE_STARTUP_ERROR_PREFIX):
+                    code = line_str[len(_BRIDGE_STARTUP_ERROR_PREFIX) :]
+                    if code in _BRIDGE_STARTUP_ERROR_CODES:
+                        if self._startup_code is not None:
+                            self._startup_code[0] = code
+                        self._startup_event.set()
+                        return
+
+    def tail(self) -> bytes:
+        with self._lock:
+            return b"".join(self._chunks)
+
+    def join(self, timeout: float = 1.0) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+
+def _raise_bridge_startup_error(code: str) -> None:
+    raise LaunchError(
+        code,
+        "Bridge failed during startup publication.",
+        phase="waiting_for_bridge",
+        suggested_fix="Inspect the game log and retry the launch.",
+    )
 
 
 def _launch_after_project_lock(
@@ -558,15 +834,42 @@ def _launch_after_project_lock(
     # preferences reserved for future fixture support; accepted for API stability.
     _ = preferences
 
-    token = token or secrets.token_hex(16)
+    # Token may be caller-supplied; session id is allocated with the artifact
+    # intent so names, ownership, and bridge.json share one identity.
+    if token is not None and not _is_bridge_token(token):
+        raise LaunchError(
+            "BRIDGE_TOKEN_INVALID",
+            "Bridge token must be 64 lowercase hexadecimal characters.",
+            phase="preparing_bridge_metadata",
+            suggested_fix="Omit token to let RenForge generate one, or pass secrets.token_hex(32).",
+        )
+    if token is None:
+        token = secrets.token_hex(32)
+
     _phase("injecting_bridge")
+    editor_assets_dirname: str | None = None
+    editor_font_relative: str = ""
     try:
-        injected = project.game_dir / _INJECTED_NAME
-        injected.write_text(_BRIDGE_RESOURCE.read_text(encoding="utf-8"), encoding="utf-8")
-        _write_session_init(project, savedir=savedir_path)
+        editor_payload: bytes | None = None
+        editor_assets: list[tuple[str, bytes]] | None = None
         if editor_endpoint is not None:
             _phase("injecting_editor")
-            _inject_editor_artifact(project)
+            editor_payload = _editor_payload()
+            editor_assets, editor_font_relative = _prepare_editor_asset_payloads()
+        materialized = allocate_and_materialize(
+            project,
+            bridge_payload=_BRIDGE_RESOURCE.read_bytes(),
+            include_session_init=bool(savedir_path),
+            editor_payload=editor_payload,
+            editor_asset_files=editor_assets,
+            editor_font_relative=editor_font_relative,
+        )
+        session_id = materialized.session_id
+        editor_assets_dirname = materialized.editor_assets_dirname
+        if materialized.editor_font_relative:
+            editor_font_relative = materialized.editor_font_relative
+    except LaunchError:
+        raise
     except OSError as exc:
         raise LaunchError(
             "BRIDGE_FILE_NOT_CREATED",
@@ -575,15 +878,56 @@ def _launch_after_project_lock(
             suggested_fix="Check project write permissions under game/.",
         ) from exc
 
+    _phase("reserving_bridge_metadata")
+    try:
+        write_starting_bridge_info(
+            project.root,
+            session_id=session_id,
+            token=token,
+        )
+    except LaunchError:
+        # Do not cleanup against a failed reservation (unsafe preplanted metadata).
+        raise
+    except BridgeProtocolError as exc:
+        raise LaunchError(
+            "BRIDGE_INFO_CONFLICT",
+            "Bridge metadata conflicted with the reserved launch identity.",
+            phase="reserving_bridge_metadata",
+            suggested_fix="Remove the conflicting .renforge/control/bridge.json and retry.",
+        ) from exc
+    except PrivatePathError as exc:
+        raise LaunchError(
+            "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
+            "Bridge metadata path is unsafe and was left untouched.",
+            phase="reserving_bridge_metadata",
+            suggested_fix="Remove unsafe paths under .renforge/control and retry.",
+        ) from exc
+    except Exception as exc:
+        raise LaunchError(
+            "BRIDGE_MANIFEST_PUBLICATION_FAILED",
+            f"Could not reserve starting bridge metadata: {exc}",
+            phase="reserving_bridge_metadata",
+            suggested_fix="Check write permissions under .renforge/control/.",
+        ) from exc
+    project_lock.owned_session_id = session_id
+
     env["RENFORGE_BRIDGE_TOKEN"] = token
+    env["RENFORGE_BRIDGE_SESSION_ID"] = session_id
+    env["RENFORGE_BRIDGE_PROJECT_ROOT"] = str(project.root)
     env["RENFORGE_BRIDGE_PORT"] = str(port)
     if editor_endpoint is not None:
-        env.update(_editor_environment(editor_endpoint))
+        env.update(
+            _editor_environment(
+                editor_endpoint,
+                assets_dirname=editor_assets_dirname or "",
+                font_relative=editor_font_relative,
+            )
+        )
 
     command = project.renpy_command(sdk, ("run", "--warp", warp) if warp is not None else ("run",))
     if headless:
         if shutil.which("xvfb-run") is None:
-            remove_bridge_artifacts(project.root)
+            remove_bridge_artifacts(project.root, expected_session_id=session_id)
             raise LaunchError(
                 "DISPLAY_START_FAILED",
                 "Xvfb fallback selected but xvfb-run is not on PATH.",
@@ -603,7 +947,7 @@ def _launch_after_project_lock(
             start_new_session=headless,
         )
     except FileNotFoundError as exc:
-        remove_bridge_artifacts(project.root)
+        remove_bridge_artifacts(project.root, expected_session_id=session_id)
         raise LaunchError(
             "RENPY_EXECUTABLE_NOT_FOUND",
             f"Could not start Ren'Py: {exc}",
@@ -611,7 +955,7 @@ def _launch_after_project_lock(
             suggested_fix="Install a Ren'Py SDK via renforge or pass a valid version.",
         ) from exc
     except OSError as exc:
-        remove_bridge_artifacts(project.root)
+        remove_bridge_artifacts(project.root, expected_session_id=session_id)
         raise LaunchError(
             "RENPY_PROCESS_EXITED",
             f"Failed to spawn Ren'Py: {exc}",
@@ -619,17 +963,33 @@ def _launch_after_project_lock(
             suggested_fix="Check the SDK install and project path.",
         ) from exc
 
-    phases.append({"phase": "starting_renpy", "pid": process.pid})
-    info_path = project.root / ".renforge" / "bridge.json"
+    startup_event = threading.Event()
+    startup_code: list[str | None] = [None]
+    stdout_reader = _BoundedPipeReader(
+        process.stdout,
+        watch_startup=False,
+    )
+    stderr_reader = _BoundedPipeReader(
+        process.stderr,
+        watch_startup=True,
+        startup_event=startup_event,
+        startup_code=startup_code,
+    )
     deadline = time.time() + startup_timeout
     _phase("waiting_for_bridge", port=port or None)
 
     try:
         while time.time() < deadline:
             _raise_if_cancelled(cancel_event, phase="waiting_for_bridge")
+            if startup_event.is_set() and startup_code[0] is not None:
+                _raise_bridge_startup_error(startup_code[0])
             if process.poll() is not None:
-                out = (process.stdout.read() if process.stdout else b"").decode("utf-8", "replace")
-                err = (process.stderr.read() if process.stderr else b"").decode("utf-8", "replace")
+                stdout_reader.join(timeout=0.2)
+                stderr_reader.join(timeout=0.2)
+                if startup_event.is_set() and startup_code[0] is not None:
+                    _raise_bridge_startup_error(startup_code[0])
+                out = stdout_reader.tail().decode("utf-8", "replace")
+                err = stderr_reader.tail().decode("utf-8", "replace")
                 combined = (out + "\n" + err).lower()
                 code = "RENPY_PROCESS_EXITED"
                 suggested = "Inspect traceback.txt / errors.txt in the project root."
@@ -646,46 +1006,51 @@ def _launch_after_project_lock(
                     suggested_fix=suggested,
                     details={"stdout": out[-4000:], "stderr": err[-4000:], "returncode": process.returncode},
                 )
-            if info_path.exists():
-                try:
-                    manifest = json.loads(info_path.read_text(encoding="utf-8"))
-                    if not isinstance(manifest, dict) or manifest.get("token") != token:
-                        time.sleep(0.3)
-                        continue
-                    client = BridgeClient.from_project(project.root)
-                    reply = client.ping()
-                    if not isinstance(reply, dict) or reply.get("pong") is not True:
-                        raise RuntimeError(f"bridge ping returned non-pong response: {reply}")
-                    startup_ms = int((time.monotonic() - started) * 1000)
-                    bridge_port = None
-                    try:
-                        bridge_port = int(getattr(getattr(client, "_config", None), "port", 0) or 0) or None
-                    except Exception:
-                        bridge_port = None
-                    phases.append(
-                        {
-                            "phase": "ready",
-                            "bridge_port": bridge_port,
-                            "startup_ms": startup_ms,
-                        }
+            try:
+                info = read_bridge_info(
+                    project.root,
+                    require_ready=True,
+                    expected_session_id=session_id,
+                )
+            except Exception:
+                time.sleep(0.3)
+                continue
+            try:
+                client = BridgeClient(
+                    BridgeConfig(
+                        host=info.host,
+                        port=info.port,
+                        token=info.token,
                     )
-                    return BridgeSession(
-                        process,
-                        client,
-                        project.root,
-                        headless=headless,
-                        display_mode=display_mode,
-                        temporary_savedir=temporary_savedir,
-                        cleanup_savedir=cleanup_savedir,
-                        environment=capabilities.to_dict(),
-                        startup_ms=startup_ms,
-                        phases=phases,
-                        project_lock=project_lock,
-                        editor_coordinator=editor_coordinator,
-                    )
-                except Exception:
-                    pass  # bridge.json not fully written yet, retry
-            time.sleep(0.3)
+                )
+                reply = client.ping()
+                if not isinstance(reply, dict) or reply.get("pong") is not True:
+                    raise RuntimeError(f"bridge ping returned non-pong response: {reply}")
+                startup_ms = int((time.monotonic() - started) * 1000)
+                phases.append(
+                    {
+                        "phase": "ready",
+                        "bridge_port": info.port,
+                        "startup_ms": startup_ms,
+                    }
+                )
+                return BridgeSession(
+                    process,
+                    client,
+                    project.root,
+                    headless=headless,
+                    display_mode=display_mode,
+                    temporary_savedir=temporary_savedir,
+                    cleanup_savedir=cleanup_savedir,
+                    environment=capabilities.to_dict(),
+                    startup_ms=startup_ms,
+                    phases=phases,
+                    project_lock=project_lock,
+                    editor_coordinator=editor_coordinator,
+                )
+            except Exception:
+                time.sleep(0.3)
+                continue
     except LaunchError:
         _teardown_failed_launch(
             process,
@@ -693,6 +1058,7 @@ def _launch_after_project_lock(
             project.root,
             temporary_savedir if cleanup_savedir else None,
             project_lock,
+            expected_session_id=session_id,
         )
         raise
     except BaseException:
@@ -702,6 +1068,7 @@ def _launch_after_project_lock(
             project.root,
             temporary_savedir if cleanup_savedir else None,
             project_lock,
+            expected_session_id=session_id,
         )
         raise
 
@@ -711,6 +1078,7 @@ def _launch_after_project_lock(
         project.root,
         temporary_savedir if cleanup_savedir else None,
         project_lock,
+        expected_session_id=session_id,
     )
     raise LaunchError(
         "BRIDGE_CONNECTION_TIMEOUT",
@@ -719,6 +1087,7 @@ def _launch_after_project_lock(
         suggested_fix="Increase timeout, check the project launches manually, or inspect log.txt.",
         details={"phases": phases, "environment": capabilities.to_dict()},
     )
+
 
 
 def launch_with_bridge(
@@ -740,7 +1109,7 @@ def launch_with_bridge(
     editor: bool = False,
 ) -> BridgeSession:
     """Launch a bridge while exclusively owning this project's artifacts."""
-    project_lock = ProjectBridgeLock(project.root / ".renforge" / "bridge.lock")
+    project_lock = ProjectBridgeLock(project.root)
     project_lock.acquire()
     editor_coordinator: EditorCoordinator | None = None
     try:
@@ -779,7 +1148,14 @@ def launch_with_bridge(
         if project_lock.is_deferred:
             raise
         try:
-            remove_bridge_artifacts(project.root)
+            if project_lock.owned_session_id is not None:
+                remove_bridge_artifacts(
+                    project.root,
+                    expected_session_id=project_lock.owned_session_id,
+                )
+            else:
+                # Reservation never succeeded: never touch control/bridge.json.
+                remove_bridge_artifacts(project.root, remove_bridge_info=False)
         finally:
             project_lock.release()
         raise
@@ -834,10 +1210,13 @@ def _teardown_failed_launch(
     project_root: Path,
     temporary_savedir: Path | None,
     project_lock: ProjectBridgeLock,
+    *,
+    expected_session_id: str | None = None,
 ) -> None:
+    session_id = expected_session_id or project_lock.owned_session_id
     if _terminate(process, headless):
         try:
-            remove_bridge_artifacts(project_root)
+            remove_bridge_artifacts(project_root, expected_session_id=session_id)
             if temporary_savedir is not None:
                 shutil.rmtree(temporary_savedir, ignore_errors=False)
             return
@@ -857,7 +1236,7 @@ def _teardown_failed_launch(
                 time.sleep(0.1)
         while True:
             try:
-                remove_bridge_artifacts(project_root)
+                remove_bridge_artifacts(project_root, expected_session_id=session_id)
                 if temporary_savedir is not None:
                     shutil.rmtree(temporary_savedir, ignore_errors=False)
                 project_lock.release()

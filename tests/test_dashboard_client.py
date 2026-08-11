@@ -24,7 +24,7 @@ def test_launch_game_delegates_to_matching_dashboard(tmp_path: Path, monkeypatch
     monkeypatch.setattr(
         dashboard_client,
         "dashboard_connection",
-        lambda: {
+        lambda *_a, **_k: {
             "project": str(project),
             "url": "http://127.0.0.1:8765/",
             "token": "secret token",
@@ -48,10 +48,44 @@ def test_launch_game_delegates_to_matching_dashboard(tmp_path: Path, monkeypatch
     )
 
     assert result == {"ok": True, "current_label": "start", "via": "dashboard"}
-    assert calls == {
-        "url": "http://127.0.0.1:8765/api/live/launch?token=secret+token",
-        "payload": {"version": "8.3.7", "warp": "game/script.rpy:12", "editor": True},
-        "timeout": 45,
+    assert calls["url"] == "http://127.0.0.1:8765/api/live/launch?token=secret+token"
+    assert calls["timeout"] == 45
+    assert calls["payload"]["version"] == "8.3.7"
+    assert calls["payload"]["warp"] == "game/script.rpy:12"
+    assert calls["payload"]["editor"] is True
+    assert calls["payload"]["display"] == "auto"
+    assert calls["payload"]["audio"] == "auto"
+    assert calls["payload"]["persistent"] == "existing"
+    assert calls["payload"]["cleanup_on_stop"] is True
+
+
+def test_dashboard_matching_applies_normcase(tmp_path: Path, monkeypatch) -> None:
+    from renforge import dashboard_client
+
+    project = tmp_path / "Game-Project"
+    monkeypatch.setattr(
+        dashboard_client,
+        "dashboard_connection",
+        lambda *_a, **_k: {
+            "project": str(project).upper(),
+            "url": "http://127.0.0.1:8765/",
+            "token": "secret token",
+        },
+    )
+    monkeypatch.setattr(
+        dashboard_client.os.path,
+        "normcase",
+        lambda value: value.casefold(),
+    )
+    monkeypatch.setattr(
+        dashboard_client,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response({"ok": True}),
+    )
+
+    assert dashboard_client.launch_game(str(project)) == {
+        "ok": True,
+        "via": "dashboard",
     }
 
 
@@ -63,7 +97,7 @@ def test_launch_game_includes_editor_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         dashboard_client,
         "dashboard_connection",
-        lambda: {
+        lambda *_a, **_k: {
             "project": str(project),
             "url": "http://127.0.0.1:8765/",
             "token": "secret token",
@@ -87,10 +121,10 @@ def test_launch_game_includes_editor_mode(tmp_path: Path, monkeypatch) -> None:
     )
 
     assert result == {"ok": True, "current_label": "start", "via": "dashboard"}
-    assert calls == {
-        "payload": {"version": "8.3.7", "warp": "game/script.rpy:12", "editor": True},
-        "timeout": 45,
-    }
+    assert calls["timeout"] == 45
+    assert calls["payload"]["version"] == "8.3.7"
+    assert calls["payload"]["warp"] == "game/script.rpy:12"
+    assert calls["payload"]["editor"] is False
 
 
 def test_launch_game_ignores_dashboard_for_another_project(tmp_path: Path, monkeypatch) -> None:
@@ -99,7 +133,7 @@ def test_launch_game_ignores_dashboard_for_another_project(tmp_path: Path, monke
     monkeypatch.setattr(
         dashboard_client,
         "dashboard_connection",
-        lambda: {
+        lambda *_a, **_k: {
             "project": str(tmp_path / "selected"),
             "url": "http://127.0.0.1:8765/",
             "token": "secret",
@@ -122,7 +156,7 @@ def test_stop_game_delegates_to_matching_dashboard(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(
         dashboard_client,
         "dashboard_connection",
-        lambda: {
+        lambda *_a, **_k: {
             "project": str(project),
             "url": "http://127.0.0.1:8765/",
             "token": "secret token",

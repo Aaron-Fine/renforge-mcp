@@ -1,15 +1,42 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 
+def test_windows_temp_registry_digest_is_process_stable() -> None:
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "from renforge.session_registry import _windows_user_digest; "
+            "print(_windows_user_digest('same-user'))"
+        ),
+    ]
+    outputs = []
+    for seed in ("1", "2"):
+        env = {**os.environ, "PYTHONHASHSEED": seed}
+        outputs.append(
+            subprocess.check_output(command, env=env, text=True).strip()
+        )
+
+    assert outputs[0] == outputs[1]
+    assert len(outputs[0]) == 12
+
+
 def test_dashboard_project_is_discoverable_across_processes(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("RENFORGE_RUNTIME_DIR", str(tmp_path / "runtime"))
 
-    from renforge.session_registry import active_dashboard, dashboard_connection, publish_dashboard
+    from renforge.session_registry import (
+        active_dashboard,
+        dashboard_connection,
+        publish_dashboard,
+    )
 
     project = tmp_path / "visual-novel"
-    publish_dashboard(project, url="http://127.0.0.1:8765/", token="secret-token")
+    publish_dashboard(project, url="http://127.0.0.1:8765/", token="secret_token_22chars__")
 
     context = active_dashboard()
     assert context is not None
@@ -17,7 +44,7 @@ def test_dashboard_project_is_discoverable_across_processes(tmp_path: Path, monk
     assert context["url"] == "http://127.0.0.1:8765/"
     assert context["pid"] > 0
     assert "token" not in context
-    assert dashboard_connection()["token"] == "secret-token"
+    assert dashboard_connection()["token"] == "secret_token_22chars__"
 
 
 def test_dashboard_lifespan_publishes_and_clears_its_project(tmp_path: Path, monkeypatch) -> None:
@@ -29,13 +56,13 @@ def test_dashboard_lifespan_publishes_and_clears_its_project(tmp_path: Path, mon
 
     project = tmp_path / "visual-novel"
     (project / "game").mkdir(parents=True)
-    app = create_ui_app(project, ui_token="token", dashboard_url="http://127.0.0.1:8765/")
+    app = create_ui_app(project, ui_token="secret_token_22chars__", dashboard_url="http://127.0.0.1:8765/")
 
     with testclient.TestClient(app):
         assert active_dashboard()["project"] == str(project.resolve())
         from renforge.session_registry import dashboard_connection
 
-        assert dashboard_connection()["token"] == "token"
+        assert dashboard_connection()["token"] == "secret_token_22chars__"
 
     assert active_dashboard() is None
 
@@ -51,11 +78,11 @@ def test_dashboard_project_switch_updates_the_shared_context(tmp_path: Path, mon
     second = tmp_path / "second"
     (first / "game").mkdir(parents=True)
     (second / "game").mkdir(parents=True)
-    app = create_ui_app(first, ui_token="token", dashboard_url="http://127.0.0.1:8765/")
+    app = create_ui_app(first, ui_token="secret_token_22chars__", dashboard_url="http://127.0.0.1:8765/")
 
     with testclient.TestClient(app) as client:
         response = client.post(
-            "/api/project?token=token",
+            "/api/project?token=secret_token_22chars__",
             json={"root_id": "project-parent", "path": "second"},
         )
         assert response.status_code == 200

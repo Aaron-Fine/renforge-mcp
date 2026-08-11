@@ -276,6 +276,34 @@ def _commit_status(sock: socket.socket, auth: dict[str, Any], transaction_id: st
     return _recv_json(sock)
 
 
+def _wait_for_commit_state(
+    sock: socket.socket,
+    auth: dict[str, Any],
+    transaction_id: str,
+    expected_state: str,
+    *,
+    timeout: float = 3.0,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    last_status: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        last_status = _commit_status(
+            sock,
+            auth,
+            transaction_id,
+            request_id=f"wait-{transaction_id}-{attempt}",
+        )
+        assert last_status["ok"] is True
+        if last_status["result"]["state"] == expected_state:
+            return last_status
+        attempt += 1
+        time.sleep(0.05)
+    raise AssertionError(
+        f"transaction {transaction_id} did not reach {expected_state!r}: {last_status!r}"
+    )
+
+
 def test_analyze_target_returns_lock_reasons_for_runtime_denials(tmp_path: Path) -> None:
     project, _ = _make_project(tmp_path)
     observation = _base_observation()
@@ -558,6 +586,46 @@ def test_commit_shadow_isolation_and_validation_failure_diagnostics(tmp_path: Pa
         coordinator.close()
 
 
+def test_shadow_rejects_special_files_and_removes_partial_copy(tmp_path: Path) -> None:
+    import os
+
+    from renforge.editor.shadow import build_shadow_project
+
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFOs unavailable on this platform")
+    project, _source = _make_project(tmp_path)
+    special = project.root / "game" / "special.pipe"
+    os.mkfifo(special)
+    shadow_root = tmp_path / "shadow-special"
+
+    with pytest.raises(EditorError) as excinfo:
+        build_shadow_project(project, shadow_root=shadow_root, staged_replacements={})
+
+    assert excinfo.value.code == "SHADOW_SPECIAL_FILE"
+    assert not shadow_root.exists()
+
+
+def test_shadow_enforces_file_quota_and_removes_partial_copy(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import renforge.editor.shadow as shadow
+
+    project, _source = _make_project(tmp_path)
+    (project.root / "extra.txt").write_text("extra\n", encoding="utf-8")
+    shadow_root = tmp_path / "shadow-quota"
+    monkeypatch.setattr(shadow, "MAX_SHADOW_FILES", 1)
+
+    with pytest.raises(EditorError) as excinfo:
+        shadow.build_shadow_project(
+            project,
+            shadow_root=shadow_root,
+            staged_replacements={},
+        )
+
+    assert excinfo.value.code == "SHADOW_QUOTA_EXCEEDED"
+    assert not shadow_root.exists()
+
+
 def test_commit_timeout_rolls_back_and_conflict_is_fail_closed(tmp_path: Path) -> None:
     project, source = _make_project(tmp_path)
     observation = _base_observation(script_generation=7)
@@ -580,10 +648,7 @@ def test_commit_timeout_rolls_back_and_conflict_is_fail_closed(tmp_path: Path) -
             assert commit["ok"] is True
             tx = commit["result"]["transaction_id"]
 
-            time.sleep(0.35)
-            status = _commit_status(sock, auth, tx, request_id="st-timeout")
-            assert status["ok"] is True
-            assert status["result"]["state"] == "rolled_back"
+            status = _wait_for_commit_state(sock, auth, tx, "rolled_back")
             assert source.read_bytes() == baseline
 
             analysis_2 = _analyze(sock, auth, observation, request_id="an-conflict")
@@ -591,10 +656,7 @@ def test_commit_timeout_rolls_back_and_conflict_is_fail_closed(tmp_path: Path) -
             tx_2 = commit_2["result"]["transaction_id"]
             source.write_text("external\n", encoding="utf-8")
 
-            time.sleep(0.35)
-            conflict = _commit_status(sock, auth, tx_2, request_id="st-conflict")
-            assert conflict["ok"] is True
-            assert conflict["result"]["state"] == "rollback_conflict"
+            conflict = _wait_for_commit_state(sock, auth, tx_2, "rollback_conflict")
             assert conflict["result"]["uncertain_paths"] == ["script.rpy"]
             assert source.read_text(encoding="utf-8") == "external\n"
     finally:
@@ -1356,7 +1418,9 @@ def test_analyze_and_commit_imagebutton_statement(tmp_path: Path) -> None:
             assert result["original_position"] == [12, 10]
 
             committed = _commit(sock, auth, analyzed, x=40, y=50, request_id="co-img")
-            assert committed["ok"] is True
+            assert committed.get("ok") is True, (
+                f"error={committed.get('error')!r} diagnostics={committed.get('diagnostics')!r} full={committed!r}"
+            )
             assert committed["result"]["state"] == "published"
             assert "xpos 40 ypos 50" in source.read_text(encoding="utf-8")
             assert 'imagebutton id "start_btn"' in source.read_text(encoding="utf-8")
@@ -2439,6 +2503,69 @@ def _style_color_observation(*, script_generation: int = 20) -> dict[str, Any]:
     return observation
 
 
+def test_anonymous_text_can_move_by_source_location_without_an_id(tmp_path: Path) -> None:
+    root = tmp_path / "project_anonymous_text"
+    game_dir = root / "game"
+    game_dir.mkdir(parents=True)
+    source = game_dir / "script.rpy"
+    source.write_text(
+        "screen test_screen:\n"
+        '    text "The gate is silent. Choose your path." xpos 140 ypos 240\n',
+        encoding="utf-8",
+    )
+    observation = _base_observation(script_generation=20)
+    observation["runtime_key"]["widget_id"] = None
+    observation["runtime_key"]["locator"] = {
+        "kind": "source",
+        "source_location": ["script.rpy", 2],
+        "statement_kind": "text",
+    }
+    observation["runtime_key"]["ancestry"][-1]["type"] = "Text"
+    observation["measurement_method"] = "scene_tree_text"
+    observation["rect"] = [140, 240, 402, 27]
+    probe = _Probe(
+        observe_reply={
+            **json.loads(json.dumps(observation)),
+            "frame_id": "independent-frame-anonymous-text",
+            "object_id": "obj-independent-anonymous-text",
+        }
+    )
+    coordinator = EditorCoordinator(RenpyProject(root), _make_sdk(tmp_path), attestation_timeout=2.0)
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analyzed = _analyze(sock, auth, observation, request_id="an-anonymous-text")
+            assert analyzed["ok"] is True
+            result = analyzed["result"]
+            assert result["lock_reason"] is None
+            assert result["source_key"]["widget_id"] is None
+            assert result["source_key"]["statement_kind"] == "text"
+            assert result["source_key"]["position_mode"] == "xy"
+            assert result["capabilities"]["move"] is True
+            assert result["capabilities"].get("style_color") is None
+            assert result["source_key"]["style_lock_reason"]["code"] == "STYLE_COLOR_NOT_DIRECTLY_AUTHORED"
+
+            committed = _commit(
+                sock,
+                auth,
+                analyzed,
+                x=196,
+                y=284,
+                request_id="co-anonymous-text",
+            )
+            assert committed["ok"] is True
+            patched = source.read_text(encoding="utf-8")
+            assert patched == (
+                "screen test_screen:\n"
+                '    text "The gate is silent. Choose your path." xpos 196 ypos 284\n'
+            )
+            assert " id " not in patched
+    finally:
+        coordinator.close()
+
+
 def _send_editor_command(
     sock: socket.socket,
     auth: dict[str, Any],
@@ -2511,7 +2638,7 @@ def test_text_style_color_commit_and_product_undo_are_transactional(
             assert result["source_key"]["style_mode"] == "literal_hex"
             assert result["source_key"]["style_color"] == baseline_color
             assert result["capabilities"] == {
-                "move": False,
+                "move": True,
                 "resize": False,
                 "style_color": True,
                 "style_color_preview": True,
@@ -2545,6 +2672,7 @@ def test_text_style_color_commit_and_product_undo_are_transactional(
 
             # The second independent observation sees the product preview.
             probe.observe_reply["style_color"] = requested_color
+            probe.observe_reply["rect"] = [260, 230, 286, 112]
 
             committed = _send_editor_command(
                 sock,
@@ -2556,6 +2684,8 @@ def test_text_style_color_commit_and_product_undo_are_transactional(
                         {
                             "analysis_id": result["analysis_id"],
                             "source_key": result["source_key"],
+                            "x": 260,
+                            "y": 230,
                             "color": requested_color,
                         }
                     ],
@@ -2564,7 +2694,10 @@ def test_text_style_color_commit_and_product_undo_are_transactional(
             )
             assert committed["ok"] is True
             transaction_id = committed["result"]["transaction_id"]
-            assert source.read_text(encoding="utf-8") == baseline.replace(baseline_color, requested_color)
+            assert source.read_text(encoding="utf-8") == (
+                baseline.replace(baseline_color, requested_color)
+                .replace("xpos 240 ypos 220", "xpos 260 ypos 230")
+            )
 
             handshake = _send_editor_command(
                 sock,
@@ -2576,6 +2709,7 @@ def test_text_style_color_commit_and_product_undo_are_transactional(
             assert handshake["ok"] is True
             assert handshake["result"]["state"] == "committed"
             assert probe.attest_calls[-1]["expected_targets"][0]["style_color"] == requested_color
+            assert probe.attest_calls[-1]["expected_targets"][0]["position"] == [260, 230]
 
             undo = _send_editor_command(
                 sock,

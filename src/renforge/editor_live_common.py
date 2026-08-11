@@ -18,6 +18,27 @@ from renforge.editor_task0_runner import _require_ok, _wait_for_status
 EDITOR_RESOURCE = Path(__file__).resolve().parent / "bridge" / "editor.rpy"
 LIVE_FIXTURES_DIR = Path(__file__).resolve().parents[2] / "tests" / "live_fixtures"
 
+# Drop compiled caches and any leftover session injects from a dirty demo tree.
+# Unowned legacy injects must not ride into live fixtures: they load alongside
+# schema-3 session files and break the bridge.
+DEMO_COPY_IGNORE = shutil.ignore_patterns(
+    "*.rpyc",
+    "*.rpyc.bak",
+    "cache",
+    "saves",
+    "renforge_bridge.rpy",
+    "renforge_bridge.rpyc",
+    "renforge_bridge.rpyc.bak",
+    "00renforge_session.rpy",
+    "00renforge_session.rpyc",
+    "00renforge_session.rpyc.bak",
+    "00renforge_session_*.rpy",
+    "00renforge_session_*.rpyc",
+    "00renforge_session_*.rpyc.bak",
+    "zzrenforge_*",
+    "zz_renforge_*",
+)
+
 
 def inject_editor_live_resources(
     project_root: Path,
@@ -63,6 +84,16 @@ def center(bounds: dict[str, Any]) -> tuple[int, int]:
     return (
         int(bounds["x"]) + int(bounds["width"]) // 2,
         int(bounds["y"]) + int(bounds["height"]) // 2,
+    )
+
+
+def focusable_edge_point(bounds: dict[str, Any]) -> tuple[int, int]:
+    """Pick button padding rather than its nested painted Text displayable."""
+    width = max(1, int(bounds["width"]))
+    height = max(1, int(bounds["height"]))
+    return (
+        int(bounds["x"]) + min(10, width - 1),
+        int(bounds["y"]) + max(0, height - 2),
     )
 
 
@@ -112,11 +143,13 @@ def select_lock(
     expected_code: str,
     *,
     fixture_screen: str,
+    prefer_focusable_edge: bool = False,
 ) -> str:
     bounds = wait_bounds(client, widget_id, fixture_screen=fixture_screen)
+    point = focusable_edge_point(bounds) if prefer_focusable_edge else center(bounds)
     selection = client.request(
         "editor_task0_select",
-        {"x": center(bounds)[0], "y": center(bounds)[1]},
+        {"x": point[0], "y": point[1]},
     )
     immediate = selection.get("lock_reason") if isinstance(selection, dict) else None
     if immediate == expected_code:

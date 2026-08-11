@@ -7,10 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from renforge.editor_live_common import DEMO_COPY_IGNORE
 from renforge.editor_failed_gate_runner import (
     FIXTURE_SCREEN,
     LOCK_LOOP_INSTANCE,
-    LOCK_SYNTHETIC_WIDGET_ID,
+    LOCK_MISSING_SOURCE_LOCATION,
     LOCK_TRANSFORM_CROP_COMPOSITE,
     inject_editor_failed_gate_resources,
     run_editor_failed_gate_live_scenario,
@@ -27,7 +28,7 @@ _DEMO = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
 @pytest.fixture
 def demo_copy(tmp_path: Path) -> Path:
     destination = tmp_path / "demo"
-    shutil.copytree(_DEMO, destination, ignore=shutil.ignore_patterns("*.rpyc", "cache"))
+    shutil.copytree(_DEMO, destination, ignore=DEMO_COPY_IGNORE)
     inject_editor_failed_gate_resources(destination)
     return destination
 
@@ -79,11 +80,11 @@ def test_failed_gate_ui_live_acceptance_proof(demo_copy: Path, tmp_path: Path) -
     # Acceptance criteria assertions:
     assert report["verdict"] == "pass"
 
-    # 1. Missing source identity
+    # 1. Missing source location
     id_gate = report["gate_families"]["missing_identity"]
     assert id_gate["ok"] is False
-    assert id_gate["lock_reason"] == LOCK_SYNTHETIC_WIDGET_ID
-    assert LOCK_SYNTHETIC_WIDGET_ID in id_gate["label_text"]
+    assert id_gate["lock_reason"] == LOCK_MISSING_SOURCE_LOCATION
+    assert id_gate["structured_lock_reason"] == LOCK_MISSING_SOURCE_LOCATION
     assert id_gate["selected_rect"][2] > 0 and id_gate["selected_rect"][3] > 0
     assert id_gate["save_enabled"] is False
     assert id_gate["drag_prevented"] is True
@@ -93,7 +94,7 @@ def test_failed_gate_ui_live_acceptance_proof(demo_copy: Path, tmp_path: Path) -
     clip_gate = report["gate_families"]["clipping_ancestry"]
     assert clip_gate["ok"] is False
     assert clip_gate["lock_reason"] == LOCK_TRANSFORM_CROP_COMPOSITE
-    assert LOCK_TRANSFORM_CROP_COMPOSITE in clip_gate["label_text"]
+    assert clip_gate["structured_lock_reason"] == LOCK_TRANSFORM_CROP_COMPOSITE
     assert clip_gate["selected_rect"][2] > 0 and clip_gate["selected_rect"][3] > 0
     assert clip_gate["save_enabled"] is False
     assert clip_gate["drag_prevented"] is True
@@ -103,7 +104,7 @@ def test_failed_gate_ui_live_acceptance_proof(demo_copy: Path, tmp_path: Path) -
     rep_gate = report["gate_families"]["repeated_instance"]
     assert rep_gate["ok"] is False
     assert rep_gate["lock_reason"] == LOCK_LOOP_INSTANCE
-    assert LOCK_LOOP_INSTANCE in rep_gate["label_text"]
+    assert rep_gate["structured_lock_reason"] == LOCK_LOOP_INSTANCE
     assert rep_gate["selected_rect"][2] > 0 and rep_gate["selected_rect"][3] > 0
     assert rep_gate["save_enabled"] is False
     assert rep_gate["drag_prevented"] is True

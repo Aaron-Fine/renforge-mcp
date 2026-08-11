@@ -30,6 +30,7 @@ from renforge.editor_live_common import (
     sha256_file as _sha256_file,
     wait_bounds,
 )
+from renforge.editor_runner_status import is_reload_settled
 from renforge.editor_task0_runner import (
     _require_ok,
     _source_generation,
@@ -192,8 +193,7 @@ def run_editor_viewport_scrolled_commit(
     )
     settled = _wait_for_status(
         client,
-        lambda status: not bool(status.get("save_in_progress"))
-        and status.get("status_text") in ("Reload committed", "Reload failed"),
+        is_reload_settled,
         timeout=60.0,
         poll_name="scrolled viewport save settled",
     )
@@ -206,6 +206,7 @@ def run_editor_viewport_scrolled_commit(
         "scroll_before": scroll_before,
         "scroll_after": scroll_after,
         "scroll_survived_reload": abs(scroll_after - scroll_before) <= 1,
+        "status_code": settled.get("status_code"),
         "status_text": settled.get("status_text"),
         "save_error": settled.get("save_error"),
         "source_unchanged": after_bytes == baseline_bytes,
@@ -252,6 +253,7 @@ def run_editor_viewport_live_scenario(
             "viewport_container",
             "CONTAINER_POSITION_UNSUPPORTED",
             fixture_screen=FIXTURE_SCREEN,
+            prefer_focusable_edge=True,
         ),
         "nested": select_lock(
             client,
@@ -362,8 +364,7 @@ def run_editor_viewport_live_scenario(
     )
     save_status = _wait_for_status(
         client,
-        lambda status: not bool(status.get("save_in_progress"))
-        and status.get("status_text") in ("Reload committed", "Reload failed"),
+        is_reload_settled,
         timeout=60.0,
         poll_name="viewport save settled",
     )
@@ -372,7 +373,7 @@ def run_editor_viewport_live_scenario(
     # scroll that does not survive the reload invalidates the comparison.
     scroll_after_reload = float(client.eval_expr(f"{_adjustment(client)}.value"))
     report["scroll"]["after_reload"] = scroll_after_reload
-    if save_status.get("status_text") != "Reload committed":
+    if save_status.get("status_code") != "reload_committed":
         raise AssertionError(
             f"save did not commit: {save_status.get('save_error')!r}; "
             f"viewport scroll was {applied_scroll} before the reload "
@@ -416,7 +417,7 @@ def run_editor_viewport_live_scenario(
     # Step 4: reload publication cycle.
     report["reload"] = {
         "ok": True,
-        "status_text": save_status.get("status_text"),
+        "status_code": save_status.get("status_code"), "status_text": save_status.get("status_text"),
         "generation_delta": _source_generation(save_status) - generation_before,
     }
 

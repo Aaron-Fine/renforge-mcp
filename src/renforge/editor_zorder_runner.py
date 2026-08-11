@@ -12,6 +12,7 @@ from typing import Any
 from PIL import Image
 
 from renforge.editor_live_common import wait_bounds
+from renforge.editor_runner_status import is_reload_committed, is_reload_settled
 from renforge.editor_task0_runner import _require_ok
 
 FIXTURE_SCREEN = "renforge_editor_zorder_fixture"
@@ -23,6 +24,19 @@ FIXTURE_RESOURCE = (
     / "live_fixtures"
     / "renforge_editor_zorder_fixture.rpy"
 )
+
+
+def _require_reload_committed(
+    status: dict[str, Any],
+    *,
+    operation: str,
+) -> dict[str, Any]:
+    if not is_reload_committed(status):
+        raise AssertionError(
+            f"{operation} did not commit: status_code={status.get('status_code')!r}; "
+            f"save_error={status.get('save_error')!r}"
+        )
+    return status
 
 
 def inject_editor_zorder_resources(project_root: Path) -> Path:
@@ -194,14 +208,14 @@ def run_editor_zorder_live_scenario(client: Any, *, fixture_path: Path) -> dict[
     )
     report["product_save_submitted"] = bool(save_reply.get("ok") is True)
 
-    commit_status = _wait_for_status(
-        client,
-        lambda status: (
-            not bool(status.get("save_in_progress"))
-            and status.get("status_text") in ("Reload committed", "Committed")
+    commit_status = _require_reload_committed(
+        _wait_for_status(
+            client,
+            is_reload_settled,
+            timeout=60.0,
+            poll_name="z-order reload commit",
         ),
-        timeout=60.0,
-        poll_name="z-order reload commit",
+        operation="z-order save",
     )
     report["product_commit_status"] = commit_status
 
@@ -246,14 +260,14 @@ def run_editor_zorder_live_scenario(client: Any, *, fixture_path: Path) -> dict[
     )
     report["product_undo_requested"] = bool(undo_reply.get("ok") is True)
 
-    undo_status = _wait_for_status(
-        client,
-        lambda status: (
-            not bool(status.get("save_in_progress"))
-            and status.get("status_text") in ("Reload committed", "Committed")
+    undo_status = _require_reload_committed(
+        _wait_for_status(
+            client,
+            is_reload_settled,
+            timeout=60.0,
+            poll_name="z-order undo commit",
         ),
-        timeout=60.0,
-        poll_name="z-order undo commit",
+        operation="z-order undo",
     )
     report["product_undo_status"] = undo_status
 

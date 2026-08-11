@@ -18,6 +18,7 @@ from renforge.editor_bar_runner import (
     _wait_bounds,
 )
 from renforge.editor_task0_runner import _require_ok, _source_generation, _wait_for_status
+from renforge.editor_runner_status import is_reload_committed
 
 
 def _select_resize_lock(client: Any, widget_id: str, expected_code: str) -> dict[str, Any]:
@@ -248,9 +249,7 @@ def run_editor_bar_resize_live_scenario(client: Any, *, fixture_path: Path) -> d
     )
     save_status = _wait_for_status(
         client,
-        lambda status: not bool(status.get("save_in_progress"))
-        and status.get("status_text") == "Reload committed"
-        and _source_generation(status) == generation_before + 1,
+        lambda status: is_reload_committed(status, generation=generation_before + 1),
         timeout=60.0,
         poll_name="bar resize save complete",
     )
@@ -286,7 +285,7 @@ def run_editor_bar_resize_live_scenario(client: Any, *, fixture_path: Path) -> d
     report["reload"] = {
         "ok": True,
         "script_generation": _source_generation(save_status),
-        "status_text": save_status.get("status_text"),
+        "status_code": save_status.get("status_code"), "status_text": save_status.get("status_text"),
         "generation_delta": _source_generation(save_status) - generation_before,
         "pending_handshake_sent": save_status.get("pending_handshake_sent"),
         "frame_id": None,
@@ -344,7 +343,78 @@ def run_editor_bar_resize_live_scenario(client: Any, *, fixture_path: Path) -> d
     if report["rebinding"]["ok"] is not True:
         raise AssertionError(f"rebinding failed: {report['rebinding']!r}")
 
-    fixture_path.write_bytes(baseline_bytes)
+    # Visible-handle proof: drag the right-edge resize handle while runtime and
+    # source still share the committed size, then commit via the visible Save
+    # button. The `finally` restore always returns the fixture to baseline.
+    handle_drag: dict[str, Any] = {"ok": False}
+    report["visible_handle_drag"] = handle_drag
+    try:
+        handle_obs = _observe_selected(client)
+        handle_rect = list(handle_obs.get("rect") or [])
+        if len(handle_rect) != 4:
+            raise AssertionError(f"observe_selected missing rect: {handle_obs!r}")
+        rect_x, rect_y, rect_w, rect_h = (int(value) for value in handle_rect)
+        expected_w = rect_w + 36
+        handle_drag["rect_before"] = [rect_x, rect_y, rect_w, rect_h]
+
+        drag_reply = client.request(
+            "editor_task0_drag",
+            {
+                "points": [
+                    [rect_x + rect_w, rect_y + rect_h // 2],
+                    [rect_x + rect_w + 36, rect_y + rect_h // 2],
+                ],
+            },
+        )
+        if not isinstance(drag_reply, dict) or drag_reply.get("ok") is not True:
+            raise AssertionError(f"visible handle drag did not start: {drag_reply!r}")
+
+        def _handle_resized(status: dict[str, Any]) -> bool:
+            size_now = status.get("preview_size")
+            pos_now = status.get("preview_position")
+            return (
+                isinstance(size_now, list)
+                and len(size_now) == 2
+                and int(size_now[0]) == expected_w
+                and int(size_now[1]) == rect_h
+                and isinstance(pos_now, list)
+                and len(pos_now) == 2
+                and int(pos_now[0]) == rect_x
+                and int(pos_now[1]) == rect_y
+            )
+
+        preview_status = _wait_for_status(
+            client,
+            _handle_resized,
+            timeout=10.0,
+            poll_name="visible handle resize preview",
+        )
+        handle_drag["preview_size_after"] = [int(value) for value in preview_status["preview_size"]]
+        handle_drag["preview_position_after"] = [int(value) for value in preview_status["preview_position"]]
+
+        save_reply = _require_ok(
+            client.click_element(id="rf_save", screen="_renforge_editor_overlay"),
+            "visible handle resize save",
+        )
+        save_status = _wait_for_status(
+            client,
+            is_reload_committed,
+            timeout=60.0,
+            poll_name="visible handle resize save complete",
+        )
+        saved_text = fixture_path.read_text(encoding="utf-8")
+        handle_drag["committed_source_size"] = _parse_size_from_target_line(saved_text)
+        handle_drag["matches_independent_expected"] = saved_text == _independent_expected_after_size_patch(
+            baseline_bytes.decode("utf-8"),
+            w=expected_w,
+            h=rect_h,
+        )
+        handle_drag["save_reply"] = save_reply
+        handle_drag["save_status_text"] = save_status.get("status_text")
+        handle_drag["ok"] = bool(handle_drag["matches_independent_expected"])
+    finally:
+        fixture_path.write_bytes(baseline_bytes)
+
     restored_bytes = fixture_path.read_bytes()
     restored_sha = _sha256_file(fixture_path)
     report["byte_identical_undo"] = {

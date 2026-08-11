@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from renforge.editor_live_common import DEMO_COPY_IGNORE
 from renforge.editor_align_runner import (
     FIXTURE_SCREEN,
     inject_editor_align_resources,
@@ -24,7 +25,7 @@ _DEMO = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
 @pytest.fixture
 def demo_copy(tmp_path: Path) -> Path:
     destination = tmp_path / "demo"
-    shutil.copytree(_DEMO, destination, ignore=shutil.ignore_patterns("*.rpyc", "cache"))
+    shutil.copytree(_DEMO, destination, ignore=DEMO_COPY_IGNORE)
     inject_editor_align_resources(destination)
     return destination
 
@@ -75,7 +76,7 @@ def test_align_seven_step_live_proof(demo_copy: Path) -> None:
     patch = report["patch"]
     assert patch["outside_coordinate_spans_identical"] is True
     assert patch["matches_independent_expected"] is True
-    assert report["reload"]["status_text"] == "Reload committed"
+    assert report["reload"].get("status_code") == "reload_committed" or report["reload"].get("status_code") == "reload_committed"
     assert all(abs(int(v)) <= 1 for v in report["pixel_agreement"]["delta"])  # issue #39: 1 px
     assert report["value_invariance"]["preview"] == report["value_invariance"]["baseline"]
     assert report["rebinding"]["widget_id"] == "align_target"

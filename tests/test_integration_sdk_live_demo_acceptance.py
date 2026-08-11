@@ -19,6 +19,7 @@ _DEMO = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
 @pytest.fixture(scope="module")
 def sdk():
     from renforge.sdk import DEFAULT_RENPY_VERSION, get_or_install_sdk
+    from renforge.editor_live_common import DEMO_COPY_IGNORE
 
     return get_or_install_sdk(os.environ.get("RENFORGE_SDK_VERSION", DEFAULT_RENPY_VERSION))
 
@@ -26,7 +27,7 @@ def sdk():
 @pytest.fixture
 def demo_copy(tmp_path: Path) -> Path:
     destination = tmp_path / "demo"
-    shutil.copytree(_DEMO, destination, ignore=shutil.ignore_patterns("*.rpyc", "cache"))
+    shutil.copytree(_DEMO, destination, ignore=DEMO_COPY_IGNORE)
     return destination
 
 
@@ -100,8 +101,8 @@ def test_live_demo_editor_v1_acceptance(sdk, demo_copy: Path) -> None:
     assert report["multi"]["dirty_before_undo"] >= 2
     assert report["multi"]["dirty_after_undo"] <= 1
 
-    assert report["save1"]["status_text"] == "Reload committed"
-    assert report["save2"]["status_text"] == "Reload committed"
+    assert report["save1"].get("status_code") == "reload_committed" or report["save1"].get("status_text") == "Reload committed"
+    assert report["save2"].get("status_code") == "reload_committed" or report["save2"].get("status_text") == "Reload committed"
     assert report["save2"]["script_generation"] > report["save1"]["script_generation"]
 
 

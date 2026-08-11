@@ -3,8 +3,8 @@
 These back the MCP tools that let an agent launch a game, look at it
 (screenshots, state), advance dialogue, and pick menu choices. A module-level
 registry keeps launched sessions alive across stateless tool calls; per-command
-tools connect through ``<project>/.renforge/bridge.json`` so they also work
-against a game launched elsewhere.
+tools connect through private control-directory bridge metadata so they also
+work against a game launched elsewhere.
 
 This module stays backend-agnostic (no MCP import); the server wraps the raw
 PNG from :func:`screenshot_png` into an MCP image.
@@ -16,7 +16,6 @@ import json
 import inspect
 import math
 import os
-import signal
 import threading
 import time
 from collections import deque
@@ -27,9 +26,7 @@ from ..autopilot import autopilot as _autopilot
 from ..bridge.client import BridgeClient, BridgeError
 from ..bridge.launcher import (
     BridgeSession,
-    ProjectBridgeLock,
     launch_with_bridge,
-    remove_bridge_artifacts,
 )
 from ..effect_wait import expected_events_for_action
 from ..effect_wait import wait_for_effect as _wait_for_business_effect
@@ -56,20 +53,34 @@ _LAUNCH_LOCK = threading.Lock()
 
 
 class _LaunchTask:
-    def __init__(self, *, requested_editor: bool = False) -> None:
+    """One project launch attempt with an explicit lifecycle.
+
+    Lifecycles: ``starting`` → ``ready``|``failed``; ``ready`` → ``closing`` →
+    ``closed``. Cancellation is ``failed`` with ``LAUNCH_CANCELLED``.
+    """
+
+    def __init__(self, project_root: Path, *, requested_editor: bool = True) -> None:
+        self.project_root = Path(project_root)
         self.started = time.monotonic()
         self.requested_editor = requested_editor
         self.finished: float | None = None
         self.cancel_event = threading.Event()
         self.done_event = threading.Event()
         self.result: dict[str, Any] | None = None
+        self.session: BridgeSession | None = None
+        self.cleanup_result: dict[str, Any] | None = None
+        self.lifecycle: str = "starting"
+        self._waiter: threading.Thread | None = None
 
 
 def _prune_launches(now: float) -> None:
+    """Drop only TTL-expired terminal failures — never ready/closing owners."""
     stale_keys = [
         key
         for key, task in _LAUNCHES.items()
-        if task.finished is not None
+        if task.lifecycle == "failed"
+        and task.session is None
+        and task.finished is not None
         and now - task.finished >= _LAUNCH_RESULT_TTL_SECONDS
     ]
     for key in stale_keys:
@@ -87,11 +98,103 @@ def cancelled_launch_result(*, phase: str = "waiting_for_bridge") -> dict[str, A
     }
 
 
-def _run_launch(task: _LaunchTask, launch: Callable[[threading.Event], dict], *, editor: bool = False) -> None:
+def _attach_session_waiter(task: _LaunchTask, session: BridgeSession) -> None:
+    key = _key(task.project_root)
+
+    def _wait() -> None:
+        process = getattr(session, "process", None)
+        try:
+            if process is not None and callable(getattr(process, "poll", None)):
+                while process.poll() is None:
+                    time.sleep(0.2)
+        except Exception:
+            pass
+        with _LAUNCH_LOCK:
+            if _LAUNCHES.get(key) is not task or task.session is not session:
+                return
+            task.lifecycle = "closing"
+        try:
+            cleanup = session.close()
+        except Exception as exc:
+            cleanup = {
+                "ok": False,
+                "closed": False,
+                "deferred": True,
+                "code": "SHUTDOWN_INCOMPLETE",
+                "phase": "stopping_bridge",
+                "cleaned": {},
+                "failed": ["close"],
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        with _LAUNCH_LOCK:
+            if _LAUNCHES.get(key) is not task or task.session is not session:
+                return
+            task.cleanup_result = cleanup if isinstance(cleanup, dict) else {"cleaned": {}, "failed": ["close"]}
+            if bool(getattr(session, "closed", False)):
+                task.lifecycle = "closed"
+                task.session = None
+                task.finished = time.monotonic()
+                if _SESSIONS.get(key) is session:
+                    _SESSIONS.pop(key, None)
+            else:
+                task.lifecycle = "closing"
+                task.finished = time.monotonic()
+
+    waiter = threading.Thread(
+        target=_wait,
+        name=f"renforge-session-waiter-{key[-12:]}",
+        daemon=True,
+    )
+    task._waiter = waiter
+    waiter.start()
+
+
+def _run_launch(
+    task: _LaunchTask,
+    launch: Callable[[Path, threading.Event], dict[str, Any]],
+    *,
+    editor: bool = True,
+) -> None:
     try:
-        task.result = launch(task.cancel_event)
-        if isinstance(task.result, dict):
-            task.result.setdefault("editor", editor)
+        if task.cancel_event.is_set():
+            task.result = cancelled_launch_result(phase="detecting_environment")
+            task.lifecycle = "failed"
+            return
+        task.result = launch(task.project_root, task.cancel_event)
+        if not isinstance(task.result, dict):
+            task.result = {
+                "ok": False,
+                "ready": False,
+                "code": "LAUNCH_TASK_FAILED",
+                "phase": "starting_renpy",
+                "editor": editor,
+                "message": "Launch callable returned a non-object result.",
+                "error": "Launch callable returned a non-object result.",
+            }
+            task.lifecycle = "failed"
+            return
+        task.result.setdefault("editor", editor)
+        if task.cancel_event.is_set() and not task.result.get("ok"):
+            task.result.setdefault("code", "LAUNCH_CANCELLED")
+            task.lifecycle = "failed"
+            return
+        if not (task.result.get("ok") and task.result.get("ready", True)):
+            task.lifecycle = "failed"
+            return
+
+        key = _key(task.project_root)
+        with _LAUNCH_LOCK:
+            session = _SESSIONS.get(key)
+            if session is None:
+                # Ready without a local session (reused external / unit stub).
+                task.lifecycle = "ready"
+                task.finished = time.monotonic()
+                return
+            task.session = session
+            process = getattr(session, "process", None)
+            alive = callable(getattr(process, "poll", None)) and process.poll() is None
+            task.lifecycle = "ready" if alive else "closing"
+            _attach_session_waiter(task, session)
     except Exception as exc:
         task.result = {
             "ok": False,
@@ -102,14 +205,16 @@ def _run_launch(task: _LaunchTask, launch: Callable[[threading.Event], dict], *,
             "message": f"{type(exc).__name__}: {exc}",
             "error": f"{type(exc).__name__}: {exc}",
         }
+        task.lifecycle = "failed"
     finally:
-        task.finished = time.monotonic()
+        if task.lifecycle in {"failed", "closed"} or task.session is None:
+            task.finished = time.monotonic()
         task.done_event.set()
 
 
 def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
     elapsed_ms = int(((task.finished or time.monotonic()) - task.started) * 1000)
-    if not task.done_event.is_set():
+    if task.lifecycle == "starting" or not task.done_event.is_set():
         cancel_requested = task.cancel_event.is_set()
         return {
             "ok": True,
@@ -117,6 +222,7 @@ def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
             "editor": task.requested_editor,
             "status": "starting",
             "phase": "waiting_for_bridge",
+            "lifecycle": task.lifecycle,
             "elapsed_ms": elapsed_ms,
             "cancel_requested": cancel_requested,
             "message": (
@@ -126,6 +232,61 @@ def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
             ),
         }
 
+    if task.lifecycle in {"closing", "closed"}:
+        cleanup = task.cleanup_result or {}
+        return {
+            "ok": True,
+            "ready": False,
+            "status": task.lifecycle,
+            "lifecycle": task.lifecycle,
+            "editor": task.requested_editor,
+            "elapsed_ms": elapsed_ms,
+            "cleanup": cleanup,
+            "message": "Owned session is closing." if task.lifecycle == "closing" else "Owned session closed.",
+        }
+
+    if task.lifecycle == "ready" and task.session is not None:
+        session = task.session
+        process = getattr(session, "process", None)
+        process_alive = callable(getattr(process, "poll", None)) and process.poll() is None
+        if not process_alive:
+            # Natural exit: waiter will close; surface closing rather than cached ready.
+            return {
+                "ok": True,
+                "ready": False,
+                "status": "closing",
+                "lifecycle": "closing",
+                "editor": bool(getattr(session, "editor", task.requested_editor)),
+                "elapsed_ms": elapsed_ms,
+                "message": "Owned process exited; waiting for owner cleanup.",
+            }
+        try:
+            state = session.client.get_state()
+            return {
+                "ok": True,
+                "ready": True,
+                "status": "ready",
+                "lifecycle": "ready",
+                "current_label": state.get("current_label"),
+                "editor": bool(getattr(session, "editor", task.requested_editor)),
+                "elapsed_ms": elapsed_ms,
+            }
+        except Exception:
+            # Stale ready: initiate close and report closing/failure.
+            try:
+                session.close()
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "ready": False,
+                "status": "closing",
+                "lifecycle": "closing",
+                "editor": bool(getattr(session, "editor", task.requested_editor)),
+                "elapsed_ms": elapsed_ms,
+                "message": "Owned bridge became unreachable; owner cleanup started.",
+            }
+
     result = dict(task.result or {
         "ok": False,
         "code": "LAUNCH_TASK_FAILED",
@@ -134,25 +295,27 @@ def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
     is_ready = bool(result.get("ok") and result.get("ready", True))
     result["ready"] = is_ready
     result["status"] = "ready" if is_ready else "failed"
+    result["lifecycle"] = task.lifecycle
     result.setdefault("editor", task.requested_editor)
     result["elapsed_ms"] = elapsed_ms
     return result
 
 
 def start_launch(
-    project_path: str,
-    launch: Callable[[threading.Event], dict],
+    project_path: str | Path,
+    launch: Callable[[Path, threading.Event], dict[str, Any]],
     *,
     wait_timeout: float = _LAUNCH_RESPONSE_WAIT_SECONDS,
-    editor: bool = False,
+    editor: bool = True,
 ) -> dict[str, Any]:
-    key = _key(project_path)
+    project = RenpyProject(Path(project_path))
+    key = _key(project.root)
     should_start = False
     with _LAUNCH_LOCK:
         _prune_launches(time.monotonic())
         task = _LAUNCHES.get(key)
         if task is None or task.done_event.is_set():
-            task = _LaunchTask(requested_editor=editor)
+            task = _LaunchTask(project.root, requested_editor=editor)
             _LAUNCHES[key] = task
             should_start = True
 
@@ -221,7 +384,8 @@ def launch_status(project_path: str) -> dict[str, Any]:
 
 
 def _key(project_path: str | Path) -> str:
-    return str(Path(project_path).expanduser().resolve())
+    canonical = Path(project_path).expanduser().resolve()
+    return os.path.normcase(str(canonical))
 
 
 def _client(project_path: str | Path) -> BridgeClient:
@@ -267,7 +431,7 @@ def launch_game(
     version: str = "stable",
     warp: str | None = None,
     *,
-    editor: bool = False,
+    editor: bool = True,
     display: str = "auto",
     audio: str = "auto",
     savedir: str | None = None,
@@ -300,16 +464,15 @@ def launch_game(
     if isinstance(session_cfg.get("cleanup_on_stop"), bool):
         cleanup_on_stop = session_cfg["cleanup_on_stop"]
     preferences = str(session_cfg.get("preferences", "existing") or "existing")
-    requested_editor = True
+    requested_editor = bool(editor)
 
     key = _key(project.root)
     existing = _SESSIONS.get(key)
     if existing is not None:
         existing_editor = bool(getattr(existing, "editor", False))
-        canonical_editor = bool(existing_editor or requested_editor)
-        if existing_editor != canonical_editor:
+        if existing_editor != requested_editor:
             return _session_mode_mismatch(
-                requested_editor=canonical_editor,
+                requested_editor=requested_editor,
                 existing_editor=existing_editor,
                 message=(
                     "The requested launch mode does not match the existing owned session. "
@@ -426,7 +589,7 @@ def launch_game(
             for parameter in launch_signature.parameters.values()
         )
         if supports_editor:
-            launch_kwargs["editor"] = True
+            launch_kwargs["editor"] = requested_editor
         session_obj = launch_with_bridge(sdk, project, cancel_event=cancel_event, **launch_kwargs)
     except LaunchError as exc:
         return exc.to_dict()
@@ -439,7 +602,7 @@ def launch_game(
             "message": f"{type(exc).__name__}: {exc}",
         }
 
-    session_obj.editor = bool(getattr(session_obj, "editor", True))
+    session_obj.editor = bool(getattr(session_obj, "editor", requested_editor))
     _SESSIONS[key] = session_obj
     label = None
     try:
@@ -475,126 +638,252 @@ def stop_game(project_path: str) -> dict:
     with _LAUNCH_LOCK:
         task = _LAUNCHES.get(key)
 
-    was_starting = task is not None and not task.done_event.is_set()
-    if was_starting:
+    was_starting = task is not None and task.lifecycle == "starting"
+    if was_starting and task is not None:
         task.cancel_event.set()
         if not task.done_event.wait(_LAUNCH_CANCEL_WAIT_SECONDS):
             external = stop_external_game(project_path)
             if not external.get("ok"):
-                return {**external, "launch_cancel_requested": True}
+                return {**external, "was_running": True, "launch_cancel_requested": True}
             return {
                 "ok": True,
                 "was_running": True,
                 "launch_cancel_requested": True,
                 "external_stopped": bool(external.get("was_running")),
             }
-
-    if task is not None and task.done_event.is_set():
         with _LAUNCH_LOCK:
-            if _LAUNCHES.get(key) is task:
-                _LAUNCHES.pop(key, None)
+            if task.lifecycle == "starting":
+                task.lifecycle = "failed"
+            if task.result is None:
+                task.result = cancelled_launch_result()
+            task.finished = time.monotonic()
 
-    session = _SESSIONS.get(key)
+    # Prefer the task-attached session when present (owner path).
+    session = None
+    if task is not None and task.session is not None:
+        session = task.session
+    else:
+        session = _SESSIONS.get(key)
+
     if session is not None:
         try:
             cleaned = session.close()
         finally:
-            if session.closed and _SESSIONS.get(key) is session:
-                _SESSIONS.pop(key, None)
-        return {"ok": True, "was_running": True, **cleaned}
+            with _LAUNCH_LOCK:
+                if task is not None and task.session is session:
+                    if bool(getattr(session, "closed", False)):
+                        task.lifecycle = "closed"
+                        task.session = None
+                        task.cleanup_result = cleaned if isinstance(cleaned, dict) else None
+                        task.finished = time.monotonic()
+                    else:
+                        task.lifecycle = "closing"
+                        task.cleanup_result = cleaned if isinstance(cleaned, dict) else None
+                if session.closed and _SESSIONS.get(key) is session:
+                    _SESSIONS.pop(key, None)
+                # Only drop finished failed tasks without an attached session.
+                if (
+                    task is not None
+                    and _LAUNCHES.get(key) is task
+                    and task.lifecycle == "failed"
+                    and task.session is None
+                ):
+                    _LAUNCHES.pop(key, None)
+        payload = cleaned if isinstance(cleaned, dict) else {"cleaned": {}, "failed": ["close"]}
+        return {"ok": True, "was_running": True, **payload}
+
     if (
         was_starting
         and task is not None
         and task.result
         and task.result.get("code") == "LAUNCH_CANCELLED"
     ):
+        with _LAUNCH_LOCK:
+            if _LAUNCHES.get(key) is task and task.session is None:
+                _LAUNCHES.pop(key, None)
         return {
             "ok": True,
             "was_running": True,
             "launch_cancelled": True,
         }
-    # No in-process session: the game may have been launched elsewhere (e.g. the
-    # dashboard server). Stop it through the published bridge.json instead.
-    return stop_external_game(project_path)
+
+    # Failed terminal task with no session: drop it and try external stop.
+    if task is not None and task.lifecycle == "failed" and task.session is None:
+        with _LAUNCH_LOCK:
+            if _LAUNCHES.get(key) is task:
+                _LAUNCHES.pop(key, None)
+
+    external = stop_external_game(project_path)
+    if isinstance(external, dict) and "was_running" not in external:
+        external = {**external, "was_running": bool(external.get("was_running", False))}
+    return external
 
 
-def stop_external_game(project_path: str) -> dict:
-    """Stop a game launched by another process, using ``bridge.json``.
+def stop_external_game(project_path: str, *, timeout: float = 5.0) -> dict:
+    """Stop a game launched by another process via authenticated bridge control.
 
-    Kills the game only after the bridge answers a ``ping`` with the token from
-    ``bridge.json`` — that proves the recorded PID is really our game and not a
-    recycled/unrelated process. A stale ``bridge.json`` (no live bridge) is just
-    cleaned up.
+    Discovers the live bridge through private control-directory metadata and
+    issues ``control("quit")`` without first acquiring the owner-held project
+    lock. After quit, waits for the endpoint to die, then acquires the lock and
+    removes only schema-3 artifacts owned by the stopped session. A replacement
+    session observed during lock contention is left untouched.
     """
+    from renforge.bridge.client import BridgeConfig
+    from renforge.bridge.control import read_bridge_info
+    from renforge.bridge.launcher import ProjectBridgeLock, remove_bridge_artifacts
+    from renforge.launch_env import LaunchError
+
     try:
         project = RenpyProject(Path(project_path))
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
-    project_lock = ProjectBridgeLock(project.root / ".renforge" / "bridge.lock")
-    try:
-        project_lock.acquire()
-    except LaunchError as exc:
-        return {**exc.to_dict(), "ready": False}
+    deadline = time.monotonic() + max(0.1, float(timeout))
 
     try:
-        info_path = project.root / ".renforge" / "bridge.json"
-        if not info_path.exists():
-            return {"ok": True, "was_running": False}
+        info = read_bridge_info(project.root, require_ready=True)
+    except Exception:
+        return {"ok": True, "was_running": False}
 
+    old_session_id = info.session_id
+    remaining = max(0.05, deadline - time.monotonic())
+    client = BridgeClient(
+        BridgeConfig(
+            host=info.host,
+            port=info.port,
+            token=info.token,
+            timeout=remaining,
+        )
+    )
+
+    try:
+        reply = client.control("quit")
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "was_running": False,
+        }
+
+    if not (
+        isinstance(reply, dict)
+        and reply.get("ok") is True
+        and reply.get("action") == "quit"
+    ):
+        error_msg = "bridge quit failed"
+        if isinstance(reply, dict) and reply.get("error"):
+            error_msg = str(reply.get("error"))
+        return {"ok": False, "error": error_msg, "was_running": False}
+
+    # Wait for the old endpoint to stop answering / metadata to leave ready.
+    endpoint_dead = False
+    while time.monotonic() < deadline:
         try:
-            info = json.loads(info_path.read_text(encoding="utf-8"))
+            still = read_bridge_info(
+                project.root,
+                require_ready=True,
+                expected_session_id=old_session_id,
+            )
         except Exception:
-            info = {}
-
-        alive = False
+            endpoint_dead = True
+            break
         try:
-            reply = BridgeClient.from_project(project.root, timeout=1.0).ping()
-            alive = isinstance(reply, dict) and reply.get("pong") is True
+            probe = BridgeClient(
+                BridgeConfig(
+                    host=still.host,
+                    port=still.port,
+                    token=still.token,
+                    timeout=max(0.05, min(0.25, deadline - time.monotonic())),
+                )
+            )
+            probe.ping()
         except Exception:
-            alive = False
+            endpoint_dead = True
+            break
+        time.sleep(0.05)
+    if not endpoint_dead:
+        return {
+            "ok": False,
+            "code": "BRIDGE_STOP_TIMEOUT",
+            "error": "BRIDGE_STOP_TIMEOUT",
+            "was_running": True,
+        }
 
-        was_running = False
-        pid = info.get("pid")
-        if alive and isinstance(pid, int):
-            was_running = _terminate_pid(pid)
+    lock = ProjectBridgeLock(project.root)
+    while time.monotonic() < deadline:
+        try:
+            lock.acquire()
+            break
+        except LaunchError as exc:
+            if getattr(exc, "code", None) != "BRIDGE_PROJECT_LOCKED":
+                return {
+                    "ok": False,
+                    "code": getattr(exc, "code", None),
+                    "error": str(exc),
+                    "was_running": True,
+                }
+            # Lock held: re-check whether a replacement session took over.
+            try:
+                current = read_bridge_info(project.root, require_ready=True)
+            except Exception:
+                time.sleep(0.05)
+                continue
+            if current.session_id != old_session_id:
+                try:
+                    BridgeClient(
+                        BridgeConfig(
+                            host=current.host,
+                            port=current.port,
+                            token=current.token,
+                            timeout=max(0.05, min(0.5, deadline - time.monotonic())),
+                        )
+                    ).ping()
+                except Exception:
+                    time.sleep(0.05)
+                    continue
+                return {
+                    "ok": True,
+                    "was_running": True,
+                    "replacement_running": True,
+                }
+            time.sleep(0.05)
+    else:
+        return {
+            "ok": False,
+            "code": "BRIDGE_PROJECT_LOCKED",
+            "error": "BRIDGE_PROJECT_LOCKED",
+            "was_running": True,
+        }
 
-        remove_bridge_artifacts(project.root)
-        return {"ok": True, "was_running": was_running}
+    try:
+        remove_bridge_artifacts(project.root, expected_session_id=old_session_id)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "was_running": True,
+        }
     finally:
-        project_lock.release()
+        lock.release()
+
+    return {"ok": True, "was_running": True}
 
 
-def _terminate_pid(pid: int) -> bool:
-    """Force-kill ``pid``. Returns whether it existed."""
-    # SIGKILL does not exist on Windows; there os.kill with SIGTERM calls
-    # TerminateProcess, which is already an unconditional kill.
-    sig = getattr(signal, "SIGKILL", signal.SIGTERM)
-    try:
-        os.kill(pid, sig)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        return False
-    return True
-
-
-def stop_all() -> None:
+def stop_all() -> dict[str, dict[str, Any]]:
+    """Stop every known launch/session once and map canonical project → result."""
     with _LAUNCH_LOCK:
-        tasks = list(_LAUNCHES.values())
-    for task in tasks:
-        task.cancel_event.set()
-    for task in tasks:
-        task.done_event.wait(_LAUNCH_CANCEL_WAIT_SECONDS)
-    with _LAUNCH_LOCK:
-        _LAUNCHES.clear()
-    for key, session in list(_SESSIONS.items()):
+        keys = sorted(set(_LAUNCHES.keys()) | set(_SESSIONS.keys()))
+    results: dict[str, dict[str, Any]] = {}
+    for key in keys:
         try:
-            session.close()
-        except Exception:
-            pass
-        if session.closed and _SESSIONS.get(key) is session:
-            _SESSIONS.pop(key, None)
+            results[key] = stop_game(key)
+        except Exception as exc:
+            results[key] = {
+                "ok": False,
+                "was_running": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+    return results
 
 
 def game_state(
