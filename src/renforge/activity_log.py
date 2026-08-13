@@ -3,10 +3,59 @@
 from __future__ import annotations
 
 import json
-import os
+import re
 import time
 from pathlib import Path
 from typing import Any
+
+from .util import ensure_nofollow_directory
+from .util.files import append_nofollow
+
+
+_MAX_ACTIVITY_BYTES = 8192
+_MAX_STRING_CHARS = 512
+_MAX_COLLECTION_ITEMS = 32
+_SENSITIVE_TOKENS = frozenset(
+    {
+        "authorization",
+        "auth",
+        "bearer",
+        "content",
+        "contents",
+        "cookie",
+        "cookies",
+        "credential",
+        "credentials",
+        "expr",
+        "key",
+        "passwd",
+        "password",
+        "private",
+        "secret",
+        "session",
+        "steps",
+        "text",
+        "token",
+        "value",
+    }
+)
+
+
+def _bound_text(value: str) -> str:
+    if len(value) > _MAX_STRING_CHARS:
+        return value[:_MAX_STRING_CHARS] + "...[truncated]"
+    return value
+
+
+def _is_sensitive_key(key: str) -> bool:
+    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
+    separated = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", separated)
+    parts = [part for part in re.split(r"[^a-z0-9]+", separated.lower()) if part]
+    return any(part in _SENSITIVE_TOKENS for part in parts)
+
+
+def _encode_activity_entry(entry: dict[str, Any]) -> bytes:
+    return (json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
 
 def _coerce_project_root(project_root: str | Path) -> Path:
@@ -21,26 +70,44 @@ def _coerce_files_touched(value: Any) -> list[str]:
     return []
 
 
-def _coerce_result_payload(result: Any) -> Any:
-    if isinstance(result, dict) and "ok" in result:
-        return result
-    if isinstance(result, (str, int, float, bool, list, type(None))):
-        return result
-    return str(result)
+def _coerce_result_payload(result: Any) -> dict[str, Any]:
+    summary = summarize_result(result)
+    payload: dict[str, Any] = {"ok": summary["ok"]}
+    if isinstance(result, dict):
+        payload["keys"] = sorted(_bound_text(str(key)) for key in result)[:_MAX_COLLECTION_ITEMS]
+    else:
+        payload["type"] = _bound_text(type(result).__name__)
+    return payload
 
 
-def _coerce_payload(value: Any) -> Any:
+def _coerce_payload(value: Any, *, key: str = "", depth: int = 0) -> Any:
+    if key and _is_sensitive_key(key):
+        return "[redacted]"
+    if depth >= 4:
+        return "[truncated]"
     if isinstance(value, (str, int, float, bool, type(None))):
+        if isinstance(value, str) and len(value) > _MAX_STRING_CHARS:
+            return _bound_text(value)
         return value
     if isinstance(value, list):
-        return [_coerce_payload(item) for item in value]
+        return [
+            _coerce_payload(item, depth=depth + 1)
+            for item in value[:_MAX_COLLECTION_ITEMS]
+        ]
     if isinstance(value, dict):
-        return {str(k): _coerce_payload(v) for k, v in value.items()}
+        return {
+            _bound_text(str(k)): _coerce_payload(v, key=str(k), depth=depth + 1)
+            for k, v in list(value.items())[:_MAX_COLLECTION_ITEMS]
+        }
     if isinstance(value, set):
-        return sorted(str(item) for item in value)
+        return sorted(_bound_text(str(item)) for item in value)[:_MAX_COLLECTION_ITEMS]
     if isinstance(value, tuple):
-        return [_coerce_payload(item) for item in value]
-    return str(value)
+        return [
+            _coerce_payload(item, depth=depth + 1)
+            for item in value[:_MAX_COLLECTION_ITEMS]
+        ]
+    coerced = str(value)
+    return _bound_text(coerced)
 
 
 def summarize_result(result: Any) -> dict[str, Any]:
@@ -72,12 +139,12 @@ def log_tool_call(
     summary = summarize_result(result)
     entry = {
         "ts": int(time.time() * 1000),
-        "name": name,
+        "name": _bound_text(str(name)),
         "params": _coerce_payload(params),
         "duration_ms": duration_ms,
         "ok": summary["ok"],
         "result": _coerce_result_payload(summary["result"]),
-        "files_touched": files_touched or summary["files_touched"],
+        "files_touched": (files_touched or summary["files_touched"])[:_MAX_COLLECTION_ITEMS],
     }
     if policy:
         entry["policy"] = _coerce_payload(policy)
@@ -85,12 +152,21 @@ def log_tool_call(
     root = _coerce_project_root(project_root)
     if not root.exists() or not root.is_dir():
         return
-    path = root / ".renforge" / "activity.jsonl"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    activity_dir = ensure_nofollow_directory(root / ".renforge")
+    path = activity_dir / "activity.jsonl"
 
-    payload = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
-    with path.open("a", encoding="utf-8") as file_obj:
-        file_obj.write(payload)
-        file_obj.write("\n")
-        file_obj.flush()
-        os.fsync(file_obj.fileno())
+    encoded = _encode_activity_entry(entry)
+    if len(encoded) > _MAX_ACTIVITY_BYTES:
+        entry["params"] = {"truncated": True}
+        entry["files_touched"] = []
+        entry["result"] = {"ok": bool(entry.get("ok")), "truncated": True}
+        encoded = _encode_activity_entry(entry)
+    if len(encoded) > _MAX_ACTIVITY_BYTES:
+        entry = {
+            "ts": entry["ts"],
+            "name": _bound_text(str(name)),
+            "ok": bool(entry.get("ok")),
+            "truncated": True,
+        }
+        encoded = _encode_activity_entry(entry)
+    append_nofollow(path, encoded, mode=0o600)

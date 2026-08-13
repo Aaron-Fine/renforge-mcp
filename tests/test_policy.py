@@ -191,7 +191,7 @@ def test_denied_eval_never_reaches_implementation(monkeypatch, tmp_path) -> None
     activity = (tmp_path / ".renforge" / "activity.jsonl").read_text(encoding="utf-8")
     entry = json.loads(activity.strip().splitlines()[-1])
     assert entry["policy"]["decision"] == "deny"
-    assert entry["params"]["expr"] == "<redacted>"
+    assert entry["params"]["expr"] == "[redacted]"
 
     allowed = asyncio.run(_call(expr="1+1", authorize=True))
     allowed_payload = json.loads(
