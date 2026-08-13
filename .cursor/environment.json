@@ -1,0 +1,4 @@
+{
+  "install": "bash scripts/setup_cloud_env.sh",
+  "start": "bash scripts/ensure_cloud_display.sh"
+}
