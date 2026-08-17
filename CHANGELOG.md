@@ -7,6 +7,14 @@ versioning.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.7.1] - 2026-08-17
+
+### Added
+
 - Operation-level runtime policy for `renforge_control`, `renforge_saves`,
   `renforge_eval`, and `renforge_run_scenario`. Default remains
   `RENFORGE_POLICY=off` (classify and record, never deny). `enforce` mode
@@ -26,6 +34,12 @@ versioning.
   `src/renforge/tool_registration/`. `server.py` only bootstraps the app;
   wrappers, contract metadata, and fail-closed registration live next to each
   other by domain. The public 54-tool MCP API is unchanged.
+
+### Fixed
+
+- Dismiss `say` / `nvl` / `bubble` / `choice` immediately on editor jump so a
+  pending hide transition cannot raise `TypeError: missing a required
+  argument: 'who'`.
 
 ## [0.7.0] - 2026-08-11
 
