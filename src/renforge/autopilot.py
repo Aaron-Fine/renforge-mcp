@@ -8,9 +8,11 @@ that work reliably (launch / advance / list_choices / select_choice /
 poll_events) — no in-game save/load, which cannot be driven from the bridge's
 main-thread callback.
 
-Menus are detected by ``list_choices`` returning options. (A game with an
-always-on quick menu could surface non-choice buttons here; refining detection
-to the active ``choice`` screen is a future improvement.)
+Standard Ren'Py ``choice`` screens are preferred. When a game blocks on a
+custom screen instead, a conservative fallback accepts the first non-internal
+screen with at least two actionable textual controls. This excludes persistent
+one-button story controls, disabled/no-op controls, and known overlays such as
+the quick menu.
 """
 
 from __future__ import annotations
@@ -33,9 +35,58 @@ def _story_labels(project_path: str | Path) -> set[str]:
     return {label["name"] for label in index.get("labels", []) if not label["name"].startswith("_")}
 
 
+_NON_NARRATIVE_SCREENS = {"quick_menu", "say", "notify"}
+
+
 def _menu_choices(client) -> list[dict]:
-    """Choices that belong to the active ``choice`` screen (ignores quick menu)."""
-    return [c for c in client.list_choices() if c.get("screen") == "choice"]
+    """Return one active narrative choice group, preferring Ren'Py's standard screen."""
+    raw_choices = [
+        choice
+        for choice in client.list_choices()
+        if isinstance(choice, dict) and choice.get("text")
+    ]
+
+    standard = [choice for choice in raw_choices if choice.get("screen") == "choice"]
+    if standard:
+        return standard
+
+    groups: dict[str, list[dict]] = {}
+    for choice in raw_choices:
+        screen = choice.get("screen")
+        if (
+            not isinstance(screen, str)
+            or not screen
+            or screen.startswith("_")
+            or screen in _NON_NARRATIVE_SCREENS
+        ):
+            continue
+        groups.setdefault(screen, []).append(choice)
+
+    if not groups:
+        return []
+
+    elements = client.list_ui_elements()
+    actionable = {
+        (element.get("screen"), element.get("text"))
+        for element in elements
+        if isinstance(element, dict)
+        and element.get("enabled") is not False
+        and element.get("clickable") is not False
+        and element.get("action") != "NullAction"
+    }
+
+    # A lone text control is commonly an always-on HUD or story fixture. Requiring
+    # a group avoids repeatedly clicking it while still supporting call_screen
+    # menus such as the demo's village gate.
+    for choices in groups.values():
+        selectable = [
+            choice
+            for choice in choices
+            if (choice.get("screen"), choice.get("text")) in actionable
+        ]
+        if len(selectable) >= 2:
+            return selectable
+    return []
 
 
 def autopilot(

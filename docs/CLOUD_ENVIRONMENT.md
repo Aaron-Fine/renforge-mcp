@@ -173,7 +173,8 @@ Key environment variables for cloud environments:
 | `DISPLAY` | X11 display for Ren'Py | Must be set (e.g., `:99`) |
 | `PYTHONPATH` | Python module search path | Should include `src/` |
 | `RENPY_SDK_CACHE_DIR` | Ren'Py SDK cache location | `~/.cache/renforge/sdks` |
-| `RENPY_SDK_VERSION` | Override Ren'Py version | `8.5.3` |
+| `RENFORGE_SDK_TESTS` | Enable the broad real-SDK integration suite | Unset (opt-in locally) |
+| `RENFORGE_SDK_VERSION` | SDK version used by that integration suite | RenForge's default SDK |
 | `RENFORGE_*_LIVE` | Enable specific live test suites | Unset (opt-in per suite) |
 
 ## Running Tests
@@ -185,6 +186,30 @@ After environment setup:
 ```bash
 pytest
 ```
+
+The unit suite includes frontend i18n checks. Run `npm --prefix ui ci` first in
+a fresh checkout, as shown in `CONTRIBUTING.md`.
+
+### SDK Integration Tests
+
+The pull-request engine job launches Ren'Py 8.5.3 and runs the complete broad
+SDK suite:
+
+```bash
+RENFORGE_SDK_TESTS=1 RENFORGE_SDK_VERSION=8.5.3 \
+  python -m pytest -q \
+  tests/test_integration_sdk.py \
+  tests/test_integration_sdk_live_demo_acceptance.py
+```
+
+This covers SDK lint/dump behavior, bridge lifecycle, screenshots, reload,
+screen and scene inspection, semantic input, choices, save/load, autopilot, and
+the representative Live Editor demo route. Every test receives a temporary copy
+of `examples/demo_game`; the committed fixture remains read-only input.
+
+Missing SDK/display prerequisites are failures in the dedicated CI job. A
+normal `pytest` invocation leaves `RENFORGE_SDK_TESTS` unset and skips these
+costly tests.
 
 ### Live Editor Tests
 
@@ -287,13 +312,14 @@ pip install -e .
 
 ### GitHub Actions
 
-See `.github/workflows/live-editor.yml` for a complete working example. Key
-points:
+See `.github/workflows/ci.yml` for the every-PR SDK integration job and
+`.github/workflows/live-editor.yml` for the larger nightly/label-gated editor
+suite. Key points:
 
 - Cache the Ren'Py SDK with `actions/cache@v4`
 - Start Xvfb early with a large screen size
 - Build the frontend before running tests
-- Use `uv` for faster dependency installation
+- Keep SDK integration and the larger focused editor suite as separate jobs
 
 ### GitLab CI
 
@@ -322,7 +348,8 @@ The Ren'Py SDK is ~500MB. For efficient cloud environments:
    ```bash
    export RENPY_SDK_CACHE_DIR=/mnt/cache/renforge/sdks
    ```
-3. **GitHub Actions:** Use `actions/cache@v4` (see `.github/workflows/live-editor.yml`)
+3. **GitHub Actions:** Use `actions/cache@v4` (see `.github/workflows/ci.yml`
+   and `.github/workflows/live-editor.yml`)
 4. **Cursor Cloud:** The environment's filesystem persists across agent runs in
    the same environment
 
@@ -342,7 +369,9 @@ The Ren'Py SDK is ~500MB. For efficient cloud environments:
 
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — Development setup for local machines
 - [LIVE_EDITOR.md](LIVE_EDITOR.md) — Live Editor human and agent workflows
+- [.github/workflows/ci.yml](../.github/workflows/ci.yml) — Every-PR SDK
+  integration job
 - [.github/workflows/live-editor.yml](../.github/workflows/live-editor.yml) —
-  Working CI example
+  Nightly and label-gated focused editor suites
 - [scripts/run_live_editor_suites.sh](../scripts/run_live_editor_suites.sh) —
   Live test runner with retry logic

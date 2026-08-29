@@ -352,20 +352,51 @@ def run_demo_v1_scenario(client: Any) -> dict[str, Any]:
             )
         )
 
+    # The real input drag above has already moved the preview. Start this second
+    # drag from the same grab point on the widget's observed position rather than
+    # the now-stale original position.
+    grab_offset = [bx - baseline[0], by - baseline[1]]
+    move_start = [
+        real_preview[0] + grab_offset[0],
+        real_preview[1] + grab_offset[1],
+    ]
     move_points = [
-        [baseline[0], baseline[1]],
-        [baseline[0] + 30, baseline[1]],
-        [baseline[0] + 60, baseline[1]],
+        move_start,
+        [move_start[0] + 30, move_start[1]],
+        [move_start[0] + 60, move_start[1]],
     ]
     drag_move = _ed_require_ok(
         client.request("editor_task0_drag", {"points": move_points, "shift": False}),
         "move drag",
     )
     moved = _ed_wait_preview(client)
-    drag_delta = [moved[0] - baseline[0], moved[1] - baseline[1]]
+    drag_delta = [moved[0] - real_preview[0], moved[1] - real_preview[1]]
     if abs(drag_delta[0]) < 20 or abs(drag_delta[1]) > 1:
         raise AssertionError(f"move drag did not move horizontally: {drag_delta!r}")
 
+    # Exercise Shift while the moved target is still unobscured. Once snapped
+    # onto the neighbouring button below, coordinate selection correctly resolves
+    # to that topmost neighbour instead.
+    _ed_select(client, _TAKE_ID)
+    _ed_wait_analysis(client, locked=False)
+    shift_start = _ed_wait_preview(client)
+    shift_points = [
+        shift_start,
+        [shift_start[0] + 30, shift_start[1]],
+    ]
+    shift_drag = _ed_require_ok(
+        client.request("editor_task0_drag", {"points": shift_points, "shift": True}),
+        "shift drag",
+    )
+    shift_samples = shift_drag.get("samples") or []
+    if any(
+        sample.get("guide_x") is not None or sample.get("guide_y") is not None
+        for sample in shift_samples
+    ):
+        raise AssertionError(f"shift drag unexpectedly snapped: {shift_drag!r}")
+
+    _ed_select(client, _TAKE_ID)
+    _ed_wait_analysis(client, locked=False)
     cur = _ed_wait_preview(client)
     snap_points = [[cur[0], cur[1]], [cur[0], decline_top]]
     snap = _ed_require_ok(
@@ -463,16 +494,8 @@ def run_demo_v1_scenario(client: Any) -> dict[str, Any]:
         )
     _ed_require_ok(client.eval_expr("_renforge_editor_end_drag()"), "visual snap end")
 
-    shift_drag = _ed_require_ok(
-        client.request("editor_task0_drag", {"points": snap_points, "shift": True}),
-        "shift drag",
-    )
-    shift_samples = shift_drag.get("samples") or []
-    if any(
-        sample.get("guide_x") is not None or sample.get("guide_y") is not None
-        for sample in shift_samples
-    ):
-        raise AssertionError(f"shift drag unexpectedly snapped: {shift_drag!r}")
+    _ed_require_ok(client.request("editor_task0_reset", {}), "reset after snap proof")
+    _ed_wait_preview(client, expect=baseline)
 
     _ed_require_ok(_ed_select(client, _TAKE_ID), "take reselect for shift nudge")
     _ed_wait_analysis(client, locked=False)
@@ -583,9 +606,13 @@ def run_demo_v1_scenario(client: Any) -> dict[str, Any]:
         and bool(lock_label_text.strip())
         and str(locked_reason) in lock_label_text
     )
-    if not lock_code_in_label:
+    if not isinstance(lock_label_text, str) or not lock_label_text.strip():
         raise AssertionError(
-            f"locked code missing from rendered editor label: reason={locked_reason!r}, "
+            f"locked target label missing: reason={locked_reason!r}, label={lock_label_text!r}"
+        )
+    if lock_code_in_label:
+        raise AssertionError(
+            f"internal lock code leaked into rendered editor label: reason={locked_reason!r}, "
             f"label={lock_label_text!r}"
         )
     locked_observation = locked_selection.get("observation")

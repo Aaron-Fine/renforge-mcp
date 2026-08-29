@@ -2,7 +2,9 @@
 
 Opt-in: these download/use a real Ren'Py SDK and invoke it. Enable with::
 
-    RENFORGE_SDK_TESTS=1 pytest tests/test_integration_sdk.py
+    RENFORGE_SDK_TESTS=1 pytest \
+        tests/test_integration_sdk.py \
+        tests/test_integration_sdk_live_demo_acceptance.py
 
 Optionally pin the version with ``RENFORGE_SDK_VERSION`` (default: the
 ``DEFAULT_RENPY_VERSION`` RenForge ships with).
@@ -30,13 +32,14 @@ _DEMO = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
 @pytest.fixture(scope="module")
 def sdk():
     from renforge.sdk import DEFAULT_RENPY_VERSION, get_or_install_sdk
-    from renforge.editor_live_common import DEMO_COPY_IGNORE
 
     return get_or_install_sdk(os.environ.get("RENFORGE_SDK_VERSION", DEFAULT_RENPY_VERSION))
 
 
 @pytest.fixture
 def demo_copy(tmp_path: Path) -> Path:
+    from renforge.editor_live_common import DEMO_COPY_IGNORE
+
     destination = tmp_path / "demo"
     # Never inherit Ren'Py bytecode/cache from a previous local run: stale
     # compiled scripts can make ``--warp`` skip a fixture label entirely.

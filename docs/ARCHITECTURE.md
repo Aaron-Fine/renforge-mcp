@@ -119,6 +119,28 @@ Supported dump shapes:
 - Future SDKs whose `dump.py` already unwraps `Node` keys: namemap stays
   Node-keyed, so the adapter still normalizes it
 
+## Real-engine test boundary
+
+The default pytest suite is the fast unit/contract layer and does not launch
+Ren'Py. `.github/workflows/ci.yml` adds one Linux/Xvfb integration job that pins
+the default supported SDK, launches the real engine, and runs
+`tests/test_integration_sdk.py` plus
+`tests/test_integration_sdk_live_demo_acceptance.py`. The larger focused Live
+Editor suite remains in `.github/workflows/live-editor.yml` because it has a
+different cost and trigger policy.
+
+Real-engine fixtures treat `examples/demo_game` as read-only input and copy it
+to pytest-owned temporary directories before RenForge injects bridge/editor
+files or Ren'Py writes caches and saves. CI caches only the SDK. Failure
+artifacts use an explicit allowlist for logs, tracebacks, screenshots, and
+autopilot output; `.renforge/control` is never uploaded because it contains the
+session credential.
+
+The SDK test files retain their small local fixtures for this first CI layer.
+Shared engine fixtures, markers, and additional-version smoke coverage should
+be introduced only when they reduce demonstrated duplication or enable a real
+compatibility claim.
+
 ## Packaging
 
 Packaging uses `hatchling`; the console script is

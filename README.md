@@ -191,8 +191,10 @@ JSON summary of the project (labels, scripts, assets, and related metadata).
   control, and text block with bounds, z-order, colour, and style, plus an ASCII
   wireframe and structural scene diffs. Then `renforge_measure` reports alignment,
   spacing, overlap, fit, and WCAG contrast as numbers an agent can act on.
-- **Autopilot** — auto-play the game across branches and report label coverage
-  and crashes.
+- **Autopilot** — auto-play standard Ren'Py choices and conservative
+  multi-control custom choice screens across fresh replays, reporting label
+  coverage and crashes. Persistent overlays, one-control HUDs, and no-op
+  controls are excluded from custom-choice discovery.
 - **Assets & translations** — find orphaned/missing image+audio assets, list
   languages, compute translation stats, generate/update `game/tl/<lang>/` files,
   export dialogue as text.

@@ -7,7 +7,14 @@ versioning.
 
 ### Added
 
+- Every pull request now runs the broad Ren'Py 8.5.3 SDK integration suite on
+  Linux/Xvfb, with SDK caching and an explicit diagnostic artifact allowlist.
+
 ### Changed
+
+- Autopilot still prefers standard Ren'Py choices, but can now traverse
+  conservative multi-control custom choice screens while excluding persistent
+  overlays, one-control HUDs, disabled controls, and no-op actions.
 
 ### Fixed
 

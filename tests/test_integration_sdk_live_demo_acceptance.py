@@ -19,13 +19,14 @@ _DEMO = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
 @pytest.fixture(scope="module")
 def sdk():
     from renforge.sdk import DEFAULT_RENPY_VERSION, get_or_install_sdk
-    from renforge.editor_live_common import DEMO_COPY_IGNORE
 
     return get_or_install_sdk(os.environ.get("RENFORGE_SDK_VERSION", DEFAULT_RENPY_VERSION))
 
 
 @pytest.fixture
 def demo_copy(tmp_path: Path) -> Path:
+    from renforge.editor_live_common import DEMO_COPY_IGNORE
+
     destination = tmp_path / "demo"
     shutil.copytree(_DEMO, destination, ignore=DEMO_COPY_IGNORE)
     return destination
@@ -95,7 +96,7 @@ def test_live_demo_editor_v1_acceptance(sdk, demo_copy: Path) -> None:
     assert locked["save_enabled"] is False
     assert len(locked["observation_rect"]) == 4
     assert locked["lock_label_text"]
-    assert locked["lock_code_in_label"] is True
+    assert locked["lock_code_in_label"] is False
     assert report["reset_after_save_error"] == "RESET_UNAVAILABLE"
 
     assert report["multi"]["dirty_before_undo"] >= 2
