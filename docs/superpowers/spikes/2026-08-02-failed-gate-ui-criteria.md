@@ -4,6 +4,14 @@ Written **before** claiming completion of issue #52. PR #25 proved the locked-st
 
 **SDK under test:** Ren'Py **8.5.3**.
 
+> **Historical status:** The August 11, 2026 Live Editor remediation
+> ([#80](https://github.com/alex-jordan547/renforge-mcp/pull/80)) superseded
+> pass condition 3 below. The current UI presents a localized, human-readable
+> refusal and deliberately keeps internal protocol lock codes out of the canvas
+> label. Runtime/API responses still carry the code for diagnostics. See
+> `test_editor_lock_ui_never_exposes_internal_codes_or_expands_canvas_label`
+> for the enforced current contract.
+
 ## What the editor needs to be true
 
 When a user clicks or selects a locked visual-editor target:
