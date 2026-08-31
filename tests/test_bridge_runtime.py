@@ -978,7 +978,27 @@ def test_list_choices_enumerates_focusable_text(running_bridge):
     assert texts == ["Alpha choice", "Beta choice", "Load icon"]  # the default focus is skipped
 
 
-def test_list_choices_marks_only_active_menu_items(running_bridge):
+def test_list_choices_schema_is_unchanged_when_menu_items_are_active(running_bridge):
+    focus_list = running_bridge.renpy.display.focus.focus_list
+    focus_list[1].screen_name = "story_menu"
+    focus_list[2].screen_name = "story_menu"
+    running_bridge.renpy.get_screen = lambda _name: types.SimpleNamespace(
+        scope={
+            "items": [
+                types.SimpleNamespace(caption="Alpha choice", action=object()),
+                types.SimpleNamespace(caption="Beta choice", action=object()),
+            ]
+        }
+    )
+
+    assert running_bridge.client.list_choices() == [
+        {"index": 0, "text": "Alpha choice", "screen": "story_menu"},
+        {"index": 1, "text": "Beta choice", "screen": "story_menu"},
+        {"index": 2, "text": "Load icon", "screen": "quick_menu"},
+    ]
+
+
+def test_list_menu_choices_returns_only_items_from_their_active_screen(running_bridge):
     focus_list = running_bridge.renpy.display.focus.focus_list
     focus_list[1].screen_name = "story_menu"
     focus_list[2].screen_name = "story_menu"
@@ -991,17 +1011,18 @@ def test_list_choices_marks_only_active_menu_items(running_bridge):
     ]
     screens = {
         "story_menu": types.SimpleNamespace(scope={"items": menu_items}),
-        "hud": types.SimpleNamespace(scope={}),
+        # Repeating a story caption on a non-menu screen must not create a
+        # false match, which is why captions are kept as a set per screen.
+        "hud": types.SimpleNamespace(
+            scope={"items": [types.SimpleNamespace(caption="Load icon", action=None)]}
+        ),
     }
     running_bridge.renpy.get_screen = screens.get
 
-    choices = running_bridge.client.list_choices()
-
-    assert [choice["text"] for choice in choices if choice.get("menu_item")] == [
-        "Alpha choice",
-        "Beta choice",
+    assert running_bridge.client.list_menu_choices() == [
+        {"index": 0, "text": "Alpha choice", "screen": "story_menu"},
+        {"index": 1, "text": "Beta choice", "screen": "story_menu"},
     ]
-    assert next(choice for choice in choices if choice["text"] == "Load icon").get("menu_item") is None
 
 
 def test_select_choice_by_text_clicks_focus_center(running_bridge):
