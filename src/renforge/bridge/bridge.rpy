@@ -1598,9 +1598,47 @@ init python:
                 choices.append((focus, text, element.get("screen")))
         return choices
 
+    def _renforge_active_menu_captions(screen_name):
+        """Captions backed by an active Ren'Py menu screen's items data."""
+        if not screen_name:
+            return set()
+        try:
+            screen = renpy.get_screen(screen_name)
+            scope = getattr(screen, "scope", None) or {}
+            items = scope.get("items")
+        except Exception:
+            return set()
+        if not isinstance(items, (builtins.list, tuple)):
+            return set()
+
+        captions = set()
+        for item in items:
+            # A menu caption can have action=None; it is not selectable.
+            if getattr(item, "action", None) is None:
+                continue
+            caption = getattr(item, "caption", None)
+            if caption is None:
+                continue
+            try:
+                caption = str(caption).strip()
+            except Exception:
+                continue
+            if caption:
+                captions.add(caption)
+        return captions
+
     def _renforge_h_list_choices(payload):
         choices = _renforge_focusable_choices()
-        return {"choices": [{"index": i, "text": t, "screen": s} for i, (_f, t, s) in enumerate(choices)]}
+        menu_captions = {}
+        result = []
+        for index, (_focus, text, screen) in enumerate(choices):
+            item = {"index": index, "text": text, "screen": screen}
+            if screen not in menu_captions:
+                menu_captions[screen] = _renforge_active_menu_captions(screen)
+            if text in menu_captions[screen]:
+                item["menu_item"] = True
+            result.append(item)
+        return {"choices": result}
 
     def _renforge_h_list_ui_elements(payload):
         payload = payload or {}

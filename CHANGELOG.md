@@ -12,9 +12,9 @@ versioning.
 
 ### Changed
 
-- Autopilot still prefers standard Ren'Py choices, but can now traverse
-  conservative multi-control custom choice screens while excluding persistent
-  overlays, one-control HUDs, disabled controls, and no-op actions.
+- Autopilot now identifies choices from active Ren'Py menu `items`, including
+  custom-named and one-item menus, without inferring narrative intent from
+  arbitrary focusable screen controls.
 
 ### Fixed
 

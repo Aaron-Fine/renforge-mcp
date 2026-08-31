@@ -606,18 +606,68 @@ def test_live_named_save_state_round_trip(sdk, demo_copy: Path) -> None:
         }
 
 
+@pytest.fixture
+def autopilot_menu_copy(demo_copy: Path) -> Path:
+    """A real-engine fixture containing only supported Ren'Py menu semantics."""
+    (demo_copy / "game" / "script.rpy").write_text(
+        """
+screen autopilot_choice(items):
+    vbox:
+        for item in items:
+            if item.action:
+                textbutton item.caption action item.action
+
+label start:
+    "Choose a path."
+    menu (screen="autopilot_choice"):
+        "Take the ridge.":
+            jump ridge
+        "Stay home.":
+            jump home
+
+label ridge:
+    "The ridge is clear."
+    menu (screen="autopilot_choice"):
+        "Continue.":
+            jump ridge_end
+
+label home:
+    "Home is warm."
+    menu (screen="autopilot_choice"):
+        "Continue.":
+            jump home_end
+
+label ridge_end:
+    "Ridge ending."
+    return
+
+label home_end:
+    "Home ending."
+    return
+""".lstrip(),
+        encoding="utf-8",
+    )
+    return demo_copy
+
+
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="autopilot needs a display (set DISPLAY, or run under xvfb)")
-def test_autopilot_covers_all_labels(sdk, demo_copy: Path) -> None:
+def test_autopilot_covers_supported_menu_items(sdk, autopilot_menu_copy: Path) -> None:
     from renforge.autopilot import autopilot
     from renforge.project import RenpyProject
 
-    report = autopilot(sdk, RenpyProject(demo_copy), max_runs=8, max_steps=30, settle=0.5)
+    report = autopilot(
+        sdk,
+        RenpyProject(autopilot_menu_copy),
+        max_runs=4,
+        max_steps=20,
+        settle=0.5,
+    )
 
     assert report["ok"] is True
     assert report["coverage"] == 1.0
     assert report["labels_unreached"] == []
     assert report["crashes"] == []
-    assert report["choices_explored"] >= 2  # both branches taken
+    assert report["choices_explored"] >= 4
 
 
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")

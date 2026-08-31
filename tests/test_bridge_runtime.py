@@ -978,6 +978,32 @@ def test_list_choices_enumerates_focusable_text(running_bridge):
     assert texts == ["Alpha choice", "Beta choice", "Load icon"]  # the default focus is skipped
 
 
+def test_list_choices_marks_only_active_menu_items(running_bridge):
+    focus_list = running_bridge.renpy.display.focus.focus_list
+    focus_list[1].screen_name = "story_menu"
+    focus_list[2].screen_name = "story_menu"
+    focus_list[3].screen_name = "hud"
+
+    menu_items = [
+        types.SimpleNamespace(caption="Alpha choice", action=object()),
+        types.SimpleNamespace(caption="Beta choice", action=object()),
+        types.SimpleNamespace(caption="Narrator caption", action=None),
+    ]
+    screens = {
+        "story_menu": types.SimpleNamespace(scope={"items": menu_items}),
+        "hud": types.SimpleNamespace(scope={}),
+    }
+    running_bridge.renpy.get_screen = screens.get
+
+    choices = running_bridge.client.list_choices()
+
+    assert [choice["text"] for choice in choices if choice.get("menu_item")] == [
+        "Alpha choice",
+        "Beta choice",
+    ]
+    assert next(choice for choice in choices if choice["text"] == "Load icon").get("menu_item") is None
+
+
 def test_select_choice_by_text_clicks_focus_center(running_bridge):
     reply = running_bridge.client.select_choice(text="Beta")
     assert reply["ok"] is True
