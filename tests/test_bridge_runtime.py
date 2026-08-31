@@ -1003,6 +1003,7 @@ def test_list_menu_choices_returns_only_items_from_their_active_screen(running_b
     focus_list[1].screen_name = "story_menu"
     focus_list[2].screen_name = "story_menu"
     focus_list[3].screen_name = "hud"
+    focus_list[3].widget._text = "Alpha choice"
 
     menu_items = [
         types.SimpleNamespace(caption="Alpha choice", action=object()),
@@ -1011,11 +1012,9 @@ def test_list_menu_choices_returns_only_items_from_their_active_screen(running_b
     ]
     screens = {
         "story_menu": types.SimpleNamespace(scope={"items": menu_items}),
-        # Repeating a story caption on a non-menu screen must not create a
-        # false match, which is why captions are kept as a set per screen.
-        "hud": types.SimpleNamespace(
-            scope={"items": [types.SimpleNamespace(caption="Load icon", action=None)]}
-        ),
+        # The HUD visibly repeats a story caption but has no menu items.
+        # A single unioned caption set would falsely classify that HUD control.
+        "hud": types.SimpleNamespace(scope={}),
     }
     running_bridge.renpy.get_screen = screens.get
 
