@@ -3667,6 +3667,9 @@ init 1100 python:
             )
         else:
             state.label_text = "id=%s" % selected
+        lock_code = _renforge_editor_lock_code(state.selected_lock_reason)
+        if lock_code:
+            state.label_text += " [%s]" % lock_code
         state.label_rect = [x, y, label_w, label_h]
         state.label_alpha = alpha
 
