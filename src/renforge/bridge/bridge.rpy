@@ -1628,16 +1628,26 @@ init python:
         return captions
 
     def _renforge_h_list_choices(payload):
-        choices = _renforge_focusable_choices()
-        menu_captions = {}
+        return {
+            "choices": [
+                {"index": index, "text": text, "screen": screen}
+                for index, (_focus, text, screen) in enumerate(_renforge_focusable_choices())
+            ]
+        }
+
+
+    def _renforge_h_list_menu_choices(payload):
+        """Visible controls backed by actionable items on their active menu screen."""
+        captions_by_screen = {}
         result = []
-        for index, (_focus, text, screen) in enumerate(choices):
-            item = {"index": index, "text": text, "screen": screen}
-            if screen not in menu_captions:
-                menu_captions[screen] = _renforge_active_menu_captions(screen)
-            if text in menu_captions[screen]:
-                item["menu_item"] = True
-            result.append(item)
+        for index, (_focus, text, screen) in enumerate(_renforge_focusable_choices()):
+            if screen not in captions_by_screen:
+                captions_by_screen[screen] = _renforge_active_menu_captions(screen)
+            if text not in captions_by_screen[screen]:
+                continue
+            # Preserve the broad focus-list index so select_choice(index=...) keeps
+            # referring to the same control as list_choices().
+            result.append({"index": index, "text": text, "screen": screen})
         return {"choices": result}
 
     def _renforge_h_list_ui_elements(payload):
@@ -3105,6 +3115,7 @@ init python:
         "list_slots": _renforge_h_list_slots,
         "poll_events": _renforge_h_poll_events,
         "list_choices": _renforge_h_list_choices,
+        "list_menu_choices": _renforge_h_list_menu_choices,
         "select_choice": _renforge_h_select_choice,
         "list_ui_elements": _renforge_h_list_ui_elements,
         "click_element": _renforge_h_click_element,
