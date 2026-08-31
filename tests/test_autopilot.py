@@ -12,42 +12,34 @@ def test_story_labels_excludes_internal_labels() -> None:
 
 
 class _ChoiceClient:
-    def __init__(self, choices: list[dict]) -> None:
-        self.choices = choices
+    def __init__(self, menu_choices: list[dict]) -> None:
+        self.menu_choices = menu_choices
+
+    def list_menu_choices(self) -> list[dict]:
+        return self.menu_choices
 
     def list_choices(self) -> list[dict]:
-        return self.choices
+        raise AssertionError("Autopilot must not depend on the broad list_choices schema")
 
 
 def test_menu_choices_accepts_one_proven_menu_item() -> None:
-    menu_item = {
+    menu_choice = {
+        "index": 2,
         "text": "Continue",
         "screen": "kinetic_continue",
-        "menu_item": True,
     }
 
-    assert _menu_choices(_ChoiceClient([menu_item])) == [menu_item]
+    assert _menu_choices(_ChoiceClient([menu_choice])) == [menu_choice]
 
 
-def test_menu_choices_returns_only_proven_menu_items() -> None:
-    menu_items = [
-        {"text": "Take the ridge", "screen": "story_menu", "menu_item": True},
-        {"text": "Stay home", "screen": "story_menu", "menu_item": True},
-    ]
-    controls = [
-        {"text": "Save", "screen": "quick_menu"},
-        *menu_items,
-        {"text": "Inventory", "screen": "hud"},
-        {"text": "Map", "screen": "hud"},
+def test_menu_choices_returns_only_bridge_proven_menu_items() -> None:
+    menu_choices = [
+        {"index": 1, "text": "Take the ridge", "screen": "story_menu"},
+        {"index": 2, "text": "Stay home", "screen": "story_menu"},
     ]
 
-    assert _menu_choices(_ChoiceClient(controls)) == menu_items
+    assert _menu_choices(_ChoiceClient(menu_choices)) == menu_choices
 
 
 def test_menu_choices_does_not_infer_custom_choices_from_control_count() -> None:
-    controls = [
-        {"text": "Custom A", "screen": "custom_screen"},
-        {"text": "Custom B", "screen": "custom_screen"},
-    ]
-
-    assert _menu_choices(_ChoiceClient(controls)) == []
+    assert _menu_choices(_ChoiceClient([])) == []
