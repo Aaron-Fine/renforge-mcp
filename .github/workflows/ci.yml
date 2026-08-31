@@ -103,6 +103,83 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+  engine-integration:
+    name: Engine integration (Ren'Py 8.5.3)
+    needs: ui-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DISPLAY: ":99"
+      SDL_AUDIODRIVER: dummy
+      RENFORGE_SDK_TESTS: "1"
+      RENFORGE_SDK_VERSION: "8.5.3"
+      RENPY_SDK_CACHE_DIR: ${{ github.workspace }}/.renpy-sdk-cache
+      PYTHONPATH: src
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install and start Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb x11-utils
+          Xvfb :99 -screen 0 1920x1080x24 &
+          for _ in $(seq 1 30); do
+            xdpyinfo -display :99 >/dev/null 2>&1 && break
+            sleep 0.5
+          done
+          xdpyinfo -display :99 | grep dimensions
+
+      - name: Cache Ren'Py SDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.RENPY_SDK_CACHE_DIR }}
+          key: renpy-sdk-${{ env.RENFORGE_SDK_VERSION }}-${{ runner.os }}
+
+      - name: Download built UI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-static
+          path: src/renforge/ui/static
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]'
+
+      - name: Run engine integration tests
+        run: |
+          mkdir -p .engine-test-artifacts
+          set -o pipefail
+          python -m pytest -q -rs \
+            --basetemp=.engine-test-artifacts/pytest \
+            --junitxml=.engine-test-artifacts/junit.xml \
+            tests/test_integration_sdk.py \
+            tests/test_integration_sdk_live_demo_acceptance.py \
+            2>&1 | tee .engine-test-artifacts/pytest.log
+
+      - name: Upload engine test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-integration-renpy-${{ env.RENFORGE_SDK_VERSION }}
+          path: |
+            .engine-test-artifacts/pytest.log
+            .engine-test-artifacts/junit.xml
+            .engine-test-artifacts/pytest/**/log.txt
+            .engine-test-artifacts/pytest/**/traceback.txt
+            .engine-test-artifacts/pytest/**/errors.txt
+            .engine-test-artifacts/pytest/**/.renforge/captures/*.png
+            .engine-test-artifacts/pytest/**/.renforge/autopilot.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
   package-contract:
     name: Package contract checks
     needs: ui-build
