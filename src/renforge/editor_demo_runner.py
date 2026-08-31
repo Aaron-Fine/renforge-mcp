@@ -623,19 +623,18 @@ def run_demo_v1_scenario(client: Any) -> dict[str, Any]:
         "str(_renforge_editor_label_snapshot()['text']) "
         "if _renforge_editor_label_snapshot() is not None else ''"
     )
-    lock_code_token = f"[{locked_reason}]"
     lock_code_in_label = (
         isinstance(lock_label_text, str)
         and bool(lock_label_text.strip())
-        and lock_code_token in lock_label_text
+        and str(locked_reason) in lock_label_text
     )
     if not isinstance(lock_label_text, str) or not lock_label_text.strip():
         raise AssertionError(
             f"locked target label missing: reason={locked_reason!r}, label={lock_label_text!r}"
         )
-    if not lock_code_in_label:
+    if lock_code_in_label:
         raise AssertionError(
-            f"exact lock code missing from rendered editor label: token={lock_code_token!r}, "
+            f"internal lock code leaked into rendered editor label: reason={locked_reason!r}, "
             f"label={lock_label_text!r}"
         )
     locked_observation = locked_selection.get("observation")
@@ -777,7 +776,6 @@ def run_demo_v1_scenario(client: Any) -> dict[str, Any]:
             "observation_rect": locked_observation_rect,
             "observation": locked_observation,
             "lock_label_text": lock_label_text,
-            "lock_code_token": lock_code_token,
             "lock_code_in_label": lock_code_in_label,
         },
         "multi": {
