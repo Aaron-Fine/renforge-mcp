@@ -374,31 +374,17 @@ def run_demo_v1_scenario(client: Any) -> dict[str, Any]:
     if abs(drag_delta[0]) < 20 or abs(drag_delta[1]) > 1:
         raise AssertionError(f"move drag did not move horizontally: {drag_delta!r}")
 
-    # Exercise Shift while the moved target is still unobscured. Once snapped
-    # onto the neighbouring button below, coordinate selection correctly resolves
-    # to that topmost neighbour instead.
-    _ed_select(client, _TAKE_ID)
-    _ed_wait_analysis(client, locked=False)
-    shift_start = _ed_wait_preview(client)
-    shift_points = [
-        shift_start,
-        [shift_start[0] + 30, shift_start[1]],
-    ]
-    shift_drag = _ed_require_ok(
-        client.request("editor_task0_drag", {"points": shift_points, "shift": True}),
-        "shift drag",
-    )
-    shift_samples = shift_drag.get("samples") or []
-    if any(
-        sample.get("guide_x") is not None or sample.get("guide_y") is not None
-        for sample in shift_samples
-    ):
-        raise AssertionError(f"shift drag unexpectedly snapped: {shift_drag!r}")
-
-    _ed_select(client, _TAKE_ID)
+    # Isolate the snap proof from the preceding movement checks. Both halves
+    # of the A/B test below start at the same baseline and use the same pointer
+    # path ending just inside the six-pixel snap-acquire threshold.
+    _ed_require_ok(client.request("editor_task0_reset", {}), "reset before snap proof")
+    _ed_wait_preview(client, expect=baseline)
+    _ed_require_ok(_ed_select(client, _TAKE_ID), "take reselect for snap proof")
     _ed_wait_analysis(client, locked=False)
     cur = _ed_wait_preview(client)
-    snap_points = [[cur[0], cur[1]], [cur[0], decline_top]]
+    snap_offset = 4
+    snap_pointer_y = decline_top + snap_offset
+    snap_points = [[cur[0], cur[1]], [cur[0], snap_pointer_y]]
     snap = _ed_require_ok(
         client.request("editor_task0_drag", {"points": snap_points, "shift": False}),
         "snap drag",
@@ -494,7 +480,43 @@ def run_demo_v1_scenario(client: Any) -> dict[str, Any]:
         )
     _ed_require_ok(client.eval_expr("_renforge_editor_end_drag()"), "visual snap end")
 
-    _ed_require_ok(client.request("editor_task0_reset", {}), "reset after snap proof")
+    # Repeat the exact same near-anchor pointer path with Shift held. It must
+    # preserve the raw four-pixel offset and must not expose either snap guide.
+    _ed_require_ok(client.request("editor_task0_reset", {}), "reset before shift snap proof")
+    _ed_wait_preview(client, expect=baseline)
+    _ed_require_ok(_ed_select(client, _TAKE_ID), "take reselect for shift snap proof")
+    _ed_wait_analysis(client, locked=False)
+    shift_start = _ed_wait_preview(client)
+    if shift_start != cur:
+        raise AssertionError(
+            f"snap A/B did not start from the same position: normal={cur!r}, shift={shift_start!r}"
+        )
+    shift_points = [list(point) for point in snap_points]
+    shift_drag = _ed_require_ok(
+        client.request("editor_task0_drag", {"points": shift_points, "shift": True}),
+        "shift snap drag",
+    )
+    shift_samples = shift_drag.get("samples")
+    if not isinstance(shift_samples, list) or not shift_samples:
+        raise AssertionError(f"shift snap samples missing: {shift_drag!r}")
+    if any(
+        sample.get("guide_x") is not None or sample.get("guide_y") is not None
+        for sample in shift_samples
+    ):
+        raise AssertionError(f"shift drag unexpectedly snapped: {shift_drag!r}")
+    shift_preview = shift_samples[-1].get("preview_position")
+    expected_shift_preview = [cur[0], snap_pointer_y]
+    if shift_preview != expected_shift_preview:
+        raise AssertionError(
+            "shift drag did not preserve the unsnapped pointer offset: "
+            f"expected={expected_shift_preview!r}, actual={shift_preview!r}, reply={shift_drag!r}"
+        )
+    if shift_preview == preview:
+        raise AssertionError(
+            f"snap A/B produced identical previews: normal={preview!r}, shift={shift_preview!r}"
+        )
+
+    _ed_require_ok(client.request("editor_task0_reset", {}), "reset after snap A/B proof")
     _ed_wait_preview(client, expect=baseline)
 
     _ed_require_ok(_ed_select(client, _TAKE_ID), "take reselect for shift nudge")
@@ -601,18 +623,19 @@ def run_demo_v1_scenario(client: Any) -> dict[str, Any]:
         "str(_renforge_editor_label_snapshot()['text']) "
         "if _renforge_editor_label_snapshot() is not None else ''"
     )
+    lock_code_token = f"[{locked_reason}]"
     lock_code_in_label = (
         isinstance(lock_label_text, str)
         and bool(lock_label_text.strip())
-        and str(locked_reason) in lock_label_text
+        and lock_code_token in lock_label_text
     )
     if not isinstance(lock_label_text, str) or not lock_label_text.strip():
         raise AssertionError(
             f"locked target label missing: reason={locked_reason!r}, label={lock_label_text!r}"
         )
-    if lock_code_in_label:
+    if not lock_code_in_label:
         raise AssertionError(
-            f"internal lock code leaked into rendered editor label: reason={locked_reason!r}, "
+            f"exact lock code missing from rendered editor label: token={lock_code_token!r}, "
             f"label={lock_label_text!r}"
         )
     locked_observation = locked_selection.get("observation")
@@ -704,6 +727,9 @@ def run_demo_v1_scenario(client: Any) -> dict[str, Any]:
         "drag_delta": drag_delta,
         "snap": {
             "reply": snap,
+            "points": snap_points,
+            "requested_y": snap_pointer_y,
+            "offset": snap_offset,
             "guide_y": guide_y,
             "preview": preview,
             "preview_on_anchor": abs(int(preview[1]) - decline_top) <= 1,
@@ -717,6 +743,8 @@ def run_demo_v1_scenario(client: Any) -> dict[str, Any]:
             "high_png_bytes": len(high_png),
         },
         "shift_drag": shift_drag,
+        "shift_points": shift_points,
+        "shift_preview": shift_preview,
         "shift_nudge": {
             "before": pre_shift_nudge,
             "after": post_shift_nudge,
@@ -749,6 +777,7 @@ def run_demo_v1_scenario(client: Any) -> dict[str, Any]:
             "observation_rect": locked_observation_rect,
             "observation": locked_observation,
             "lock_label_text": lock_label_text,
+            "lock_code_token": lock_code_token,
             "lock_code_in_label": lock_code_in_label,
         },
         "multi": {
