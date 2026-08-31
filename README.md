@@ -193,8 +193,8 @@ JSON summary of the project (labels, scripts, assets, and related metadata).
   spacing, overlap, fit, and WCAG contrast as numbers an agent can act on.
 - **Autopilot** — auto-play choices backed by Ren'Py menu `items` across
   fresh replays, including custom-named and one-item menus, while reporting
-  label coverage and crashes. Arbitrary `call screen` interactions require
-  game-specific adapters and are not inferred from visible controls.
+  label coverage and crashes. Custom `call_screen` interactions that do not
+  expose Ren'Py menu `items` are not currently explored automatically.
 - **Assets & translations** — find orphaned/missing image+audio assets, list
   languages, compute translation stats, generate/update `game/tl/<lang>/` files,
   export dialogue as text.
