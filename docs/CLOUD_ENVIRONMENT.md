@@ -174,7 +174,7 @@ Key environment variables for cloud environments:
 | `PYTHONPATH` | Python module search path | Should include `src/` |
 | `RENPY_SDK_CACHE_DIR` | Ren'Py SDK cache location | `~/.cache/renforge/sdks` |
 | `RENFORGE_SDK_TESTS` | Enable the broad real-SDK integration suite | Unset (opt-in locally) |
-| `RENFORGE_SDK_VERSION` | SDK version used by that integration suite | RenForge's default SDK |
+| `RENFORGE_SDK_VERSION` | SDK version used by that integration suite | `8.5.3` (`DEFAULT_RENPY_VERSION`) |
 | `RENFORGE_*_LIVE` | Enable specific live test suites | Unset (opt-in per suite) |
 
 ## Running Tests
@@ -319,6 +319,7 @@ suite. Key points:
 - Cache the Ren'Py SDK with `actions/cache@v4`
 - Start Xvfb early with a large screen size
 - Build the frontend before running tests
+- Use `uv` for faster dependency installation where the workflow provides it
 - Keep SDK integration and the larger focused editor suite as separate jobs
 
 ### GitLab CI
