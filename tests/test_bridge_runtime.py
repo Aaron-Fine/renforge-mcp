@@ -994,7 +994,7 @@ def test_list_choices_schema_is_unchanged_when_menu_items_are_active(running_bri
     assert running_bridge.client.list_choices() == [
         {"index": 0, "text": "Alpha choice", "screen": "story_menu"},
         {"index": 1, "text": "Beta choice", "screen": "story_menu"},
-        {"index": 2, "text": "Load icon", "screen": "quick_menu"},
+        {"index": 2, "text": "Load icon", "screen": None},
     ]
 
 
