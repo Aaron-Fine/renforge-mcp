@@ -108,9 +108,8 @@ def test_live_demo_editor_v1_acceptance(sdk, demo_copy: Path) -> None:
     assert locked["save_enabled"] is False
     assert len(locked["observation_rect"]) == 4
     assert locked["lock_label_text"]
-    assert locked["lock_code_token"] == f"[{locked['selected_lock_reason']}]"
-    assert locked["lock_code_token"] in locked["lock_label_text"]
-    assert locked["lock_code_in_label"] is True
+    assert locked["selected_lock_reason"] not in locked["lock_label_text"]
+    assert locked["lock_code_in_label"] is False
     assert report["reset_after_save_error"] == "RESET_UNAVAILABLE"
 
     assert report["multi"]["dirty_before_undo"] >= 2
