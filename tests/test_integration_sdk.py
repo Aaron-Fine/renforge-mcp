@@ -611,6 +611,8 @@ def autopilot_menu_copy(demo_copy: Path) -> Path:
     """A real-engine fixture containing only supported Ren'Py menu semantics."""
     (demo_copy / "game" / "script.rpy").write_text(
         """
+define config.main_menu = False
+
 screen autopilot_choice(items):
     vbox:
         for item in items:
