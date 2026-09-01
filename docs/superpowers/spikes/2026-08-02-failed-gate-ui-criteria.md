@@ -32,8 +32,9 @@ All five must hold, measured live, for issue #52 to pass:
 2. **Selection remains visible and measurable:**
    - Selecting any locked target updates `selected_rect` to the target's bounding box `[x, y, w, h]` with `w > 0` and `h > 0`.
 
-3. **Overlay label renders exact lock code:**
-   - The overlay label text includes `[<LOCK_CODE>]` (e.g. `[SYNTHETIC_WIDGET_ID]`, `[TRANSFORM_CROP_COMPOSITE_UNSUPPORTED]`, `[MULTI_INSTANCE_UNSUPPORTED]`).
+3. **Overlay label renders a localized, human-readable refusal:**
+   - The canvas label explains that the target cannot be edited without exposing `<LOCK_CODE>` or other internal protocol identifiers.
+   - The corresponding runtime/API response retains the lock code for diagnostics.
 
 4. **Drag and write actions stay disabled:**
    - Drag attempts fail with `ok=False` and report the lock code.
@@ -45,7 +46,7 @@ All five must hold, measured live, for issue #52 to pass:
 
 ## Blocked conditions
 
-- Any gate family fails to render its lock code in the overlay.
+- Any gate family renders an internal lock/protocol code in the canvas label, or fails to present a localized, human-readable refusal.
 - Drag or write modifies source files when targeting a locked element.
 - Bounding box is cleared or hidden instead of highlighting the selected locked target.
 
