@@ -8,6 +8,10 @@
 
 **Tech stack:** Python 3.11+, FastMCP/MCP content blocks, Ren'Py 8 bundled runtimes, injected Ren'Py Python/screen APIs, Bubblewrap isolation on Linux, JSONL traces, pytest, and opt-in real-engine tests.
 
+> **Amendment 2026-08-31 (display backend):** The strict-session display server is **pluggable**, proven by the Task 0 spike. Local/default backend is **cage headless** (native Wayland, `SDL_VIDEODRIVER=wayland`), chaining to **weston headless** and then **Xvfb** on failure; **CI uses Xvfb unconditionally** (matches existing `.github/workflows/ci.yml`). This preserves every isolation guarantee — a dedicated, per-session, owned display server is still bound into an otherwise-empty mount namespace and killed with the session — while preferring Wayland-native hosting. The selected display backend is recorded in launch status and the trace. Rationale and experiment are in `docs/superpowers/reports/play-isolation-spike.md`.
+>
+> **Task 12 target (2026-08-31):** `/home/aaron/Spicey/hgame/MyPigPrincess-0.3.0-pc` — Ren'Py **8.2.0.24012702** (official), complete loose `.rpy` tree, bundled `.sh` launcher, menus/textbuttons/imagebuttons present. Its `1-Chapter 1 Intro.rpy:152` `renpy.input()` name prompt is out of MVP 1 scope; handled by a user-supplied `walkthrough_mod.rpy` hook that defaults the name, preserving source fidelity elsewhere.
+
 ---
 
 ## 1. Product decision and milestone relationship
@@ -92,7 +96,7 @@ These are scope decisions, not implementation suggestions: later task breakdowns
 
 - A route that reaches an unavoidable unsupported interaction does not fail the architecture. RenForge records `needs_intervention` with the last coherent observation and checkpoint.
 - A real game must not be launched merely to discover whether isolation works. Gate A proves the backend with a hostile synthetic subprocess; Gate B proves Ren'Py save/bridge behavior with a controlled fixture; only then may a real game run.
-- Cross-platform abstractions may be named in interfaces, but only Linux, Xvfb, and dummy audio are implemented in MVP 1 strict sessions.
+- Cross-platform abstractions may be named in interfaces, but only Linux, a headless display server (cage/weston headless, or Xvfb as CI/fallback), and dummy audio are implemented in MVP 1 strict sessions.
 - Each release names an exact tested Ren'Py 8 version. Other Ren'Py 8 versions are rejected by default or require an explicit unsupported-version opt-in that is visible in launch status and the trace.
 - Existing legacy `renforge_launch` behavior remains outside the minimal-play safety claim until explicitly migrated. Documentation must never describe legacy `savedir=temporary` as equivalent to the strict profile path.
 
@@ -217,14 +221,14 @@ Inside Bubblewrap:
 - runtime `game/saves`: bind to profile `game-saves/`;
 - primary saves and MultiPersistent: profile-owned;
 - home/XDG/temp: session-owned and disposable;
-- required `/usr`, `/bin`, `/lib*`, selected `/etc`, minimal `/dev`, private `/proc`, and Xvfb socket exposure only as proven necessary;
+- required `/usr`, `/bin`, `/lib*`, selected `/etc`, minimal `/dev`, private `/proc`, and the selected display-server socket (Wayland socket for cage/weston, or X11 socket for Xvfb) only as proven necessary;
 - MCP workspace, SSH credentials, unrelated home directories, and normal Ren'Py save roots: not mounted.
 
-Each strict MVP session owns a fresh Xvfb display and uses dummy audio; no host X11/Wayland/Pulse socket is exposed. Native display/audio integration is deferred.
+Each strict MVP session owns a fresh headless display and uses dummy audio; no host X11/Wayland/Pulse socket is exposed. The display backend is selected by Task 0: **cage headless (native Wayland) → weston headless → Xvfb**, with Xvfb unconditional in CI. Native display/audio integration is deferred.
 
 ### Process ownership
 
-All strict launches and their session-owned Xvfb receive dedicated ownership; the game runs in a host POSIX process group plus a Bubblewrap PID namespace, reaper, and `--die-with-parent`. Stop performs bounded graceful termination and group/namespace kill escalation, reaps the leaders, confirms no owned descendants remain, then releases the profile lease and removes disposable runtime data. MVP 1 is fail-stop: an MCP-owner crash must terminate the game and its Xvfb; later runs recover durable profile/trace state by starting a new process, not by reattaching to the old one.
+All strict launches and their session-owned headless display server (cage/weston/Xvfb) receive dedicated ownership; the game runs in a host POSIX process group plus a Bubblewrap PID namespace, reaper, and `--die-with-parent`. Stop performs bounded graceful termination and group/namespace kill escalation, reaps the leaders, confirms no owned descendants remain, then releases the profile lease and removes disposable runtime data. MVP 1 is fail-stop: an MCP-owner crash must terminate the game and its display server; later runs recover durable profile/trace state by starting a new process, not by reattaching to the old one.
 
 ### Live attestation
 
@@ -512,6 +516,8 @@ Tasks are epics, not single-agent assignments. Before implementation, split each
 
 ### Task 0: Prove the isolation backend against a hostile subprocess
 
+> **Status (2026-08-31, session 1):** Isolation backend **proven** — Architecture B (host-side `fuse-overlayfs` CoW + allowlisted bwrap namespace), 9/9 hostile-process tests green on Fedora 44 / kernel 7.1.10 / bwrap 0.11.0. In-userns overlay and in-sandbox FUSE were probed and rejected with recorded reasons. See `docs/superpowers/reports/play-isolation-spike.md` (committed on `play/task0-spike`). Remaining before Gate A closes: full-copy fallback probe (only if overlay regresses), `--savedir`/MultiPersistent/XDG byte-landing proofs (need real-engine work), symlink/FIFO/bind-target negative exercises, and the display-backend render matrix.
+
 **Files:**
 
 - Create: `scripts/spike_play_isolation.py`
@@ -520,15 +526,16 @@ Tasks are epics, not single-agent assignments. Before implementation, split each
 
 **Steps:**
 
-- [ ] Build a disposable lower project, normal-save tree, profile tree, guest-publication directory, and session-private home/XDG/temp tree with distinct canaries.
-- [ ] Probe an empty allowlisted Bubblewrap namespace using the overlay backend; separately probe a size-preflighted full-copy runtime fallback.
-- [ ] From a hostile child, attempt to enumerate/read/write normal saves, lower project files, RenForge trusted state, the broader home/workspace, and undeclared host paths.
-- [ ] Attempt intended writes to project paths, `game/saves`, native `--savedir`, MultiPersistent, guest publication, home/XDG, and temp; prove where every byte lands.
-- [ ] Fork, double-fork, call `setsid`, and hold files open; prove stop/owner death terminates all descendants and makes cleanup boundaries unambiguous.
+- [x] Build a disposable lower project, normal-save tree, profile tree, guest-publication directory, and session-private home/XDG/temp tree with distinct canaries.
+- [ ] Probe an empty allowlisted Bubblewrap namespace using the overlay backend; separately probe a size-preflighted full-copy runtime fallback. *(Overlay proven via host-side fuse-overlayfs; in-userns overlay rejected by kernel; full-copy fallback not yet probed — not needed unless overlay regresses.)*
+- [x] From a hostile child, attempt to enumerate/read/write normal saves, lower project files, RenForge trusted state, the broader home/workspace, and undeclared host paths. *(Canary/home paths absent from the namespace; lower-project tampering absorbed by overlay.)*
+- [ ] Attempt intended writes to project paths, `game/saves`, native `--savedir`, MultiPersistent, guest publication, home/XDG, and temp; prove where every byte lands. *(Project paths, `game/saves` bind, and guest publication proven; `--savedir`/MultiPersistent/XDG landing proofs require the real-engine launch.)*
+- [x] Fork, double-fork, call `setsid`, and hold files open; prove stop/owner death terminates all descendants and makes cleanup boundaries unambiguous. *(Fork/setsid/double-fork reaping proven via scoped PID-namespace-inode tracking; fork-bomb containment proven.)*
 - [ ] Exercise unsafe symlinks, FIFOs, bind targets, missing overlay support, insufficient copy space, preflight failure, and diagnostic preservation.
-- [ ] Record the exact kernel, Bubblewrap, filesystem, and selected backend result. If neither backend meets the contract, stop this plan and revise the architecture before public APIs are implemented.
+- [x] Record the exact kernel, Bubblewrap, filesystem, and selected backend result. If neither backend meets the contract, stop this plan and revise the architecture before public APIs are implemented. *(Selected: Architecture B; report committed.)*
+- [ ] Prove the display-backend selection matrix: launch a disposable headless server (cage → weston → Xvfb), verify a real bundled Ren'Py `.sh` renders a coherent native frame on each that works, and record per-backend socket, ownership, and fail-stop teardown. The winner becomes the strict-session default; Xvfb remains the unconditional CI backend. *(Feasibility probed: cage headless initializes EGL, `import` available for X11 capture, MyPigPrincess bundled runtime verified.)*
 
-**Gate A:** one backend proves that the guest cannot enumerate or read normal saves or trusted control state, cannot mutate the lower project, can persist only designated profile state, and leaves no descendants. This test is automated and remains a release gate.
+**Gate A:** one backend proves that the guest cannot enumerate or read normal saves or trusted control state, cannot mutate the lower project, can persist only designated profile state, and leaves no descendants. The display-backend experiment additionally proves at least one working headless server renders a coherent frame under strict ownership. This test is automated and remains a release gate.
 
 ### Task 1: Lock contracts and failing public-schema tests
 
@@ -609,13 +616,13 @@ Tasks are epics, not single-agent assignments. Before implementation, split each
 
 **Steps:**
 
-- [ ] Write failing command-plan tests for the Task 0-selected overlay or full-copy layout, save binds, private home/XDG/temp, guest-publication bind, and minimum system/Xvfb mounts.
+- [ ] Write failing command-plan tests for the Task 0-selected overlay or full-copy layout, save binds, private home/XDG/temp, guest-publication bind, the selected display-server socket mount (cage/weston Wayland socket or Xvfb X11 socket), and minimum system mounts.
 - [ ] Model host, sandbox, and logical project paths explicitly; do not compare strings from different namespaces without translation.
 - [ ] Implement a disposable mount/write probe that proves lower-layer writes land in upper and `game/saves` writes land in the profile bind.
 - [ ] Start from an empty mount namespace and omit normal saves, unrelated home/workspace paths, and trusted RenForge control state.
 - [ ] Reject symlinked/FIFO/non-directory bind targets and prove the guest cannot enumerate or read omitted canaries.
 - [ ] Keep network namespace shared for the TCP bridge.
-- [ ] Add bounded diagnostics for missing Bubblewrap, unsupported backend, insufficient copy space, mount denial, and Xvfb failures.
+- [ ] Add bounded diagnostics for missing Bubblewrap, unsupported backend, insufficient copy space, mount denial, and display-server (cage/weston/Xvfb) failures.
 
 **Gate:** the automated hostile-process suite from Gate A passes against production command construction.
 
@@ -637,7 +644,7 @@ Tasks are epics, not single-agent assignments. Before implementation, split each
 - [ ] Write failing tests for game-specific `.sh` launch command shape and native `--savedir` placement.
 - [ ] Build an allowlisted environment; assert unrelated sentinel secrets are absent.
 - [ ] Allocate/persist the session before background launch and make starting/failure queryable by `session_id`.
-- [ ] Launch through the selected sandbox plan with Xvfb, dummy audio, a dedicated process group, Bubblewrap PID namespace/reaper, and `--die-with-parent`.
+- [ ] Launch through the selected sandbox plan with the Task 0-selected headless display server, dummy audio, a dedicated process group, Bubblewrap PID namespace/reaper, and `--die-with-parent`.
 - [ ] Inject bridge/session artifacts into the disposable runtime layer, not host `game/`.
 - [ ] Make strict launch bypass dashboard delegation and refuse reuse/attachment of legacy, external, or already-live sessions.
 - [ ] Make teardown kill/reap the owned namespace and process group before releasing lease or deleting runtime data; there is no live reattachment path.
@@ -804,7 +811,7 @@ Tasks are epics, not single-agent assignments. Before implementation, split each
 - [ ] Verify strict launch refuses dashboard/external/legacy bridge reuse, and stale commands from session A fail after session B starts.
 - [ ] Store only bounded synthetic diagnostics as CI artifacts; never publish bridge tokens.
 
-**Gate B:** the synthetic route passes under the exact pinned Ren'Py 8 engine, Xvfb, and dummy audio; all isolation, visual-coherence, stale-action, and recovery assertions pass before a real game is launched.
+**Gate B:** the synthetic route passes under the exact pinned Ren'Py 8 engine, the Task 0-selected display backend (cage/weston/Xvfb), and dummy audio; all isolation, visual-coherence, stale-action, and recovery assertions pass before a real game is launched.
 
 ### Task 12: Document workflow and perform local real-game proof
 
@@ -845,7 +852,7 @@ pytest -q tests/test_play_sandbox.py tests/test_play_launcher.py tests/test_play
 pytest -q tests/test_play_observation.py tests/test_play_observe_tool.py tests/test_play_actions.py
 pytest -q tests/test_play_trace.py tests/test_play_checkpoints.py
 pytest -q tests/test_bridge_launcher.py tests/test_bridge_runtime.py tests/test_live_stop.py tests/test_policy.py
-RENFORGE_SDK_TESTS=1 xvfb-run -a pytest -q tests/test_integration_minimal_play.py
+RENFORGE_SDK_TESTS=1 pytest -q tests/test_integration_minimal_play.py   # CI uses xvfb-run; locally may wrap in the Task 0-selected headless server
 pytest -q
 ```
 
@@ -895,6 +902,7 @@ pytest -q
 | Risk | MVP 1 response |
 | --- | --- |
 | Bubblewrap overlay unavailable on a host | Use only the size-preflighted full-copy fallback if Gate A proves the same boundary; otherwise fail preflight. |
+| Preferred headless display (cage/weston) renders incoherently for a bundled Ren'Py title | Task 0 records the failure and selects the next working backend (down to Xvfb); the selected backend is attested in launch status and trace. CI always uses Xvfb. |
 | Bundled launcher needs unexpected system paths | Add the smallest explicit read-only mount and regression test; never expose all of home. |
 | Game uses a hard-coded absolute save path | Hide normal home paths in the empty namespace; attestation covers engine locations, while hostile custom-write tests cover common escapes. |
 | Animation changes every screenshot | Guard on observation identity and semantic generations/signature; retain exact frame hash separately. |
