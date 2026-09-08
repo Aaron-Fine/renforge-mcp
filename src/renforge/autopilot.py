@@ -1,16 +1,18 @@
-"""Autopilot: explore a Ren'Py visual novel and report label coverage + crashes.
+"""Autopilot: replay a Ren'Py story to explore menus and report outcomes.
 
-Strategy — systematic branch exploration by replay. Each run launches the game
-fresh, replays a fixed prefix of menu choices, then at the first *new* menu it
-takes choice 0 and queues the remaining choices as future runs. Repeating until
-the frontier is empty covers every branch combination, using only primitives
-that work reliably (launch / advance / list_choices / select_choice /
-poll_events) — no in-game save/load, which cannot be driven from the bridge's
-main-thread callback.
+Each run launches the game fresh and replays a fixed prefix of earlier menu
+selections. At the next new menu, Autopilot selects the first choice and queues
+the remaining choices as prefixes for later runs. It collects label and dialogue
+events after every interaction, records bridge exceptions as crashes, and stops
+a run when a story label repeats or the step limit is reached.
 
-Menus are detected by ``list_choices`` returning options. (A game with an
-always-on quick menu could surface non-choice buttons here; refining detection
-to the active ``choice`` screen is a future improvement.)
+The bridge derives the current story choices from the active menu screen's
+``items`` scope and maps actionable item captions to visible controls. This is
+the data Ren'Py supplies to standard, custom-named, NVL, and one-item menu
+screens. Other ``call_screen`` interactions that do not expose menu ``items``
+are not currently explored automatically.
+
+Ren'Py menu screens: https://www.renpy.org/doc/html/menus.html#menu-arguments
 """
 
 from __future__ import annotations
@@ -34,8 +36,15 @@ def _story_labels(project_path: str | Path) -> set[str]:
 
 
 def _menu_choices(client) -> list[dict]:
-    """Choices that belong to the active ``choice`` screen (ignores quick menu)."""
-    return [c for c in client.list_choices() if c.get("screen") == "choice"]
+    """Return the active story-menu controls in bridge display order."""
+    # TODO: Add an opt-in game-specific adapter hook for custom call_screen
+    # interactions that do not expose Ren'Py menu items. Do not infer narrative
+    # intent from control count or screen names.
+    return [
+        choice
+        for choice in client.list_menu_choices()
+        if isinstance(choice, dict) and choice.get("text")
+    ]
 
 
 def autopilot(

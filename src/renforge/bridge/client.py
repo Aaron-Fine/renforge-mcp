@@ -292,8 +292,12 @@ class BridgeClient:
         return self._checked("poll_events", {"since": since})
 
     def list_choices(self) -> list[dict[str, Any]]:
-        """Return the on-screen focusable choices as ``[{"index", "text"}, ...]``."""
+        """Return textual focusables as ``index``, ``text``, and ``screen``."""
         return self._checked("list_choices")["choices"]
+
+    def list_menu_choices(self) -> list[dict[str, Any]]:
+        """Return visible controls backed by the active Ren'Py menu's ``items``."""
+        return self._checked("list_menu_choices")["choices"]
 
     def select_choice(self, text: str | None = None, index: int | None = None) -> dict:
         """Select a menu option by visible text (preferred) or by index."""

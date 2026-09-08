@@ -4,6 +4,14 @@ Written **before** claiming completion of issue #52. PR #25 proved the locked-st
 
 **SDK under test:** Ren'Py **8.5.3**.
 
+> **Historical status:** The August 11, 2026 Live Editor remediation
+> ([#80](https://github.com/alex-jordan547/renforge-mcp/pull/80)) superseded
+> pass condition 3 below. The current UI presents a localized, human-readable
+> refusal and deliberately keeps internal protocol lock codes out of the canvas
+> label. Runtime/API responses still carry the code for diagnostics. See
+> `test_editor_lock_ui_never_exposes_internal_codes_or_expands_canvas_label`
+> for the enforced current contract.
+
 ## What the editor needs to be true
 
 When a user clicks or selects a locked visual-editor target:
@@ -24,8 +32,9 @@ All five must hold, measured live, for issue #52 to pass:
 2. **Selection remains visible and measurable:**
    - Selecting any locked target updates `selected_rect` to the target's bounding box `[x, y, w, h]` with `w > 0` and `h > 0`.
 
-3. **Overlay label renders exact lock code:**
-   - The overlay label text includes `[<LOCK_CODE>]` (e.g. `[SYNTHETIC_WIDGET_ID]`, `[TRANSFORM_CROP_COMPOSITE_UNSUPPORTED]`, `[MULTI_INSTANCE_UNSUPPORTED]`).
+3. **Overlay label renders a localized, human-readable refusal:**
+   - The canvas label explains that the target cannot be edited without exposing `<LOCK_CODE>` or other internal protocol identifiers.
+   - The corresponding runtime/API response retains the lock code for diagnostics.
 
 4. **Drag and write actions stay disabled:**
    - Drag attempts fail with `ok=False` and report the lock code.
@@ -37,7 +46,7 @@ All five must hold, measured live, for issue #52 to pass:
 
 ## Blocked conditions
 
-- Any gate family fails to render its lock code in the overlay.
+- Any gate family renders an internal lock/protocol code in the canvas label, or fails to present a localized, human-readable refusal.
 - Drag or write modifies source files when targeting a locked element.
 - Bounding box is cleared or hidden instead of highlighting the selected locked target.
 

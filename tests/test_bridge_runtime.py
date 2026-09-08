@@ -978,6 +978,52 @@ def test_list_choices_enumerates_focusable_text(running_bridge):
     assert texts == ["Alpha choice", "Beta choice", "Load icon"]  # the default focus is skipped
 
 
+def test_list_choices_schema_is_unchanged_when_menu_items_are_active(running_bridge):
+    focus_list = running_bridge.renpy.display.focus.focus_list
+    focus_list[1].screen_name = "story_menu"
+    focus_list[2].screen_name = "story_menu"
+    running_bridge.renpy.get_screen = lambda _name: types.SimpleNamespace(
+        scope={
+            "items": [
+                types.SimpleNamespace(caption="Alpha choice", action=object()),
+                types.SimpleNamespace(caption="Beta choice", action=object()),
+            ]
+        }
+    )
+
+    assert running_bridge.client.list_choices() == [
+        {"index": 0, "text": "Alpha choice", "screen": "story_menu"},
+        {"index": 1, "text": "Beta choice", "screen": "story_menu"},
+        {"index": 2, "text": "Load icon", "screen": None},
+    ]
+
+
+def test_list_menu_choices_returns_only_items_from_their_active_screen(running_bridge):
+    focus_list = running_bridge.renpy.display.focus.focus_list
+    focus_list[1].screen_name = "story_menu"
+    focus_list[2].screen_name = "story_menu"
+    focus_list[3].screen_name = "hud"
+    focus_list[3].widget._text = "Alpha choice"
+
+    menu_items = [
+        types.SimpleNamespace(caption="Alpha choice", action=object()),
+        types.SimpleNamespace(caption="Beta choice", action=object()),
+        types.SimpleNamespace(caption="Narrator caption", action=None),
+    ]
+    screens = {
+        "story_menu": types.SimpleNamespace(scope={"items": menu_items}),
+        # The HUD visibly repeats a story caption but has no menu items.
+        # A single unioned caption set would falsely classify that HUD control.
+        "hud": types.SimpleNamespace(scope={}),
+    }
+    running_bridge.renpy.get_screen = screens.get
+
+    assert running_bridge.client.list_menu_choices() == [
+        {"index": 0, "text": "Alpha choice", "screen": "story_menu"},
+        {"index": 1, "text": "Beta choice", "screen": "story_menu"},
+    ]
+
+
 def test_select_choice_by_text_clicks_focus_center(running_bridge):
     reply = running_bridge.client.select_choice(text="Beta")
     assert reply["ok"] is True

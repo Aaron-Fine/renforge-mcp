@@ -423,7 +423,7 @@ guards: each capture hashes a new frame.
 | `renforge_get_errors` | Read recent bridge errors or bounded crash-file tails with mtimes and exit code when tracked. |
 | `renforge_wait_until` | Wait for exactly one `label`, `screen`, or `expr` condition with bounded `timeout` (maximum 120 seconds) and polling `interval`. Returns compact state by default (`state_profile=interaction`); pass `include` for extra fields and `state_profile=full` only when needed. |
 | `renforge_run_scenario` | Execute a multi-step live scenario (`set`, `click`, `wait`, `assert`, …) in one call; captures diagnostics on failure. |
-| `renforge_autopilot` | Explore branches and report label coverage and crashes. |
+| `renforge_autopilot` | Explore choices backed by active Ren'Py menu `items` across fresh replays, including custom-named and one-item menus; report label coverage and crashes. Custom `call_screen` interactions that do not expose Ren'Py menu `items` are not currently explored automatically. |
 
 ### Project, translation, builds, and Ren'Py documentation
 

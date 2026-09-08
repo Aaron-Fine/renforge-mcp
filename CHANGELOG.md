@@ -7,7 +7,14 @@ versioning.
 
 ### Added
 
+- Every pull request now runs the broad Ren'Py 8.5.3 SDK integration suite on
+  Linux/Xvfb, with SDK caching and an explicit diagnostic artifact allowlist.
+
 ### Changed
+
+- Autopilot now identifies choices from active Ren'Py menu `items`, including
+  custom-named and one-item menus, without inferring narrative intent from
+  arbitrary focusable screen controls.
 
 ### Fixed
 

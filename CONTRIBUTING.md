@@ -15,6 +15,7 @@ git clone https://github.com/alex-jordan547/renforge-mcp.git
 cd renforge-mcp
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[fastmcp,ui,test]"
+npm --prefix ui ci
 pytest
 ```
 
@@ -29,6 +30,21 @@ bash scripts/smoke_renpy_env.sh
 
 Details, environment variables, and the Cursor environment named `renforge`:
 [docs/CLOUD_ENVIRONMENT.md](docs/CLOUD_ENVIRONMENT.md).
+
+The normal test command intentionally skips tests that launch Ren'Py. After
+setting up Xvfb and the SDK as described in the cloud/CI guide, run the same
+real-engine suite used by pull-request CI with:
+
+```bash
+RENFORGE_SDK_TESTS=1 RENFORGE_SDK_VERSION=8.5.3 \
+  python -m pytest -q \
+  tests/test_integration_sdk.py \
+  tests/test_integration_sdk_live_demo_acceptance.py
+```
+
+These tests copy `examples/demo_game` into pytest-owned temporary directories;
+CI uploads only an explicit diagnostic allowlist and never bridge control
+metadata, which contains the session credential.
 
 The dashboard frontend lives in `ui/` (Vite + React + TypeScript):
 
