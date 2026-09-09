@@ -18,6 +18,34 @@ versioning.
 
 ### Fixed
 
+## [0.7.2] - 2026-09-08
+
+### Added
+
+- Every pull request now runs the broad Ren'Py 8.5.3 SDK integration suite on
+  Linux/Xvfb, with SDK caching and diagnostic artifacts.
+
+### Changed
+
+- Autopilot now identifies choices from active Ren'Py menu `items`, including
+  custom-named and one-item menus, without inferring narrative intent from
+  arbitrary focusable screen controls. The public `list_choices()` contract is
+  unchanged.
+
+### Fixed
+
+- Register the live `say.what` suite in the nightly Live editor runner so the
+  gate no longer fails with an unlisted suite.
+- Recover task0 coordinator echo by `request_id` after the overlay periodic
+  drain race so `test_editor_task0_live` no longer flakes with `coordinator
+  result never applied`.
+
+### Thanks
+
+- Thanks to [Aaron Fine](https://github.com/Aaron-Fine) for #98: Ren'Py 8.5.3
+  engine-integration CI on pull requests and Autopilot menu discovery from
+  active Ren'Py `items`.
+
 ## [0.7.1] - 2026-08-17
 
 ### Added
