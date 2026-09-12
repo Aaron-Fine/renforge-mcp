@@ -2379,9 +2379,9 @@ init 1100 python:
                 return rect if rect[2] > 0 and rect[3] > 0 else None
 
             class_name = getattr(getattr(node, "__class__", None), "__name__", "unknown")
-            # Transform child coordinates require the render matrix, not additive
-            # offsets. Keep those text descendants unselectable until proven.
-            if class_name == "Transform":
+            # Rotated/zoomed/cropped Transforms need the render matrix. A
+            # position-only Transform is how SL2 places `add`; walk through it.
+            if class_name == "Transform" and not _renforge_editor_transform_is_position_only(node):
                 return None
             children = _renforge_editor_children(node)
             if not children:
@@ -2394,7 +2394,7 @@ init 1100 python:
                         offset_y = int(offsets[index][1])
                     except Exception:
                         continue
-                elif len(children) == 1 and class_name == "ScreenDisplayable":
+                elif len(children) == 1 and class_name in ("ScreenDisplayable", "Transform"):
                     offset_x = offset_y = 0
                 else:
                     # No rendered placement proof for this branch.
@@ -2999,6 +2999,26 @@ init 1100 python:
 
         visit(screen, [])
         return found
+
+
+    def _renforge_editor_transform_is_position_only(node):
+        """True when a Transform only places its child (no rotate/zoom/crop)."""
+        rotate = getattr(node, "rotate", None)
+        zoom = getattr(node, "zoom", None)
+        xzoom = getattr(node, "xzoom", None)
+        yzoom = getattr(node, "yzoom", None)
+        crop = getattr(node, "crop", None)
+        if rotate not in (None, 0, 0.0):
+            return False
+        if zoom not in (None, 1, 1.0):
+            return False
+        if xzoom not in (None, 1, 1.0):
+            return False
+        if yzoom not in (None, 1, 1.0):
+            return False
+        if crop not in (None, False):
+            return False
+        return True
 
 
     def _renforge_editor_transform_crop_is_composite(node):
