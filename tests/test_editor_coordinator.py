@@ -935,7 +935,7 @@ def _say_who_observation() -> dict[str, Any]:
             "screen": "say",
             "invocation_path": "say",
             "widget_id": "who",
-            "source_location": ["screens.rpy", 2],
+            "source_location": ["screens.rpy", 5],
             "instance_discriminator": {"kind": "singleton", "instance_count": 1},
             "ancestry": [
                 {
@@ -949,7 +949,7 @@ def _say_who_observation() -> dict[str, Any]:
                 {
                     "index": 1,
                     "type": "Text",
-                    "source_location": ["screens.rpy", 2],
+                    "source_location": ["screens.rpy", 5],
                     "screen_owner": "say",
                     "crop_state": "none",
                     "editor_owned": False,
@@ -971,7 +971,10 @@ def _write_say_who_project(tmp_path: Path, *, gui_bytes: bytes) -> tuple[Path, P
     screens = game_dir / "screens.rpy"
     screens.write_text(
         'screen say(who, what):\n'
-        '    text who id "who"\n'
+        '    window:\n'
+        '        id "namebox"\n'
+        '        style "namebox"\n'
+        '        text who id "who"\n'
         '    text what id "what" style "say_dialogue"\n'
         '\n'
         'style namebox:\n'
@@ -1067,7 +1070,10 @@ def test_say_who_style_position_rejects_mixed_textbutton_intent(tmp_path: Path) 
     game_dir.mkdir(parents=True)
     (game_dir / "screens.rpy").write_text(
         'screen say(who, what):\n'
-        '    text who id "who"\n'
+        '    window:\n'
+        '        id "namebox"\n'
+        '        style "namebox"\n'
+        '        text who id "who"\n'
         '    text what id "what" style "say_dialogue"\n'
         '\n'
         'style namebox:\n'
@@ -1088,13 +1094,13 @@ def test_say_who_style_position_rejects_mixed_textbutton_intent(tmp_path: Path) 
             "screen": "hud",
             "invocation_path": "hud",
             "widget_id": "start_btn",
-            "source_location": ["screens.rpy", 10],
+            "source_location": ["screens.rpy", 13],
             "instance_discriminator": {"kind": "singleton", "instance_count": 1},
             "ancestry": [
                 {
                     "index": 0,
                     "type": "ScreenDisplayable",
-                    "source_location": ["screens.rpy", 9],
+                    "source_location": ["screens.rpy", 12],
                     "screen_owner": "hud",
                     "crop_state": "none",
                     "editor_owned": False,
@@ -1102,7 +1108,7 @@ def test_say_who_style_position_rejects_mixed_textbutton_intent(tmp_path: Path) 
                 {
                     "index": 1,
                     "type": "Button",
-                    "source_location": ["screens.rpy", 10],
+                    "source_location": ["screens.rpy", 13],
                     "screen_owner": "hud",
                     "crop_state": "none",
                     "editor_owned": False,
@@ -1177,6 +1183,75 @@ def test_say_who_style_position_rejects_mixed_textbutton_intent(tmp_path: Path) 
             )
             assert mixed["ok"] is False
             assert mixed["error"]["code"] == "MULTI_FILE_WRITE_UNSUPPORTED"
+    finally:
+        coordinator.close()
+
+
+def test_say_who_style_position_locks_when_who_is_outside_namebox(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    game_dir = root / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "screens.rpy").write_text(
+        'screen say(who, what):\n'
+        '    text who id "who"\n'
+        '    text what id "what" style "say_dialogue"\n'
+        '\n'
+        'style namebox:\n'
+        '    xpos gui.name_xpos\n'
+        '    ypos gui.name_ypos\n',
+        encoding="utf-8",
+    )
+    (game_dir / "gui.rpy").write_bytes(
+        b"define gui.name_xpos = gui.scale(240)\n"
+        b"define gui.name_ypos = gui.scale(0)\n"
+    )
+    observation = {
+        "runtime_key": {
+            "screen": "say",
+            "invocation_path": "say",
+            "widget_id": "who",
+            "source_location": ["screens.rpy", 2],
+            "instance_discriminator": {"kind": "singleton", "instance_count": 1},
+            "ancestry": [
+                {
+                    "index": 0,
+                    "type": "ScreenDisplayable",
+                    "source_location": ["screens.rpy", 1],
+                    "screen_owner": "say",
+                    "crop_state": "none",
+                    "editor_owned": False,
+                },
+                {
+                    "index": 1,
+                    "type": "Text",
+                    "source_location": ["screens.rpy", 2],
+                    "screen_owner": "say",
+                    "crop_state": "none",
+                    "editor_owned": False,
+                },
+            ],
+        },
+        "rect": [240, 535, 80, 24],
+        "measurement_method": "scene_tree_text",
+        "frame_id": "say-who-orphan",
+        "script_generation": 4,
+        "object_id": "say-who-orphan",
+    }
+    probe = _Probe(observe_reply=observation)
+    coordinator = EditorCoordinator(
+        RenpyProject(root),
+        _make_sdk(tmp_path),
+        attestation_timeout=2.0,
+    )
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analysis = _analyze(sock, auth, observation, request_id="an-who-orphan")
+            assert analysis["ok"] is True
+            assert analysis["result"]["capabilities"]["move"] is False
+            assert analysis["result"]["lock_reason"]["code"] == "STYLE_POSITION_SOURCE_UNRESOLVED"
     finally:
         coordinator.close()
 

@@ -2817,6 +2817,75 @@ def prove_say_who_text_binding(line: str) -> None:
     )
 
 
+_NAMEBOX_CONTAINER_KINDS = frozenset({"window", "frame"})
+
+
+def _block_header_and_direct_child_lines(lines: list[str], header_index: int) -> list[str]:
+    header = lines[header_index]
+    header_indent = _header_indent(header)
+    collected = [header]
+    child_indent: int | None = None
+    for index in range(header_index + 1, len(lines)):
+        line = lines[index]
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = _header_indent(line)
+        if indent <= header_indent:
+            break
+        if child_indent is None:
+            child_indent = indent
+        if indent == child_indent:
+            collected.append(line)
+    return collected
+
+
+def _line_has_literal_keyword(line: str, keyword: str, value: str) -> bool:
+    try:
+        tokens = [token for token in _lex_single_line(_statement_text(line)) if token.depth == 0]
+    except EditorSourceError:
+        return False
+    for index, token in enumerate(tokens[:-1]):
+        if token.kind != "WORD" or token.text != keyword:
+            continue
+        next_token = tokens[index + 1]
+        if next_token.kind == "STRING" and _parse_string_token(next_token) == value:
+            return True
+    return False
+
+
+def prove_say_who_namebox_ancestry(source_text: str, source_line: int) -> None:
+    """Require ``text who`` to sit inside a namebox that uses ``style namebox``.
+
+    ``gui.name_*`` positions the namebox window, not the who text. Unlock only
+    when an ancestor ``window``/``frame`` has both ``id "namebox"`` and
+    ``style "namebox"`` on its header or direct children.
+    """
+    lines = source_text.splitlines()
+    if source_line < 1 or source_line > len(lines):
+        raise EditorSourceError("SOURCE_LINE_INVALID", "source line is outside the source file")
+    current_line = source_line
+    while True:
+        parent_index = _find_parent_line(lines, current_line)
+        if parent_index < 0:
+            break
+        if peek_statement_kind(lines[parent_index]) in _NAMEBOX_CONTAINER_KINDS:
+            container_lines = _block_header_and_direct_child_lines(lines, parent_index)
+            has_id = any(
+                _line_has_literal_keyword(line, "id", "namebox") for line in container_lines
+            )
+            has_style = any(
+                _line_has_literal_keyword(line, "style", "namebox") for line in container_lines
+            )
+            if has_id and has_style:
+                return
+        current_line = parent_index + 1
+    raise EditorSourceError(
+        "STYLE_POSITION_SOURCE_UNRESOLVED",
+        'say.who is not nested in a window/frame with id "namebox" and style "namebox"',
+    )
+
+
 def analyze_say_dialogue_style_binding(
     source_text: str,
     *,

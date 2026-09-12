@@ -74,6 +74,7 @@ from .source import (
     is_textbutton_block_header,
     peek_statement_kind,
     prove_say_what_text_binding,
+    prove_say_who_namebox_ancestry,
     prove_say_who_text_binding,
     textbutton_patch_kwargs,
     uses_runtime_delta_position,
@@ -83,6 +84,7 @@ from .source import (
 @dataclass(frozen=True)
 class _SayStyleGuiAdapter:
     prove: Callable[[str], None]
+    prove_container: Callable[[str, int], None] | None
     style_name: str
     xpos_var: str
     ypos_var: str
@@ -94,6 +96,7 @@ class _SayStyleGuiAdapter:
 _SAY_STYLE_GUI_ADAPTERS: dict[str, _SayStyleGuiAdapter] = {
     "what": _SayStyleGuiAdapter(
         prove=prove_say_what_text_binding,
+        prove_container=None,
         style_name="say_dialogue",
         xpos_var="gui.dialogue_xpos",
         ypos_var="gui.dialogue_ypos",
@@ -103,6 +106,7 @@ _SAY_STYLE_GUI_ADAPTERS: dict[str, _SayStyleGuiAdapter] = {
     ),
     "who": _SayStyleGuiAdapter(
         prove=prove_say_who_text_binding,
+        prove_container=prove_say_who_namebox_ancestry,
         style_name="namebox",
         xpos_var="gui.name_xpos",
         ypos_var="gui.name_ypos",
@@ -682,6 +686,8 @@ class EditorCoordinator:
 
                     try:
                         say_gui_adapter.prove(header_line)
+                        if say_gui_adapter.prove_container is not None:
+                            say_gui_adapter.prove_container(source_text, source_line)
                     except EditorSourceError as exc:
                         move_lock_reason = self._lock_reason(exc.code, str(exc))
                         say_style_position = None
