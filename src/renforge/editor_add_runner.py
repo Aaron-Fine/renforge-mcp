@@ -91,7 +91,7 @@ def _wait_analysis(client: Any, widget_id: str, *, unlocked: bool) -> dict[str, 
     return _wait_for_status(
         client,
         lambda status: status.get("selected_widget_id") == widget_id
-        or status.get("selected_lock_reason") not in (None, "", "ANALYZING"),
+        and status.get("selected_lock_reason") not in (None, "", "ANALYZING"),
         timeout=10.0,
         poll_name=f"{widget_id} lock",
     )
@@ -239,7 +239,7 @@ def run_editor_add_live_scenario(
     expr_lock = expr_select.get("lock_reason")
     if expr_lock != "XPOS_LITERAL_REQUIRED":
         expr_status = _wait_analysis(client, "add_expr", unlocked=False)
-        expr_lock = expr_select.get("lock_reason") or expr_status.get("selected_lock_reason")
+        expr_lock = expr_status.get("selected_lock_reason") or expr_select.get("lock_reason")
     locks["expression"] = expr_lock
     if locks["expression"] != "XPOS_LITERAL_REQUIRED":
         raise AssertionError(f"expression xpos lock was not XPOS_LITERAL_REQUIRED: {locks['expression']!r}")
