@@ -216,7 +216,8 @@ def run_editor_add_live_scenario(
         "matches_baseline": fixture_path.read_bytes() == baseline_bytes,
         "patched_differed": report["patch"]["after_sha256"] != baseline_sha,
     }
-
+    _require_ok(client.control("reload_script"), "restore reload after add save")
+    _activate_overlay(client)
     _show_fixture(client)
     frame_line, _ = _target_line_with_offset(baseline_text, FRAME_ID, "frame")
     frame_parsed = analyze_frame_position_statement(frame_line, expected_widget_id=FRAME_ID)
@@ -296,8 +297,8 @@ def run_editor_add_live_scenario(
     public_save = live.editor(
         str(project_path),
         "save",
-        x=TARGET["x"] + 104,
-        y=TARGET["y"] + 66,
+        x=TARGET["x"] + 20,
+        y=TARGET["y"] + 16,
     )
     if public_save.get("ok") is not True:
         raise AssertionError(f"public save failed: {public_save!r}")
@@ -312,7 +313,7 @@ def run_editor_add_live_scenario(
         "source_position_after": public_after,
     }
     fixture_path.write_bytes(baseline_bytes)
-
+    _require_ok(client.control("reload_script"), "restore reload after public save")
     _activate_overlay(client)
     chrome_select = _select_point(client, CHROME["x"], CHROME["y"])
     chrome_status = client.request("editor_task0_status", {})
