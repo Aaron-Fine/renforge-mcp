@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from renforge.bridge.client import BridgeClient, BridgeProtocolError
+from renforge.bridge.client import BridgeClient, BridgeError, BridgeProtocolError
 
 
 FIXTURE_SCREEN = "say"
@@ -51,7 +51,7 @@ def _wait_for_transaction(
                 and source_path.read_bytes() == expected_bytes
             ):
                 return status
-        except (BridgeProtocolError, OSError):
+        except (BridgeError, BridgeProtocolError, OSError):
             pass
         time.sleep(0.25)
     return last_status
