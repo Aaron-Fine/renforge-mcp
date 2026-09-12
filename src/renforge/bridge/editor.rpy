@@ -462,29 +462,11 @@ init 1090 python:
         "inspector.global_scope_notice": "⚠ This change affects all standard dialogue lines",
     }
     _RF_UI_STRINGS_READY = []
-    _RF_STYLE_GUI_POSITION_MODES = ("style_gui_dialogue", "style_gui_namebox")
-
-    def _renforge_editor_is_style_gui_position(source_key):
-        return (
-            isinstance(source_key, builtins.dict)
-            and source_key.get("position_mode") in _RF_STYLE_GUI_POSITION_MODES
-        )
 
     def _renforge_editor_ownership_style_position_key(position_mode):
         if position_mode == "style_gui_namebox":
             return "inspector.ownership_style_position_who"
         return "inspector.ownership_style_position"
-
-    def _renforge_editor_style_gui_preview_widget_id(target):
-        """Who writes style namebox. Preview the namebox window, not the text."""
-        widget_id = target.get("widget_id") if isinstance(target, builtins.dict) else None
-        source_key = target.get("source_key") if isinstance(target, builtins.dict) else None
-        if (
-            _renforge_editor_is_style_gui_position(source_key)
-            and source_key.get("position_mode") == "style_gui_namebox"
-        ):
-            return "namebox"
-        return widget_id
 
     def _renforge_editor_language():
         import os
@@ -586,6 +568,26 @@ init 1100 python:
     import time
     import types
     import uuid
+
+    # Tests exec only this init 1100 body. Keep style-gui helpers here, not in 1090.
+    _RF_STYLE_GUI_POSITION_MODES = ("style_gui_dialogue", "style_gui_namebox")
+
+    def _renforge_editor_is_style_gui_position(source_key):
+        return (
+            isinstance(source_key, builtins.dict)
+            and source_key.get("position_mode") in _RF_STYLE_GUI_POSITION_MODES
+        )
+
+    def _renforge_editor_style_gui_preview_widget_id(target):
+        """Who writes style namebox. Preview the namebox window, not the text."""
+        widget_id = target.get("widget_id") if isinstance(target, builtins.dict) else None
+        source_key = target.get("source_key") if isinstance(target, builtins.dict) else None
+        if (
+            _renforge_editor_is_style_gui_position(source_key)
+            and source_key.get("position_mode") == "style_gui_namebox"
+        ):
+            return "namebox"
+        return widget_id
 
     try:
         import pygame_sdl2 as pygame
