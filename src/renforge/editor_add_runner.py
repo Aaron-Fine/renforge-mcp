@@ -279,7 +279,7 @@ def run_editor_add_live_scenario(
     _require_ok(_select_point(client, *_center(TARGET)), "exit-preview select")
     _wait_analysis(client, TARGET_ID, unlocked=True)
     _require_ok(client.request("editor_task0_key", {"key": "right", "repeat": 8}), "exit nudge")
-    exit_click = client.click_element(text="Exit", exact=True, screen="_renforge_editor_overlay")
+    exit_click = client.click_element(id="rf_exit", screen="_renforge_editor_overlay")
     if exit_click.get("ok") is not True:
         raise AssertionError(f"Exit click failed: {exit_click!r}")
     if _sha256_file(fixture_path) != preview_sha_before:
