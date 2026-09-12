@@ -9,6 +9,8 @@ from renforge.editor.source import (
     SayDialogueStyleBinding,
     analyze_say_dialogue_style_binding,
     prove_say_what_text_binding,
+    prove_say_who_namebox_ancestry,
+    prove_say_who_text_binding,
 )
 
 
@@ -286,5 +288,170 @@ def test_prove_say_what_text_binding_accepts_only_standard_forms(line: str) -> N
 def test_prove_say_what_text_binding_rejects_custom_forms(line: str) -> None:
     with pytest.raises(EditorSourceError) as exc_info:
         prove_say_what_text_binding(line)
+
+    assert exc_info.value.code == "STYLE_POSITION_SOURCE_UNRESOLVED"
+
+
+def test_analyze_namebox_style_binding_unlocks_when_proven() -> None:
+    source = """
+screen say(who, what):
+    text who id "who"
+    text what id "what"
+
+style namebox:
+    xpos gui.name_xpos
+    ypos gui.name_ypos
+"""
+
+    binding = analyze_say_dialogue_style_binding(
+        source,
+        xpos_var="gui.name_xpos",
+        ypos_var="gui.name_ypos",
+        style_name="namebox",
+    )
+
+    assert binding.binding_proven is True
+    assert binding.lock_code is None
+
+
+def test_analyze_namebox_style_binding_ignores_style_namebox_is_default() -> None:
+    source = """
+style namebox is default
+
+style namebox:
+    xpos gui.name_xpos
+    ypos gui.name_ypos
+"""
+
+    binding = analyze_say_dialogue_style_binding(
+        source,
+        xpos_var="gui.name_xpos",
+        ypos_var="gui.name_ypos",
+        style_name="namebox",
+    )
+
+    assert binding.binding_proven is True
+
+
+def test_analyze_namebox_style_binding_locks_when_style_missing() -> None:
+    source = """
+screen say(who, what):
+    text who id "who"
+"""
+
+    binding = analyze_say_dialogue_style_binding(
+        source,
+        xpos_var="gui.name_xpos",
+        ypos_var="gui.name_ypos",
+        style_name="namebox",
+    )
+
+    assert binding.binding_proven is False
+    assert binding.lock_code == "STYLE_POSITION_SOURCE_UNRESOLVED"
+    assert "namebox" in (binding.lock_message or "")
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'text who id "who"\n',
+        'text who id "who" style "say_label"\n',
+    ],
+)
+def test_prove_say_who_text_binding_accepts_only_standard_forms(line: str) -> None:
+    prove_say_who_text_binding(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'text custom_text id "who"\n',
+        'text who id "other"\n',
+        'text who id "who" style "custom_label"\n',
+        'text who id "who" xpos 10\n',
+    ],
+)
+def test_prove_say_who_text_binding_rejects_custom_forms(line: str) -> None:
+    with pytest.raises(EditorSourceError) as exc_info:
+        prove_say_who_text_binding(line)
+
+    assert exc_info.value.code == "STYLE_POSITION_SOURCE_UNRESOLVED"
+
+
+def test_prove_say_who_namebox_ancestry_unlocks_standard_window() -> None:
+    source = """
+screen say(who, what):
+    window:
+        id "namebox"
+        style "namebox"
+        text who id "who"
+"""
+    prove_say_who_namebox_ancestry(source, 6)
+
+
+def test_prove_say_who_namebox_ancestry_unlocks_through_if_and_header_form() -> None:
+    source = """
+screen say(who, what):
+    window:
+        id "window"
+        if who is not None:
+            window id "namebox" style "namebox":
+                text who id "who"
+"""
+    prove_say_who_namebox_ancestry(source, 7)
+
+
+def test_prove_say_who_namebox_ancestry_unlocks_frame_container() -> None:
+    source = """
+screen say(who, what):
+    frame:
+        id "namebox"
+        style "namebox"
+        text who id "who"
+"""
+    prove_say_who_namebox_ancestry(source, 6)
+
+
+@pytest.mark.parametrize(
+    "source,source_line",
+    [
+        (
+            'screen say(who, what):\n'
+            '    text who id "who"\n'
+            '    window:\n'
+            '        id "namebox"\n'
+            '        style "namebox"\n',
+            2,
+        ),
+        (
+            'screen say(who, what):\n'
+            '    window:\n'
+            '        id "namebox"\n'
+            '        text who id "who"\n',
+            4,
+        ),
+        (
+            'screen say(who, what):\n'
+            '    window:\n'
+            '        style "namebox"\n'
+            '        text who id "who"\n',
+            4,
+        ),
+        (
+            'screen say(who, what):\n'
+            '    window:\n'
+            '        id "window"\n'
+            '        style "namebox"\n'
+            '        text who id "who"\n',
+            5,
+        ),
+    ],
+)
+def test_prove_say_who_namebox_ancestry_locks_unrelated_layouts(
+    source: str,
+    source_line: int,
+) -> None:
+    with pytest.raises(EditorSourceError) as exc_info:
+        prove_say_who_namebox_ancestry(source, source_line)
 
     assert exc_info.value.code == "STYLE_POSITION_SOURCE_UNRESOLVED"

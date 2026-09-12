@@ -98,5 +98,6 @@
   "lock.reason.style_position_variant_unsupported": "手机/小屏幕变体覆盖阻止桌面编辑。",
   "inspector.ownership_chain": "所有权",
   "inspector.ownership_style_position": "say.what → 样式 say_dialogue → gui.dialogue_xpos/ypos",
+  "inspector.ownership_style_position_who": "say.who → 样式 namebox → gui.name_xpos/ypos",
   "inspector.global_scope_notice": "⚠ 此更改影响所有标准对话行"
 }
