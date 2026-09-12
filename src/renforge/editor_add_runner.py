@@ -211,14 +211,6 @@ def run_editor_add_live_scenario(
         "generation_delta": 1,
     }
 
-    fixture_path.write_bytes(baseline_bytes)
-    report["byte_identical_undo"] = {
-        "matches_baseline": fixture_path.read_bytes() == baseline_bytes,
-        "patched_differed": report["patch"]["after_sha256"] != baseline_sha,
-    }
-    _require_ok(client.control("reload_script"), "restore reload after add save")
-    _activate_overlay(client)
-    _show_fixture(client)
     frame_line, _ = _target_line_with_offset(baseline_text, FRAME_ID, "frame")
     frame_parsed = analyze_frame_position_statement(frame_line, expected_widget_id=FRAME_ID)
     frame_select = _select_point(client, *_center(FRAME))
@@ -277,7 +269,13 @@ def run_editor_add_live_scenario(
         raise AssertionError(f"Transform add unlocked on this path: {locks['transform']!r}")
 
     preview_sha_before = _sha256_file(fixture_path)
-    _require_ok(_select_point(client, *_center(TARGET)), "exit-preview select")
+    moved_target = {
+        "x": int(requested_after[0]),
+        "y": int(requested_after[1]),
+        "w": int(TARGET["w"]),
+        "h": int(TARGET["h"]),
+    }
+    _require_ok(_select_point(client, *_center(moved_target)), "exit-preview select")
     _wait_analysis(client, TARGET_ID, unlocked=True)
     _require_ok(client.request("editor_task0_key", {"key": "right", "repeat": 8}), "exit nudge")
     exit_click = client.click_element(id="rf_exit", screen="_renforge_editor_overlay")
@@ -287,9 +285,9 @@ def run_editor_add_live_scenario(
         raise AssertionError("preview Exit changed fixture bytes")
     report["preview_exit"] = {"sha_unchanged": True}
 
-    _activate_overlay(client)
-    _show_fixture(client)
-    public_select = live.editor(str(project_path), "select", x=TARGET["x"] + 80, y=TARGET["y"] + 50)
+    public_x = int(requested_after[0]) + int(TARGET["w"]) // 2
+    public_y = int(requested_after[1]) + int(TARGET["h"]) // 2
+    public_select = live.editor(str(project_path), "select", x=public_x, y=public_y)
     if public_select.get("ok") is not True:
         raise AssertionError(f"public select failed: {public_select!r}")
     if "editor_task0" in str(public_select):
@@ -297,8 +295,8 @@ def run_editor_add_live_scenario(
     public_save = live.editor(
         str(project_path),
         "save",
-        x=TARGET["x"] + 20,
-        y=TARGET["y"] + 16,
+        x=int(requested_after[0]) + 20,
+        y=int(requested_after[1]) + 16,
     )
     if public_save.get("ok") is not True:
         raise AssertionError(f"public save failed: {public_save!r}")
@@ -312,9 +310,6 @@ def run_editor_add_live_scenario(
         "save_ok": True,
         "source_position_after": public_after,
     }
-    fixture_path.write_bytes(baseline_bytes)
-    _require_ok(client.control("reload_script"), "restore reload after public save")
-    _activate_overlay(client)
     chrome_select = _select_point(client, CHROME["x"], CHROME["y"])
     chrome_status = client.request("editor_task0_status", {})
     chrome_move = ((chrome_status or {}).get("current_capabilities") or {}).get("move") is True
@@ -344,6 +339,10 @@ def run_editor_add_live_scenario(
         raise AssertionError(f"say SideImage unlocked: {report['say_sideimage']!r}")
 
     report["locks"] = locks
-    if fixture_path.read_bytes() != baseline_bytes:
-        fixture_path.write_bytes(baseline_bytes)
+    patched_after_public = fixture_path.read_bytes() != baseline_bytes
+    fixture_path.write_bytes(baseline_bytes)
+    report["byte_identical_undo"] = {
+        "matches_baseline": fixture_path.read_bytes() == baseline_bytes,
+        "patched_differed": patched_after_public and report["patch"]["after_sha256"] != baseline_sha,
+    }
     return report
