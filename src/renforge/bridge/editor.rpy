@@ -475,6 +475,17 @@ init 1090 python:
             return "inspector.ownership_style_position_who"
         return "inspector.ownership_style_position"
 
+    def _renforge_editor_style_gui_preview_widget_id(target):
+        """Who writes style namebox. Preview the namebox window, not the text."""
+        widget_id = target.get("widget_id") if isinstance(target, builtins.dict) else None
+        source_key = target.get("source_key") if isinstance(target, builtins.dict) else None
+        if (
+            _renforge_editor_is_style_gui_position(source_key)
+            and source_key.get("position_mode") == "style_gui_namebox"
+        ):
+            return "namebox"
+        return widget_id
+
     def _renforge_editor_language():
         import os
         return (os.environ.get("RENFORGE_EDITOR_LANG") or "").strip() or "en"
@@ -3746,7 +3757,7 @@ init 1100 python:
         for target in state.targets.values():
             if target.get("screen") != screen:
                 continue
-            widget_id = target.get("widget_id")
+            widget_id = _renforge_editor_style_gui_preview_widget_id(target)
             if not widget_id:
                 continue
             props = {}
@@ -3932,7 +3943,7 @@ init 1100 python:
             return default_x, default_y
 
         screen_name = target.get("screen")
-        widget_id = target.get("widget_id")
+        widget_id = _renforge_editor_style_gui_preview_widget_id(target)
         widget = None
         if isinstance(screen_name, str) and isinstance(widget_id, str):
             widget = _renforge_editor_find_widget_by_id(screen_name, widget_id)
