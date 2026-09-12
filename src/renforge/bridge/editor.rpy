@@ -458,9 +458,22 @@ init 1090 python:
         "lock.reason.style_position_variant_unsupported": "Phone/small variant overrides prevent desktop editing.",
         "inspector.ownership_chain": "OWNERSHIP",
         "inspector.ownership_style_position": "say.what → style say_dialogue → gui.dialogue_xpos/ypos",
+        "inspector.ownership_style_position_who": "say.who → style namebox → gui.name_xpos/ypos",
         "inspector.global_scope_notice": "⚠ This change affects all standard dialogue lines",
     }
     _RF_UI_STRINGS_READY = []
+    _RF_STYLE_GUI_POSITION_MODES = ("style_gui_dialogue", "style_gui_namebox")
+
+    def _renforge_editor_is_style_gui_position(source_key):
+        return (
+            isinstance(source_key, builtins.dict)
+            and source_key.get("position_mode") in _RF_STYLE_GUI_POSITION_MODES
+        )
+
+    def _renforge_editor_ownership_style_position_key(position_mode):
+        if position_mode == "style_gui_namebox":
+            return "inspector.ownership_style_position_who"
+        return "inspector.ownership_style_position"
 
     def _renforge_editor_language():
         import os
@@ -4062,9 +4075,9 @@ init 1100 python:
                 ]
             _renforge_editor_set_label(state.pointer[0], state.pointer[1])
 
-            # Track preview method for say.what style position
+            # Track preview method for style-backed say position
             source_key = target.get("source_key")
-            if isinstance(source_key, builtins.dict) and source_key.get("position_mode") == "style_gui_dialogue":
+            if _renforge_editor_is_style_gui_position(source_key):
                 state.last_preview_method = "style_widget_override"
 
         return {"ok": True, "x": next_position[0], "y": next_position[1]}
@@ -4904,7 +4917,7 @@ init 1100 python:
             target = state.targets.get(state.selected_target_key)
             if isinstance(target, builtins.dict):
                 source_key = target.get("source_key")
-                if isinstance(source_key, builtins.dict) and source_key.get("position_mode") == "style_gui_dialogue":
+                if _renforge_editor_is_style_gui_position(source_key):
                     preview_method = "style_widget_override"
 
         state.last_preview_method = preview_method
@@ -4941,8 +4954,8 @@ init 1100 python:
             if isinstance(source_key, builtins.dict):
                 position_mode = source_key.get("position_mode")
 
-                # style_gui_dialogue: restore by mutating style, not rebuilding say screen
-                if position_mode == "style_gui_dialogue":
+                # style-backed say position: restore by mutating style, not rebuilding say
+                if position_mode in _RF_STYLE_GUI_POSITION_MODES:
                     baseline = list(target.get("runtime_baseline") or [])
                     if len(baseline) == 2:
                         try:
@@ -6276,7 +6289,7 @@ init 1100 python:
                 and intent.get("x") is not None
                 and intent.get("y") is not None
                 and isinstance(intent.get("source_key"), builtins.dict)
-                and intent["source_key"].get("position_mode") == "style_gui_dialogue"
+                and intent["source_key"].get("position_mode") in _RF_STYLE_GUI_POSITION_MODES
                 for intent in intents
             )
         )
