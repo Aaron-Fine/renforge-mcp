@@ -6,27 +6,33 @@ import pytest
 
 from renforge.editor.paths import EditorPathError, resolve_game_path
 from renforge.editor.source import (
+    AddPositionStatement,
     BarStatement,
     ButtonSiblingSwapPlan,
     ButtonStatement,
     EditorSourceError,
+    FramePositionStatement,
     SliderStatement,
     TextbuttonStatement,
     VbarStatement,
+    analyze_add_position_statement,
     analyze_raise_adjacent_sibling,
     analyze_bar_statement,
     analyze_button_statement,
     analyze_editable_statement,
+    analyze_frame_position_statement,
     analyze_imagebutton_statement,
     analyze_slider_statement,
     analyze_text_position_statement,
     analyze_textbutton_block_statement,
     analyze_textbutton_statement,
     analyze_vbar_statement,
+    apply_add_position_patch,
     apply_bar_patch,
     apply_button_patch,
     apply_button_sibling_swap,
     apply_editable_statement_patch,
+    apply_frame_position_patch,
     apply_imagebutton_patch,
     apply_slider_patch,
     apply_text_position_patch,
@@ -629,7 +635,7 @@ def test_analyze_editable_statement_routes_kinds() -> None:
             '    frame id "f" xpos 1 ypos 2:\n',
             expected_widget_id="f",
         )
-    assert excinfo.value.code == "STATEMENT_KIND_MISMATCH"
+    assert excinfo.value.code == "MULTILINE_STATEMENT_REJECTED"
 
     vbar_line = (
         '    vbar value StaticValue(50) range 100 id "vb" xpos 1 ypos 2 xsize 10 ysize 40\n'
@@ -1655,3 +1661,95 @@ def test_analyze_raise_adjacent_sibling_rejects_unresolved_button_ids() -> None:
             sibling_widget_id="sibling",
         )
     assert error.value.code == "AMBIGUOUS_OWNERSHIP"
+
+
+def test_analyze_add_position_statement_rewrites_only_xy() -> None:
+    line = '    add Solid("#4f46e5", xysize=(160, 100)) id "add_target" xpos 200 ypos 180\n'
+    statement = analyze_add_position_statement(line, expected_widget_id="add_target")
+    assert isinstance(statement, AddPositionStatement)
+    assert statement.widget_id == "add_target"
+    assert (statement.xpos, statement.ypos) == (200, 180)
+    patched = apply_add_position_patch(line.encode("utf-8"), statement, x=240, y=196).decode("utf-8")
+    assert patched == '    add Solid("#4f46e5", xysize=(160, 100)) id "add_target" xpos 240 ypos 196\n'
+
+
+def test_analyze_frame_position_statement_rewrites_only_xy() -> None:
+    line = '    frame id "deco_frame" xpos 40 ypos 60 xysize (120, 80) background Solid("#22c55e")\n'
+    statement = analyze_frame_position_statement(line, expected_widget_id="deco_frame")
+    assert isinstance(statement, FramePositionStatement)
+    assert (statement.xpos, statement.ypos) == (40, 60)
+    patched = apply_frame_position_patch(line.encode("utf-8"), statement, x=48, y=72).decode("utf-8")
+    assert patched == '    frame id "deco_frame" xpos 48 ypos 72 xysize (120, 80) background Solid("#22c55e")\n'
+
+
+def test_analyze_add_and_frame_lock_matrix() -> None:
+    with pytest.raises(EditorSourceError) as excinfo:
+        analyze_add_position_statement(
+            '    add SideImage() id "side" xpos 20 ypos 500\n',
+            expected_widget_id="side",
+        )
+    assert excinfo.value.code == "STATEMENT_KIND_MISMATCH"
+
+    with pytest.raises(EditorSourceError) as excinfo:
+        analyze_add_position_statement(
+            '    add Solid("#111") id "add_expr" xpos some_var ypos 10\n',
+            expected_widget_id="add_expr",
+        )
+    assert excinfo.value.code == "XPOS_LITERAL_REQUIRED"
+
+    with pytest.raises(EditorSourceError) as excinfo:
+        analyze_add_position_statement(
+            '    add Solid("#111") id "add_expr" xpos 10 ypos some_var\n',
+            expected_widget_id="add_expr",
+        )
+    assert excinfo.value.code == "YPOS_LITERAL_REQUIRED"
+
+    with pytest.raises(EditorSourceError) as excinfo:
+        analyze_add_position_statement(
+            '    add Solid("#111") xpos 10 ypos 20\n',
+            expected_widget_id="missing",
+        )
+    assert excinfo.value.code == "ID_LITERAL_REQUIRED"
+
+    with pytest.raises(EditorSourceError) as excinfo:
+        analyze_add_position_statement(
+            '    add Solid("#111") id "other" xpos 10 ypos 20\n',
+            expected_widget_id="add_target",
+        )
+    assert excinfo.value.code == "ID_MISMATCH"
+
+    with pytest.raises(EditorSourceError) as excinfo:
+        analyze_frame_position_statement(
+            '    frame id "deco_frame" xpos 40 ypos 60:\n',
+            expected_widget_id="deco_frame",
+        )
+    assert excinfo.value.code == "MULTILINE_STATEMENT_REJECTED"
+
+    with pytest.raises(EditorSourceError) as excinfo:
+        analyze_add_position_statement(
+            '    text "nope" id "add_target" xpos 10 ypos 20\n',
+            expected_widget_id="add_target",
+        )
+    assert excinfo.value.code == "STATEMENT_KIND_MISMATCH"
+
+    kind, stmt = analyze_editable_statement(
+        '    add Solid("#abc") id "leaf" xpos 8 ypos 9\n',
+        expected_widget_id="leaf",
+    )
+    assert kind == "add"
+    assert isinstance(stmt, AddPositionStatement)
+    patched = apply_editable_statement_patch(
+        b'    add Solid("#abc") id "leaf" xpos 8 ypos 9\n',
+        kind,
+        stmt,
+        x=18,
+        y=19,
+    ).decode("utf-8")
+    assert patched == '    add Solid("#abc") id "leaf" xpos 18 ypos 19\n'
+
+    kind_frame, stmt_frame = analyze_editable_statement(
+        '    frame id "deco" xpos 1 ypos 2 xysize (40, 40)\n',
+        expected_widget_id="deco",
+    )
+    assert kind_frame == "frame"
+    assert isinstance(stmt_frame, FramePositionStatement)

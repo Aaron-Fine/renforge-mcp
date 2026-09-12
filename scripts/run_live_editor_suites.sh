@@ -19,6 +19,7 @@ cd "$(dirname "$0")/.." || exit 1
 # Literal acceptance table: one "file gate" pair per suite, in suite order.
 # The pre-run validation below enforces sync with tests/test_editor_*_live.py.
 SUITES="
+test_editor_add_live.py RENFORGE_ADD_LIVE
 test_editor_align_live.py RENFORGE_ALIGN_LIVE
 test_editor_anchor_live.py RENFORGE_ANCHOR_LIVE
 test_editor_animated_live.py RENFORGE_ANIMATED_LIVE

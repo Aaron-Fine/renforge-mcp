@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from renforge.editor import EditorCoordinator, RuntimeProbe
+from renforge.editor.coordinator import expected_measurement_method
 from renforge.editor.exceptions import EditorError
 from renforge.editor.source import peek_statement_kind
 from renforge.project import RenpyProject
@@ -1962,7 +1963,125 @@ def test_analyze_rejects_unsupported_statement_kind(tmp_path: Path) -> None:
             reply = _analyze(sock, auth, observation, request_id="an-frame")
             assert reply["ok"] is True
             assert reply["result"]["capabilities"] == {"move": False, "resize": False}
-            assert reply["result"]["lock_reason"]["code"] == "STATEMENT_KIND_MISMATCH"
+            assert reply["result"]["lock_reason"]["code"] == "MULTILINE_STATEMENT_REJECTED"
+    finally:
+        coordinator.close()
+
+
+def _make_add_project(tmp_path: Path) -> tuple[RenpyProject, Path]:
+    root = tmp_path / "project_add"
+    game_dir = root / "game"
+    game_dir.mkdir(parents=True)
+    source = game_dir / "script.rpy"
+    source.write_text(
+        "screen test_screen:\n"
+        '    add Solid("#4f46e5", xysize=(160, 100)) id "start_btn" xpos 12 ypos 10\n',
+        encoding="utf-8",
+    )
+    return RenpyProject(root), source
+
+
+def _add_observation(script_generation: int = 12) -> dict[str, Any]:
+    observation = _base_observation(script_generation=script_generation)
+    observation["measurement_method"] = "scene_tree_displayable"
+    observation["runtime_key"]["ancestry"][1]["type"] = "Solid"
+    return observation
+
+
+def test_analyze_and_commit_add_statement(tmp_path: Path) -> None:
+    project, source = _make_add_project(tmp_path)
+    observation = _add_observation()
+    probe = _Probe(
+        observe_reply={
+            **json.loads(json.dumps(observation)),
+            "frame_id": "independent-frame-add",
+            "object_id": "obj-independent-add",
+        },
+        attest_reply={"ok": True, "state": "all_targets_attested"},
+    )
+    coordinator = EditorCoordinator(project, _make_sdk(tmp_path), attestation_timeout=2.0)
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analyzed = _analyze(sock, auth, observation, request_id="an-add")
+            assert analyzed["ok"] is True
+            result = analyzed["result"]
+            assert result["lock_reason"] is None
+            assert result["capabilities"] == {"move": True, "resize": False}
+            assert result["source_key"]["statement_kind"] == "add"
+            assert result["original_position"] == [12, 10]
+
+            committed = _commit(sock, auth, analyzed, x=40, y=50, request_id="co-add")
+            assert committed.get("ok") is True, (
+                f"error={committed.get('error')!r} diagnostics={committed.get('diagnostics')!r}"
+            )
+            assert committed["result"]["state"] == "published"
+            assert "xpos 40 ypos 50" in source.read_text(encoding="utf-8")
+            assert 'id "start_btn"' in source.read_text(encoding="utf-8")
+    finally:
+        coordinator.close()
+
+
+def test_analyze_add_rejects_focus_list_measurement(tmp_path: Path) -> None:
+    project, _source = _make_add_project(tmp_path)
+    observation = _add_observation()
+    observation["measurement_method"] = "focus_list"
+    probe = _Probe(
+        observe_reply={
+            **json.loads(json.dumps(observation)),
+            "frame_id": "independent-frame-add-focus",
+            "object_id": "obj-independent-add-focus",
+        }
+    )
+    coordinator = EditorCoordinator(project, _make_sdk(tmp_path))
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analyzed = _analyze(sock, auth, observation, request_id="an-add-focus")
+            assert analyzed["ok"] is True
+            assert analyzed["result"]["lock_reason"]["code"] == "MEASUREMENT_METHOD_INVALID"
+            assert analyzed["result"]["capabilities"]["move"] is False
+    finally:
+        coordinator.close()
+
+
+def test_analyze_and_commit_frame_statement(tmp_path: Path) -> None:
+    root = tmp_path / "project_frame"
+    game_dir = root / "game"
+    game_dir.mkdir(parents=True)
+    source = game_dir / "script.rpy"
+    source.write_text(
+        "screen test_screen:\n"
+        '    frame id "start_btn" xpos 12 ypos 10 xysize (80, 48) background Solid("#22c55e")\n',
+        encoding="utf-8",
+    )
+    observation = _add_observation()
+    observation["runtime_key"]["ancestry"][1]["type"] = "Window"
+    probe = _Probe(
+        observe_reply={
+            **json.loads(json.dumps(observation)),
+            "frame_id": "independent-frame-frameok",
+            "object_id": "obj-independent-frameok",
+        },
+        attest_reply={"ok": True, "state": "all_targets_attested"},
+    )
+    coordinator = EditorCoordinator(RenpyProject(root), _make_sdk(tmp_path), attestation_timeout=2.0)
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analyzed = _analyze(sock, auth, observation, request_id="an-frame-ok")
+            assert analyzed["ok"] is True
+            assert analyzed["result"]["lock_reason"] is None
+            assert analyzed["result"]["source_key"]["statement_kind"] == "frame"
+            committed = _commit(sock, auth, analyzed, x=22, y=30, request_id="co-frame-ok")
+            assert committed.get("ok") is True, committed
+            assert "xpos 22 ypos 30" in source.read_text(encoding="utf-8")
     finally:
         coordinator.close()
 
@@ -3503,3 +3622,10 @@ def test_zorder_structural_swap_rejections(tmp_path: Path) -> None:
             assert non_adj_res["error"]["code"] in ("BUTTON_SIBLING_ORDER_INVALID", "SOURCE_LINE_INVALID", "BUTTON_BLOCK_REQUIRED", "TARGET_NOT_BUTTON")
     finally:
         coordinator.close()
+
+
+def test_expected_measurement_method_for_add_and_frame() -> None:
+    assert expected_measurement_method("text") == "scene_tree_text"
+    assert expected_measurement_method("add") == "scene_tree_displayable"
+    assert expected_measurement_method("frame") == "scene_tree_displayable"
+    assert expected_measurement_method("textbutton") == "focus_list"

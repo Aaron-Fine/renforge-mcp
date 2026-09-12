@@ -381,6 +381,8 @@ init 1090 python:
         "lock.reason.unsupported": "This source form is not editable yet.",
         "lock.reason.mismatch": "The live element no longer matches its source.",
         "lock.reason.ambiguous": "This selection does not resolve to one unique source element.",
+        "lock.reason.ambiguous_hit": "Several non-focusable elements overlap here. Move them apart to edit.",
+        "lock.reason.statement_kind_mismatch": "This displayable's source form is not a writable add or frame.",
         "lock.reason.default": "This selection cannot be edited safely.",
         "tree.title": "SCENE TREE",
         "tree.items_count": "{count} items",
@@ -639,6 +641,9 @@ init 1100 python:
             "VBox",
             "Drag",
             "Null",
+            "Solid",
+            "Image",
+            "ImageReference",
         ]
     )
 
@@ -1015,6 +1020,7 @@ init 1100 python:
         "Grid": ("G", "grid", "layout"),
         "Image": ("I", "image", "content"),
         "ImageReference": ("I", "image", "content"),
+        "Solid": ("I", "add", "content"),
         "Transform": ("X", "transform", "transform"),
     }
     _RF_TREE_MAX_ROWS = 1000
@@ -2151,6 +2157,8 @@ init 1100 python:
     _RF_LOCK_REASON_KEYS = {
         "XPOS_LITERAL_REQUIRED": "lock.reason.xpos_literal_required",
         "YPOS_LITERAL_REQUIRED": "lock.reason.ypos_literal_required",
+        "AMBIGUOUS_HIT": "lock.reason.ambiguous_hit",
+        "STATEMENT_KIND_MISMATCH": "lock.reason.statement_kind_mismatch",
         "STYLE_POSITION_SOURCE_UNRESOLVED": "lock.reason.style_position_source_unresolved",
         "STYLE_POSITION_SOURCE_AMBIGUOUS": "lock.reason.style_position_source_ambiguous",
         "STYLE_POSITION_EXPRESSION_UNSUPPORTED": "lock.reason.style_position_expression_unsupported",
@@ -3596,9 +3604,257 @@ init 1100 python:
         return candidates
 
 
+    def _renforge_editor_has_text_descendant(widget):
+        try:
+            text_type = renpy.text.text.Text
+        except Exception:
+            text_type = None
+        stack = list(_renforge_editor_children(widget))
+        seen = set([id(widget)])
+        while stack:
+            node = stack.pop()
+            if node is None or id(node) in seen:
+                continue
+            seen.add(id(node))
+            if text_type is not None:
+                try:
+                    if isinstance(node, text_type):
+                        return True
+                except Exception:
+                    pass
+            stack.extend(_renforge_editor_children(node))
+        return False
+
+
+    def _renforge_editor_displayable_statement_kind(widget):
+        name = getattr(getattr(widget, "__class__", None), "__name__", "")
+        if name in ("Frame", "Window"):
+            return "frame"
+        if name in ("Solid", "Image", "ImageReference"):
+            return "add"
+        return None
+
+
+    def _renforge_editor_runtime_key_from_displayable_widget(
+        screen_name,
+        widget,
+        widget_id,
+        ordinal,
+        instances=None,
+        statement_kind="add",
+    ):
+        if not isinstance(screen_name, str) or not screen_name:
+            return None, "MISSING_INVOCATION_PATH", None
+        if not isinstance(widget_id, str) or not widget_id:
+            return None, "INVALID_WIDGET_ID", None
+        if _renforge_editor_displayable_statement_kind(widget) is None:
+            return None, "STATEMENT_KIND_MISMATCH", None
+        screen, widgets = _renforge_editor_widget_map(screen_name)
+        if screen is None:
+            return None, "MISSING_SCREEN", None
+        cache_index = instances.get(screen_name) if instances else None
+        cache_entry = cache_index["entries"].get(id(widget)) if cache_index else None
+        named_widget = None
+        if isinstance(widgets, builtins.dict):
+            named_widget = widgets.get(widget_id)
+        if named_widget is None:
+            named_widget = widget
+        source_location = _renforge_editor_location(named_widget)
+        if source_location is None:
+            source_location = _renforge_editor_location(widget)
+        if source_location is None:
+            return None, "MISSING_SOURCE_LOCATION", None
+        ancestry_nodes = _renforge_editor_find_ancestry(screen, widget)
+        if not ancestry_nodes:
+            ancestry_nodes = _renforge_editor_find_ancestry(screen, named_widget)
+        if not ancestry_nodes:
+            return None, "UNKNOWN_ANCESTRY_TYPE", None
+        ancestry = []
+        for index, node in enumerate(ancestry_nodes):
+            class_name = getattr(getattr(node, "__class__", None), "__name__", "unknown")
+            if class_name not in _ALLOWED_ANCESTRY_TYPES:
+                return None, _renforge_editor_ancestry_lock_code(class_name), None
+            crop_state = _renforge_editor_crop_state(node, focus=None, target=widget)
+            if crop_state not in (
+                "none",
+                "viewport",
+                "crop_displayable",
+                "transform_crop",
+                "transform_crop_composite",
+                "transform_crop_partial",
+                "transform_crop_unproven",
+                "clipping_true",
+            ):
+                return None, "UNKNOWN_CROP_STATE", None
+            editor_owned = bool(
+                screen_name in _EDITOR_SCREENS
+                or getattr(node, "_renforge_editor_owner", None) == _EDITOR_OWNER
+                or getattr(named_widget, "_renforge_editor_owner", None) == _EDITOR_OWNER
+            )
+            style = getattr(node, "style", None)
+            layout = getattr(style, "box_layout", None) if style is not None else None
+            if layout is None:
+                layout = getattr(node, "default_layout", None)
+            layout_name = layout if isinstance(layout, builtins.str) else None
+            ancestry.append(
+                {
+                    "index": int(index),
+                    "type": class_name,
+                    "source_location": _renforge_editor_location(node),
+                    "screen_owner": _EDITOR_OWNER if editor_owned else "game",
+                    "crop_state": crop_state,
+                    "editor_owned": editor_owned,
+                    "layout": layout_name,
+                }
+            )
+        discriminator = {"kind": "static", "instance_count": 1}
+        if cache_entry is not None:
+            measured = _renforge_editor_instance_discriminator(
+                cache_entry,
+                cache_index["statement_siblings"],
+            )
+            if measured is not None:
+                discriminator = measured
+        discriminator["ordinal"] = int(ordinal)
+        key = {
+            "screen": screen_name,
+            "invocation_path": screen_name,
+            "widget_id": widget_id,
+            "source_location": source_location,
+            "locator": {
+                "kind": "source",
+                "source_location": list(source_location),
+                "statement_kind": statement_kind,
+            },
+            "instance_discriminator": discriminator,
+            "ancestry": ancestry,
+        }
+        return key, None, named_widget
+
+
+    def _renforge_editor_displayable_candidates(focus_candidates=None):
+        """Discover source-backed add/frame targets from the scene walk."""
+        candidates = []
+        instances = {}
+        ordinal = 200000
+        if focus_candidates is None:
+            focus_candidates = _renforge_editor_focus_candidates()
+        focus_covered_ids = set()
+        for candidate in focus_candidates or []:
+            focused_widget = candidate.get("focused_widget")
+            if focused_widget is not None:
+                focus_covered_ids.update(_renforge_editor_descendant_ids(focused_widget))
+        raw = []
+        for screen_name in _renforge_editor_active_game_screens():
+            screen, widgets = _renforge_editor_widget_map(screen_name)
+            if screen is None or not isinstance(widgets, builtins.dict):
+                continue
+            screen_instances = _renforge_editor_screen_instances(screen_name, instances)
+            widget_ids = {}
+            for widget_id, widget in list(widgets.items()):
+                if isinstance(widget_id, str) and widget_id:
+                    widget_ids[id(widget)] = widget_id
+            runtime_widgets = []
+            seen_widgets = set()
+            for widget in list(widgets.values()) + [
+                entry.get("displayable")
+                for entry in screen_instances.get("entries", {}).values()
+                if isinstance(entry, builtins.dict)
+            ]:
+                if widget is None or id(widget) in seen_widgets:
+                    continue
+                seen_widgets.add(id(widget))
+                statement_kind = _renforge_editor_displayable_statement_kind(widget)
+                if statement_kind is None:
+                    continue
+                if id(widget) in focus_covered_ids:
+                    continue
+                if statement_kind == "frame" and _renforge_editor_has_text_descendant(widget):
+                    continue
+                runtime_widgets.append((widget, statement_kind))
+            for widget, statement_kind in runtime_widgets:
+                widget_id = widget_ids.get(id(widget))
+                if not isinstance(widget_id, str) or not widget_id:
+                    continue
+                rect = _renforge_editor_measure_text_rect(screen, widget)
+                if rect is None:
+                    continue
+                runtime_key, resolve_error, named_widget = _renforge_editor_runtime_key_from_displayable_widget(
+                    screen_name,
+                    widget,
+                    widget_id,
+                    ordinal,
+                    instances,
+                    statement_kind,
+                )
+                ordinal += 1
+                owner_hit = bool(screen_name in _EDITOR_SCREENS)
+                if runtime_key is not None:
+                    for node in runtime_key.get("ancestry", []):
+                        if bool(node.get("editor_owned")):
+                            owner_hit = True
+                            break
+                raw.append(
+                    {
+                        "focus": None,
+                        "rect": rect,
+                        "ordinal": int(ordinal - 1),
+                        "runtime_key": runtime_key,
+                        "resolve_error": resolve_error,
+                        "named_widget": named_widget,
+                        "focused_widget": widget,
+                        "editor_owned": owner_hit,
+                        "measurement_method": "scene_tree_displayable",
+                    }
+                )
+        covered = set()
+        for candidate in raw:
+            widget = candidate.get("focused_widget")
+            if widget is None:
+                continue
+            covered.update(_renforge_editor_descendant_ids(widget))
+            covered.discard(id(widget))
+        for candidate in raw:
+            widget = candidate.get("focused_widget")
+            if widget is not None and id(widget) in covered:
+                continue
+            candidates.append(candidate)
+        counts = {}
+        for candidate in candidates:
+            key = candidate.get("runtime_key")
+            if not isinstance(key, builtins.dict):
+                continue
+            signature = (
+                key.get("screen"),
+                key.get("widget_id"),
+                tuple(key.get("source_location") or []),
+            )
+            counts[signature] = counts.get(signature, 0) + 1
+        for candidate in candidates:
+            key = candidate.get("runtime_key")
+            if not isinstance(key, builtins.dict):
+                continue
+            signature = (
+                key.get("screen"),
+                key.get("widget_id"),
+                tuple(key.get("source_location") or []),
+            )
+            if counts.get(signature, 0) <= 1:
+                continue
+            discriminator = key.get("instance_discriminator") or {}
+            if discriminator.get("kind") in ("loop", "use"):
+                continue
+            candidate["resolve_error"] = "MULTI_INSTANCE_UNSUPPORTED"
+        return candidates
+
+
     def _renforge_editor_all_candidates():
         focus_candidates = list(_renforge_editor_focus_candidates())
-        return focus_candidates + list(_renforge_editor_text_candidates(focus_candidates))
+        return (
+            focus_candidates
+            + list(_renforge_editor_text_candidates(focus_candidates))
+            + list(_renforge_editor_displayable_candidates(focus_candidates))
+        )
 
 
     def _renforge_editor_barrier():
@@ -5302,13 +5558,17 @@ init 1100 python:
                 focus_hits.append(candidate)
         if focus_hits:
             return focus_hits
-        text_hits = []
-        for candidate in reversed(_renforge_editor_text_candidates()):
+        scene_hits = []
+        focus_candidates = _renforge_editor_focus_candidates()
+        nonfocus = list(_renforge_editor_text_candidates(focus_candidates)) + list(
+            _renforge_editor_displayable_candidates(focus_candidates)
+        )
+        for candidate in reversed(nonfocus):
             if candidate.get("editor_owned"):
                 continue
             if _renforge_editor_candidate_hit(candidate, x, y):
-                text_hits.append(candidate)
-        return text_hits
+                scene_hits.append(candidate)
+        return scene_hits
 
 
     def _renforge_editor_select(x, y, requested_candidate=None):
@@ -5325,10 +5585,13 @@ init 1100 python:
         if not hits:
             _renforge_editor_clear_selection()
             return {"ok": False, "error": "NO_FOCUSABLE_TARGET"}
-        # Fail closed when multiple non-focusable text targets cover the same point.
+        # Fail closed when multiple non-focusable scene-walk targets cover the same point.
         if (
             len(hits) > 1
-            and all(c.get("measurement_method") == "scene_tree_text" for c in hits)
+            and all(
+                c.get("measurement_method") in ("scene_tree_text", "scene_tree_displayable")
+                for c in hits
+            )
         ):
             state.pointer = [int(x), int(y)]
             state.selected_runtime_key = None

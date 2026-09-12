@@ -3142,6 +3142,9 @@ def test_editor_allowed_ancestry_accepts_bar_and_rejects_unknown_and_side(
     try:
         allowed = globs["_ALLOWED_ANCESTRY_TYPES"]
         assert "Bar" in allowed
+        assert "Solid" in allowed
+        assert "Image" in allowed
+        assert "ImageReference" in allowed
         assert "Side" not in allowed
         assert "VBox" in allowed  # layout containers stay classified, not open-ended
 
