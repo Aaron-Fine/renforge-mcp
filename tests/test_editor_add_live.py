@@ -111,5 +111,4 @@ def test_add_literal_live_proof(demo_copy: Path) -> None:
         None,
         "",
     )
-    assert report["perf"]["hit_test_ms"] <= 100 or report["perf"]["hit_test_ms"] >= 0
     assert report["perf"]["save_ms"] <= 30000
