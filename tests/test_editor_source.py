@@ -1699,6 +1699,27 @@ def test_analyze_add_and_frame_lock_matrix() -> None:
 
     with pytest.raises(EditorSourceError) as excinfo:
         analyze_add_position_statement(
+            '    add Solid("#111") id "add_if" xpos 10 if flag else 20 ypos 30\n',
+            expected_widget_id="add_if",
+        )
+    assert excinfo.value.code == "XPOS_LITERAL_REQUIRED"
+
+    with pytest.raises(EditorSourceError) as excinfo:
+        analyze_add_position_statement(
+            '    add Solid("#111") id "add_if" xpos 10 ypos 30 if flag else 40\n',
+            expected_widget_id="add_if",
+        )
+    assert excinfo.value.code == "YPOS_LITERAL_REQUIRED"
+
+    with pytest.raises(EditorSourceError) as excinfo:
+        analyze_frame_position_statement(
+            '    frame id "deco_if" xpos 10 if flag else 20 ypos 30 xysize (40, 40)\n',
+            expected_widget_id="deco_if",
+        )
+    assert excinfo.value.code == "XPOS_LITERAL_REQUIRED"
+
+    with pytest.raises(EditorSourceError) as excinfo:
+        analyze_add_position_statement(
             '    add Solid("#111") id "add_expr" xpos 10 ypos some_var\n',
             expected_widget_id="add_expr",
         )

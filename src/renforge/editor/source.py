@@ -443,6 +443,12 @@ def peek_statement_kind(line: str) -> str | None:
     return None
 
 
+# Expression operators that may follow a coordinate literal. Absent from the
+# property/action allow-path so `xpos 10 if flag else 20` is rejected rather
+# than half-patched by `_apply_integer_span_patch`.
+_EXPRESSION_OPERATOR_WORDS = frozenset({"if", "else", "elif", "or", "and", "not"})
+
+
 def _analyze_positioned_kind_statement(
     line: str,
     *,
@@ -488,11 +494,14 @@ def _analyze_positioned_kind_statement(
             invalid_literals.add(keyword)
             continue
         # Reject compound expressions like `xpos 100-20` (NUMBER followed by
-        # non-WORD). A pure literal is followed by a keyword/action WORD or EOS.
+        # a symbol) and conditionals like `xpos 10 if flag else 20`. A pure
+        # literal is followed by a property/action WORD or EOS — never `if`.
         following_index = _next_top_level_index(tokens, value_index)
-        if following_index is not None and tokens[following_index].kind != "WORD":
-            invalid_literals.add(keyword)
-            continue
+        if following_index is not None:
+            following = tokens[following_index]
+            if following.kind != "WORD" or following.text in _EXPRESSION_OPERATOR_WORDS:
+                invalid_literals.add(keyword)
+                continue
         value = int(value_token.text)
         if keyword == "xpos":
             xpos_value = value
