@@ -2953,6 +2953,25 @@ init 1100 python:
         return found
 
 
+    def _renforge_editor_drop_descendant_candidates(raw):
+        """Keep ancestors; drop children even when the child is processed first."""
+        covered = set()
+        for candidate in raw:
+            widget = candidate.get("focused_widget")
+            if widget is None:
+                continue
+            descendants = _renforge_editor_descendant_ids(widget)
+            descendants.discard(id(widget))
+            covered.update(descendants)
+        kept = []
+        for candidate in raw:
+            widget = candidate.get("focused_widget")
+            if widget is not None and id(widget) in covered:
+                continue
+            kept.append(candidate)
+        return kept
+
+
     def _renforge_editor_resolve_widget_id(screen_name, widget):
         if widget is None or not isinstance(screen_name, str):
             return None, None, "MISSING_WIDGET"
@@ -3827,17 +3846,7 @@ init 1100 python:
                         "measurement_method": "scene_tree_displayable",
                     }
                 )
-        covered = set()
-        for candidate in raw:
-            widget = candidate.get("focused_widget")
-            if widget is None:
-                continue
-            covered.update(_renforge_editor_descendant_ids(widget))
-            covered.discard(id(widget))
-        for candidate in raw:
-            widget = candidate.get("focused_widget")
-            if widget is not None and id(widget) in covered:
-                continue
+        for candidate in _renforge_editor_drop_descendant_candidates(raw):
             candidates.append(candidate)
         counts = {}
         for candidate in candidates:
@@ -5570,8 +5579,9 @@ init 1100 python:
 
     def _renforge_editor_hit_candidates(x, y, screen_x=None, screen_y=None):
         """Return focus hits first; only fall back to text when no focusable covers the point."""
+        focus_candidates = _renforge_editor_focus_candidates()
         focus_hits = []
-        for candidate in reversed(_renforge_editor_focus_candidates()):
+        for candidate in reversed(focus_candidates):
             if candidate.get("editor_owned"):
                 continue
             if _renforge_editor_candidate_hit(candidate, x, y, screen_x, screen_y):
@@ -5579,7 +5589,6 @@ init 1100 python:
         if focus_hits:
             return focus_hits
         scene_hits = []
-        focus_candidates = _renforge_editor_focus_candidates()
         nonfocus = list(_renforge_editor_text_candidates(focus_candidates)) + list(
             _renforge_editor_displayable_candidates(focus_candidates)
         )

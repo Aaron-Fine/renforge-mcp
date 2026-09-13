@@ -3544,6 +3544,42 @@ def test_editor_tree_marks_only_exact_runtime_representation_selected(
         globs["_renforge_editor_stop_coordinator"]()
 
 
+def test_displayable_candidate_dedup_drops_child_regardless_of_order(
+    running_bridge,
+    monkeypatch,
+) -> None:
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    for name in (
+        "RENFORGE_EDITOR_HOST",
+        "RENFORGE_EDITOR_PORT",
+        "RENFORGE_EDITOR_TOKEN",
+        "RENFORGE_EDITOR_PROTOCOL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    renpy.config.after_load_callbacks = []
+    renpy.Displayable = object
+    exec(compile(_load_editor_body(), "editor.rpy", "exec"), globs)
+    try:
+        class Node:
+            def __init__(self, children=()):
+                self.children = list(children)
+
+        child = Node()
+        parent = Node([child])
+        parent_first = [
+            {"focused_widget": parent, "id": "parent"},
+            {"focused_widget": child, "id": "child"},
+        ]
+        child_first = list(reversed(parent_first))
+        drop = globs["_renforge_editor_drop_descendant_candidates"]
+        assert [item["id"] for item in drop(parent_first)] == ["parent"]
+        assert [item["id"] for item in drop(child_first)] == ["parent"]
+    finally:
+        globs["_renforge_editor_stop_coordinator"]()
+
+
 def test_editor_anonymous_text_preview_moves_the_resolved_runtime_widget(
     running_bridge,
     monkeypatch,
