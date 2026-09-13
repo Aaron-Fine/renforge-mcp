@@ -81,6 +81,15 @@ from .source import (
 )
 
 
+def expected_measurement_method(statement_kind: str) -> str:
+    """Return the only measurement method the coordinator will attest for a kind."""
+    if statement_kind == "text":
+        return "scene_tree_text"
+    if statement_kind in ("add", "frame"):
+        return "scene_tree_displayable"
+    return "focus_list"
+
+
 @dataclass(frozen=True)
 class _SayStyleGuiAdapter:
     prove: Callable[[str], None]
@@ -930,7 +939,7 @@ class EditorCoordinator:
                             "independent observation must provide positive widget width and height",
                         )
             if lock_reason is None:
-                expected_measurement = "scene_tree_text" if statement_kind == "text" else "focus_list"
+                expected_measurement = expected_measurement_method(statement_kind)
                 if observation.get("measurement_method") != expected_measurement:
                     lock_reason = self._lock_reason(
                         "MEASUREMENT_METHOD_INVALID",
@@ -1270,10 +1279,8 @@ class EditorCoordinator:
                 raise EditorError("INDEPENDENT_OBSERVATION_INVALID", "runtime probe returned invalid observation")
             if not self._runtime_keys_equivalent_for_reobservation(record.runtime_key, independent.get("runtime_key")):
                 raise EditorError("RUNTIME_KEY_MISMATCH", "runtime reanalysis key mismatch")
-            expected_measurement = (
-                "scene_tree_text"
-                if selected.source_key.get("statement_kind") == "text"
-                else "focus_list"
+            expected_measurement = expected_measurement_method(
+                str(selected.source_key.get("statement_kind") or "")
             )
             if independent.get("measurement_method") != expected_measurement:
                 raise EditorError(
@@ -1820,6 +1827,9 @@ class EditorCoordinator:
             "Null",
             "Viewport",
             "Crop",
+            "Solid",
+            "Image",
+            "ImageReference",
         }
         # Issue #44: one viewport is editable because the engine already offsets
         # focus rects by its scroll, measured across scroll positions. Nested

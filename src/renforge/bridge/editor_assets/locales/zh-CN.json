@@ -21,6 +21,8 @@
   "lock.reason.unsupported": "尚不支持编辑此源码形式。",
   "lock.reason.mismatch": "实时元素与其源码不再匹配。",
   "lock.reason.ambiguous": "此选择无法解析为唯一的源码元素。",
+  "lock.reason.ambiguous_hit": "多个不可聚焦元素在此重叠。请先将它们分开再编辑。",
+  "lock.reason.statement_kind_mismatch": "此显示对象的源码形式不是可写入的 add 或 frame。",
   "lock.reason.default": "无法安全编辑此选择。",
   "tree.title": "场景树",
   "tree.items_count": "{count} 项",

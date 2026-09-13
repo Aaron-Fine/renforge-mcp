@@ -21,6 +21,8 @@
   "lock.reason.unsupported": "This source form is not editable yet.",
   "lock.reason.mismatch": "The live element no longer matches its source.",
   "lock.reason.ambiguous": "This selection does not resolve to one unique source element.",
+  "lock.reason.ambiguous_hit": "Several non-focusable elements overlap here. Move them apart to edit.",
+  "lock.reason.statement_kind_mismatch": "This displayable's source form is not a writable add or frame.",
   "lock.reason.default": "This selection cannot be edited safely.",
   "tree.title": "SCENE TREE",
   "tree.items_count": "{count} items",

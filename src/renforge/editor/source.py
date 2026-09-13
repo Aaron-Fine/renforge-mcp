@@ -175,6 +175,28 @@ class TextPositionStatement:
 
 
 @dataclass(frozen=True)
+class AddPositionStatement:
+    """Writable literal position for a one-line ``add`` statement."""
+
+    widget_id: str
+    xpos: int
+    ypos: int
+    xpos_span: tuple[int, int]
+    ypos_span: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class FramePositionStatement:
+    """Writable literal position for a one-line decorative ``frame`` statement."""
+
+    widget_id: str
+    xpos: int
+    ypos: int
+    xpos_span: tuple[int, int]
+    ypos_span: tuple[int, int]
+
+
+@dataclass(frozen=True)
 class ButtonStatement:
     widget_id: str
     xpos: int
@@ -284,6 +306,8 @@ _StatementT = TypeVar(
     "_StatementT",
     bound=TextbuttonStatement
     | TextPositionStatement
+    | AddPositionStatement
+    | FramePositionStatement
     | ImagebuttonStatement
     | BarStatement
     | VbarStatement
@@ -419,6 +443,12 @@ def peek_statement_kind(line: str) -> str | None:
     return None
 
 
+# Expression operators that may follow a coordinate literal. Absent from the
+# property/action allow-path so `xpos 10 if flag else 20` is rejected rather
+# than half-patched by `_apply_integer_span_patch`.
+_EXPRESSION_OPERATOR_WORDS = frozenset({"if", "else", "elif", "or", "and", "not"})
+
+
 def _analyze_positioned_kind_statement(
     line: str,
     *,
@@ -464,11 +494,14 @@ def _analyze_positioned_kind_statement(
             invalid_literals.add(keyword)
             continue
         # Reject compound expressions like `xpos 100-20` (NUMBER followed by
-        # non-WORD). A pure literal is followed by a keyword/action WORD or EOS.
+        # a symbol) and conditionals like `xpos 10 if flag else 20`. A pure
+        # literal is followed by a property/action WORD or EOS — never `if`.
         following_index = _next_top_level_index(tokens, value_index)
-        if following_index is not None and tokens[following_index].kind != "WORD":
-            invalid_literals.add(keyword)
-            continue
+        if following_index is not None:
+            following = tokens[following_index]
+            if following.kind != "WORD" or following.text in _EXPRESSION_OPERATOR_WORDS:
+                invalid_literals.add(keyword)
+                continue
         value = int(value_token.text)
         if keyword == "xpos":
             xpos_value = value
@@ -1810,6 +1843,10 @@ def analyze_editable_statement(
     kind = peek_statement_kind(line)
     if kind == "textbutton":
         return kind, analyze_textbutton_statement(line, expected_widget_id=expected_widget_id)
+    if kind == "add":
+        return kind, analyze_add_position_statement(line, expected_widget_id=expected_widget_id)
+    if kind == "frame":
+        return kind, analyze_frame_position_statement(line, expected_widget_id=expected_widget_id)
     if kind == "imagebutton":
         return kind, analyze_imagebutton_statement(line, expected_widget_id=expected_widget_id)
     if kind == "bar":
@@ -1831,6 +1868,8 @@ def apply_editable_statement_patch(
     source_bytes: bytes,
     kind: str,
     statement: TextbuttonStatement
+    | AddPositionStatement
+    | FramePositionStatement
     | ImagebuttonStatement
     | BarStatement
     | VbarStatement
@@ -1850,6 +1889,24 @@ def apply_editable_statement_patch(
                 "resize is only supported for bar xsize/ysize",
             )
         return apply_textbutton_patch(source_bytes, statement, x=x, y=y)
+    if kind == "add":
+        if not isinstance(statement, AddPositionStatement):
+            raise EditorSourceError("STATEMENT_KIND_MISMATCH", "statement does not match add kind")
+        if width is not None or height is not None:
+            raise EditorSourceError(
+                "BAR_SIZE_NOT_DIRECTLY_AUTHORED",
+                "resize is only supported for bar xsize/ysize",
+            )
+        return apply_add_position_patch(source_bytes, statement, x=x, y=y)
+    if kind == "frame":
+        if not isinstance(statement, FramePositionStatement):
+            raise EditorSourceError("STATEMENT_KIND_MISMATCH", "statement does not match frame kind")
+        if width is not None or height is not None:
+            raise EditorSourceError(
+                "BAR_SIZE_NOT_DIRECTLY_AUTHORED",
+                "resize is only supported for bar xsize/ysize",
+            )
+        return apply_frame_position_patch(source_bytes, statement, x=x, y=y)
     if kind == "imagebutton":
         if not isinstance(statement, ImagebuttonStatement):
             raise EditorSourceError("STATEMENT_KIND_MISMATCH", "statement does not match imagebutton kind")
@@ -2252,6 +2309,97 @@ def apply_text_position_patch(
     y: int,
 ) -> bytes:
     """Rewrite only the literal position tokens of a text statement."""
+    return _apply_integer_span_patch(
+        source_bytes,
+        xpos_span=statement.xpos_span,
+        ypos_span=statement.ypos_span,
+        x=x,
+        y=y,
+    )
+
+
+def _reject_single_line_block_header(line: str, *, kind: str) -> None:
+    if _statement_text(line).rstrip().endswith(":"):
+        raise EditorSourceError(
+            "MULTILINE_STATEMENT_REJECTED",
+            f"{kind} adapter accepts a single-line statement only",
+        )
+
+
+def _reject_add_side_image(line: str) -> None:
+    tokens = _lex_single_line(_statement_text(line))
+    for index, token in enumerate(tokens):
+        if token.depth != 0 or token.kind != "WORD" or token.text != "add":
+            continue
+        value_index = _next_top_level_index(tokens, index)
+        if (
+            value_index is not None
+            and tokens[value_index].kind == "WORD"
+            and tokens[value_index].text == "SideImage"
+        ):
+            raise EditorSourceError(
+                "STATEMENT_KIND_MISMATCH",
+                "add SideImage() is not a writable literal add",
+            )
+        return
+
+
+def analyze_add_position_statement(
+    line: str,
+    *,
+    expected_widget_id: str,
+) -> AddPositionStatement:
+    """Analyze a one-line ``add`` with one literal id and integer xpos/ypos."""
+    _reject_single_line_block_header(line, kind="add")
+    _reject_add_side_image(line)
+    return _analyze_positioned_kind_statement(
+        line,
+        expected_widget_id=expected_widget_id,
+        expected_kind="add",
+        statement_cls=AddPositionStatement,
+    )
+
+
+def apply_add_position_patch(
+    source_bytes: bytes,
+    statement: AddPositionStatement,
+    *,
+    x: int,
+    y: int,
+) -> bytes:
+    """Rewrite only the literal position tokens of an add statement."""
+    return _apply_integer_span_patch(
+        source_bytes,
+        xpos_span=statement.xpos_span,
+        ypos_span=statement.ypos_span,
+        x=x,
+        y=y,
+    )
+
+
+def analyze_frame_position_statement(
+    line: str,
+    *,
+    expected_widget_id: str,
+) -> FramePositionStatement:
+    """Analyze a one-line decorative ``frame`` with literal id and xpos/ypos."""
+    _reject_single_line_block_header(line, kind="frame")
+    return _analyze_positioned_kind_statement(
+        line,
+        expected_widget_id=expected_widget_id,
+        expected_kind="frame",
+        statement_cls=FramePositionStatement,
+    )
+
+
+def apply_frame_position_patch(
+    source_bytes: bytes,
+    statement: FramePositionStatement,
+    *,
+    x: int,
+    y: int,
+) -> bytes:
+    """Rewrite only the literal position tokens of a frame statement."""
     return _apply_integer_span_patch(
         source_bytes,
         xpos_span=statement.xpos_span,

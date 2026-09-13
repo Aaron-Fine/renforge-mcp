@@ -25,9 +25,9 @@ This guide is for **humans** (dashboard / game window) and **AI agents**
 
 | State | What you can do |
 | --- | --- |
-| **Editable** | Select, inspect, move / measure / resize (when that capability is available), preview, then **Save** to source. |
-| **Locked / read-only** | Select and inspect; the overlay names **why** write-back is blocked (missing identity, unsupported form, ambiguous ancestry, and similar gates). |
-| **Not selectable** | Some pure decoration is outside the editor's selection model; use `renforge_scene_tree` to observe layout without selecting. |
+| **Editable** | Select, inspect, move / measure / resize (when that capability is available), preview, then **Save** to source. One-line `add` and decorative `frame` statements with a literal `id` and integer `xpos`/`ypos` are included. |
+| **Locked / read-only** | Select and inspect; the overlay names **why** write-back is blocked (missing identity, unsupported form, ambiguous ancestry, overlapping non-focusables, and similar gates). |
+| **Not selectable** | Overlay chrome, `add SideImage()`, Transform ancestry, and some pure decoration stay outside the writable model; use `renforge_scene_tree` to observe layout without selecting. |
 
 Do **not** assume every visible pixel is editable. Treat lock reasons as product
 state, not failures to retry blindly.
