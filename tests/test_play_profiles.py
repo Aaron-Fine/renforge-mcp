@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -20,8 +21,9 @@ def test_create_list_inspect_private_profile(tmp_path: Path) -> None:
     profile = store.root / "profiles" / "playtest-1"
     assert created == store.inspect("playtest-1")
     assert store.list() == [created]
-    assert profile.stat().st_mode & 0o777 == 0o700
-    assert (profile / "profile.json").stat().st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        assert profile.stat().st_mode & 0o777 == 0o700
+        assert (profile / "profile.json").stat().st_mode & 0o777 == 0o600
     assert {path.name for path in profile.iterdir()} == {
         "profile.json", "primary-saves", "game-saves", "multipersistent"
     }
