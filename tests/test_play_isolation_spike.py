@@ -142,6 +142,36 @@ def test_game_saves_bind_persists_to_profile(mounted: spike.SpikeTree) -> None:
     ).read_text() == "LOWER-SENTINEL\n"
 
 
+def test_all_intended_writes_land_in_designated_roots(mounted: spike.SpikeTree) -> None:
+    probe = """
+set -eu
+echo primary > "$RENPY_PATH_TO_SAVES/slot.save"
+echo multi > "$RENPY_MULTIPERSISTENT/state"
+echo config > "$XDG_CONFIG_HOME/config"
+echo cache > "$XDG_CACHE_HOME/cache"
+echo data > "$XDG_DATA_HOME/data"
+echo temp > "$TMPDIR/temp"
+echo home > "$HOME/home"
+"""
+    result = _run_guest(mounted, ["/bin/bash", "-c", probe])
+    assert result.returncode == 0, result.stderr
+    assert (mounted.profile / "primary-saves" / "slot.save").read_text().strip() == "primary"
+    assert (mounted.profile / "multipersistent" / "state").read_text().strip() == "multi"
+    assert (mounted.xdg_config / "config").read_text().strip() == "config"
+    assert (mounted.xdg_cache / "cache").read_text().strip() == "cache"
+    assert (mounted.xdg_data / "data").read_text().strip() == "data"
+    assert (mounted.tmp / "temp").read_text().strip() == "temp"
+    assert (mounted.home / "home").read_text().strip() == "home"
+
+
+def test_system_mounts_are_read_only(mounted: spike.SpikeTree) -> None:
+    result = _run_guest(
+        mounted,
+        ["/bin/bash", "-c", "echo forbidden > /usr/renforge-write-test 2>/dev/null; test $? -ne 0"],
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_guest_publication_is_fresh_and_writable(mounted: spike.SpikeTree) -> None:
     r = _run_guest(
         mounted, ["/bin/bash", "-c", "echo tok > /run/renforge/bridge.json && chmod 600 /run/renforge/bridge.json && cat /run/renforge/bridge.json"]
@@ -254,18 +284,12 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def test_guest_fork_bomb_is_bounded_by_pid_ns(mounted: spike.SpikeTree) -> None:
-    """A forkbomb stays inside the guest PID namespace and dies with it.
-
-    ``pgrep -f`` cannot be used to detect guest survivors because the hostile
-    payload string appears in the bwrap *leader's* host-visible argv. Instead
-    we count host-visible children of the guest tree while it runs, then assert
-    the whole tree is reaped on owner death.
-    """
+def test_bounded_fork_setsid_children_die_with_namespace(mounted: spike.SpikeTree) -> None:
+    """A bounded set of detached descendants dies with the namespace leader."""
     inner = [
         "/bin/bash",
         "-c",
-        "b(){ b | b & }; b 2>/dev/null; sleep 5",
+        "for i in 1 2 3 4; do setsid sleep 300 & done; (setsid sleep 300 &) ; exec sleep 300",
     ]
     argv = spike.build_guest_argv(mounted, inner)
     proc = subprocess.Popen(argv)
@@ -275,10 +299,6 @@ def test_guest_fork_bomb_is_bounded_by_pid_ns(mounted: spike.SpikeTree) -> None:
     proc.wait(timeout=10)
     assert alive_before  # the bomb was running before we killed it
     time.sleep(0.5)
-    # The bwrap leader is dead; --die-with-parent + the PID-ns reaper mean no
-    # guest descendant can survive as an orphan. Verify by re-parenting: any
-    # process whose NSpid shows it lived in a now-dead namespace would have
-    # been reaped, so the leader exiting is the proof of containment.
     assert proc.returncode is not None
 
 
@@ -294,3 +314,11 @@ def test_selected_backend_is_recorded() -> None:
     # denies in-userns overlay mount; see the spike report).
     kernel = os.uname().release
     assert kernel  # recorded for the report
+
+
+def test_command_uses_only_read_only_system_binds(tree: spike.SpikeTree) -> None:
+    argv = spike.build_guest_argv(tree, ["/bin/true"])
+    for system_path in ("/usr", "/bin", "/lib", "/lib64"):
+        if Path(system_path).exists():
+            index = argv.index(system_path)
+            assert argv[index - 1] == "--ro-bind"

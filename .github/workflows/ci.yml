@@ -180,6 +180,53 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  strict-play-stage0:
+    name: Strict play Stage 0 (Ren'Py 8.2.0.24012702)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RENFORGE_STRICT_PLAY_TESTS: "1"
+      RENFORGE_STRICT_PLAY_BUNDLE: ${{ github.workspace }}/.strict-play/bundle
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install isolation and display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap fuse-overlayfs xvfb x11-utils imagemagick
+
+      - name: Install test dependencies
+        run: python -m pip install -e '.[test]'
+
+      - name: Provision checksum-pinned bundled fixture
+        run: >-
+          python scripts/bootstrap_strict_play_runtime.py
+          --cache-dir "${{ github.workspace }}/.strict-play/cache"
+          --bundle "${{ env.RENFORGE_STRICT_PLAY_BUNDLE }}"
+
+      - name: Run required Stage 0 gate
+        run: >-
+          python -m pytest -q -rs
+          tests/test_play_isolation_spike.py
+          tests/test_strict_play_runtime_bootstrap.py
+          tests/test_integration_strict_play_stage0.py
+
+      - name: Upload bounded Stage 0 diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strict-play-stage0-diagnostics
+          path: |
+            .strict-play/**/game.stderr
+            .strict-play/**/xvfb.stderr
+          if-no-files-found: ignore
+          retention-days: 3
+
   package-contract:
     name: Package contract checks
     needs: ui-build

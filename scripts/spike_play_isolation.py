@@ -8,8 +8,9 @@ Gate A (architecture go/no-go) requires one backend to prove that a guest proces
 * can persist only designated profile state;
 * leaves no descendants after stop / owner death.
 
-This spike also runs the display-backend render matrix (cage -> weston -> Xvfb)
-to select the strict-session headless display server.
+The MVP selects one display backend: a fresh, session-owned Xvfb instance.
+Engine rendering and input acknowledgement are covered by the exact-engine
+fixture rather than by this hostile-process helper.
 
 The selected backend on this host is **Architecture B**: a host-side
 ``fuse-overlayfs`` copy-on-write mount (lower = host project, read-only;
@@ -53,6 +54,10 @@ class SpikeTree:
     trusted_state: Path = field(init=False)  # canary: RenForge locks/launch/trace
     profile: Path = field(init=False)  # designated writable profile state
     home: Path = field(init=False)  # session-private disposable home
+    xdg_config: Path = field(init=False)
+    xdg_cache: Path = field(init=False)
+    xdg_data: Path = field(init=False)
+    tmp: Path = field(init=False)
     guest_pub: Path = field(init=False)  # guest-publication dir (/run/renforge)
 
     def __post_init__(self) -> None:
@@ -65,6 +70,10 @@ class SpikeTree:
         self.trusted_state = r / "canary_trusted_state"
         self.profile = r / "profile"
         self.home = r / "session" / "home"
+        self.xdg_config = r / "session" / "xdg-config"
+        self.xdg_cache = r / "session" / "xdg-cache"
+        self.xdg_data = r / "session" / "xdg-data"
+        self.tmp = r / "session" / "tmp"
         self.guest_pub = r / "session" / "guest_publication"
 
     def build(self) -> None:
@@ -86,7 +95,18 @@ class SpikeTree:
         # Designated writable state.
         (self.profile / "primary-saves").mkdir(parents=True)
         (self.profile / "game-saves").mkdir(parents=True)
-        for d in (self.upper, self.work, self.merged, self.home, self.guest_pub):
+        (self.profile / "multipersistent").mkdir(parents=True)
+        for d in (
+            self.upper,
+            self.work,
+            self.merged,
+            self.home,
+            self.xdg_config,
+            self.xdg_cache,
+            self.xdg_data,
+            self.tmp,
+            self.guest_pub,
+        ):
             d.mkdir(parents=True)
 
 
@@ -104,7 +124,7 @@ def _system_binds() -> list[str]:
     args: list[str] = []
     for p in ("/usr", "/bin", "/lib", "/lib64"):
         if Path(p).exists():
-            args += ["--bind", p, p]
+            args += ["--ro-bind", p, p]
     return args
 
 
@@ -158,6 +178,12 @@ def build_guest_argv(tree: SpikeTree, inner: list[str]) -> list[str]:
         "--bind",
         str(tree.profile / "game-saves"),
         f"{project_path}/game/saves",
+        "--bind",
+        str(tree.profile / "primary-saves"),
+        "/profile/primary-saves",
+        "--bind",
+        str(tree.profile / "multipersistent"),
+        "/profile/multipersistent",
         # Fresh guest-publication dir for bridge control publication.
         "--bind",
         str(tree.guest_pub),
@@ -166,11 +192,39 @@ def build_guest_argv(tree: SpikeTree, inner: list[str]) -> list[str]:
         "--bind",
         str(tree.home),
         "/home/guest",
-        "--tmpfs",
+        "--bind",
+        str(tree.xdg_config),
+        "/xdg/config",
+        "--bind",
+        str(tree.xdg_cache),
+        "/xdg/cache",
+        "--bind",
+        str(tree.xdg_data),
+        "/xdg/data",
+        "--bind",
+        str(tree.tmp),
         "/tmp",
         "--setenv",
         "HOME",
         "/home/guest",
+        "--setenv",
+        "XDG_CONFIG_HOME",
+        "/xdg/config",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/xdg/cache",
+        "--setenv",
+        "XDG_DATA_HOME",
+        "/xdg/data",
+        "--setenv",
+        "TMPDIR",
+        "/tmp",
+        "--setenv",
+        "RENPY_PATH_TO_SAVES",
+        "/profile/primary-saves",
+        "--setenv",
+        "RENPY_MULTIPERSISTENT",
+        "/profile/multipersistent",
         "--setenv",
         "RENFORGE_BRIDGE_PUBLICATION_DIR",
         "/run/renforge",
