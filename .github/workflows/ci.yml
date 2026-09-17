@@ -180,6 +180,53 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  sandbox-contract:
+    name: Linux sandbox contract tests (no SDK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RENFORGE_SANDBOX_TESTS: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install sandbox test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap fuse-overlayfs fuse3
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Install test dependencies
+        run: python -m pip install 'pytest>=8'
+
+      - name: Run filesystem and process isolation contracts
+        run: |
+          mkdir -p .sandbox-test-artifacts
+          set -o pipefail
+          python -m pytest -q -rs \
+            --basetemp=.sandbox-test-artifacts/pytest \
+            --junitxml=.sandbox-test-artifacts/junit.xml \
+            tests/test_sandbox_contract.py \
+            2>&1 | tee .sandbox-test-artifacts/pytest.log
+
+      - name: Upload sandbox test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-contract-test-results
+          path: |
+            .sandbox-test-artifacts/pytest.log
+            .sandbox-test-artifacts/junit.xml
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 3
+
   package-contract:
     name: Package contract checks
     needs: ui-build
