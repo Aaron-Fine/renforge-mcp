@@ -1,4 +1,4 @@
-"""Exact-engine Stage 0 rendering and owned-display checks.
+"""Exact-engine rendering and owned-display environment checks.
 
 Required CI sets RENFORGE_STRICT_PLAY_TESTS=1 and points at the checksum-verified
 bundle assembled by scripts/bootstrap_strict_play_runtime.py.
@@ -18,7 +18,7 @@ from PIL import Image
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RENFORGE_STRICT_PLAY_TESTS") != "1",
-    reason="set RENFORGE_STRICT_PLAY_TESTS=1 for the required Stage 0 gate",
+    reason="set RENFORGE_STRICT_PLAY_TESTS=1 for the required environment gate",
 )
 
 

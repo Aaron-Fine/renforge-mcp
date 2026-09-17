@@ -134,7 +134,11 @@ def main() -> int:
     parser.add_argument(
         "--fixture",
         type=Path,
-        default=Path(__file__).resolve().parents[1] / "examples" / "minimal_play_game",
+        default=(
+            Path(__file__).resolve().parents[1]
+            / "examples"
+            / "strict_play_environment_game"
+        ),
     )
     args = parser.parse_args()
     archive = download_archive(args.cache_dir / ARCHIVE_NAME)

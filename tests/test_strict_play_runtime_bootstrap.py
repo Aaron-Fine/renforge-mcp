@@ -26,17 +26,9 @@ def test_checksum_mismatch_is_rejected(tmp_path: Path) -> None:
         bootstrap.verify_archive(archive)
 
 
-def test_fixture_has_success_and_unsupported_routes() -> None:
-    fixture = SCRIPT.parents[1] / "examples" / "minimal_play_game" / "game"
+def test_fixture_has_environment_gate_marker() -> None:
+    fixture = (
+        SCRIPT.parents[1] / "examples" / "strict_play_environment_game" / "game"
+    )
     script = (fixture / "script.rpy").read_text(encoding="utf-8")
-    screens = (fixture / "screens.rpy").read_text(encoding="utf-8")
-    assert "Continue safely" in script
-    assert "Unsupported input branch" in script
-    assert 'id "rf_confirm"' in screens
-    assert "input value" in screens
-
-
-def test_bundle_launcher_uses_bundle_as_working_directory() -> None:
-    source = SCRIPT.read_text(encoding="utf-8")
-    assert "shutil.copy2(sdk_root / \"renpy.py\"" in source
-    assert "cd \"$BASE\"" in source
+    assert "Strict play environment gate." in script

@@ -1,49 +1,16 @@
 #!/usr/bin/env python3
-"""Task 0 spike: prove the strict-session isolation backend against a hostile subprocess.
-
-Gate A (architecture go/no-go) requires one backend to prove that a guest process:
-
-* cannot enumerate or read normal-play saves or trusted RenForge control state;
-* cannot mutate the lower (host) project;
-* can persist only designated profile state;
-* leaves no descendants after stop / owner death.
-
-The MVP selects one display backend: a fresh, session-owned Xvfb instance.
-Engine rendering and input acknowledgement are covered by the exact-engine
-fixture rather than by this hostile-process helper.
-
-The selected backend on this host is **Architecture B**: a host-side
-``fuse-overlayfs`` copy-on-write mount (lower = host project, read-only;
-upper/work = session-disposable) whose merged view is bound into a minimal
-allowlisted Bubblewrap namespace. Kernel 7.1 (Fedora 44) denies ``mount -t
-overlay`` to a userns-root process and bwrap's ``no_new_privs`` blocks the
-setuid ``fusermount3`` helper from *inside* the sandbox, so the overlay is
-mounted by the host caller (no privilege needed) and the guest sees a plain
-writable directory. The host-side FUSE mount enforces CoW: the lower project
-can never be mutated through it.
-
-Everything is built under a caller-supplied temp root; nothing touches the
-host project's real saves or home directory.
-"""
+"""Strict-play environment probe and disposable isolation test support."""
 from __future__ import annotations
 
-import os
 import shutil
-import signal
 import subprocess
 import sys
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Layout helpers
-# ---------------------------------------------------------------------------
-
-
 @dataclass
-class SpikeTree:
-    """Disposable filesystem layout for one isolation experiment."""
+class EnvironmentTree:
+    """Disposable filesystem layout for one isolation check."""
 
     root: Path
     lower_project: Path = field(init=False)
@@ -110,10 +77,6 @@ class SpikeTree:
             d.mkdir(parents=True)
 
 
-# ---------------------------------------------------------------------------
-# Backend probes
-# ---------------------------------------------------------------------------
-
 BWRAP = shutil.which("bwrap") or "bwrap"
 FUSE_OVERLAYFS = shutil.which("fuse-overlayfs") or "fuse-overlayfs"
 FUSERMOUNT = shutil.which("fusermount3") or "fusermount3"
@@ -128,7 +91,38 @@ def _system_binds() -> list[str]:
     return args
 
 
-def mount_overlay(tree: SpikeTree) -> None:
+def missing_requirements() -> tuple[str, ...]:
+    names = ("bwrap", "fuse-overlayfs", "fusermount3")
+    missing = [name for name in names if shutil.which(name) is None]
+    if not Path("/dev/fuse").exists():
+        missing.append("/dev/fuse")
+    return tuple(missing)
+
+
+def probe_backend() -> None:
+    """Fail unless this host can create the namespace used by strict play."""
+    missing = missing_requirements()
+    if missing:
+        raise RuntimeError(f"Missing strict-play commands: {', '.join(missing)}")
+    subprocess.run(
+        [
+            BWRAP,
+            "--unshare-user",
+            "--unshare-pid",
+            "--die-with-parent",
+            "--ro-bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--",
+            "/usr/bin/true",
+        ],
+        check=True,
+    )
+
+
+def mount_overlay(tree: EnvironmentTree) -> None:
     """Host-side CoW overlay. No privilege required; caller owns all dirs."""
     subprocess.run(
         [
@@ -141,11 +135,11 @@ def mount_overlay(tree: SpikeTree) -> None:
     )
 
 
-def umount_overlay(tree: SpikeTree) -> None:
+def umount_overlay(tree: EnvironmentTree) -> None:
     subprocess.run([FUSERMOUNT, "-u", str(tree.merged)], check=True)
 
 
-def build_guest_argv(tree: SpikeTree, inner: list[str]) -> list[str]:
+def build_guest_argv(tree: EnvironmentTree, inner: list[str]) -> list[str]:
     """Construct the allowlisted bwrap command for a hostile guest.
 
     The merged overlay is bound read-write at the logical project path. The
@@ -237,48 +231,12 @@ def build_guest_argv(tree: SpikeTree, inner: list[str]) -> list[str]:
     return argv
 
 
-# ---------------------------------------------------------------------------
-# Results
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class ProbeResult:
-    name: str
-    passed: bool
-    detail: str = ""
-
-
 def main() -> int:
-    if len(sys.argv) < 2:
-        print("usage: spike_play_isolation.py <work-root>", file=sys.stderr)
+    if sys.argv[1:] != ["--probe"]:
+        print("usage: strict_play_environment.py --probe", file=sys.stderr)
         return 2
-    root = Path(sys.argv[1]).resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    tree = SpikeTree(root=root / "case")
-    if tree.root.exists():
-        shutil.rmtree(tree.root)
-    tree.build()
-
-    print(f"[spike] work root: {root}")
-    print(f"[spike] kernel: {os.uname().release}")
-    print(f"[spike] bwrap: {BWRAP}  fuse-overlayfs: {FUSE_OVERLAYFS}")
-
-    mount_overlay(tree)
-    try:
-        print("[spike] overlay mounted (Architecture B: host-side fuse-overlayfs)")
-        # Placeholder: hostile probes and display matrix are added by the
-        # Task 0 test harness; this script currently proves mount/CoW/unmount.
-        guest = build_guest_argv(
-            tree, ["/bin/bash", "-c", "cat /project/game/script.rpy"]
-        )
-        out = subprocess.run(guest, capture_output=True, text=True)
-        print(f"[spike] guest read lower rc={out.returncode}: {out.stdout.strip()}")
-    finally:
-        umount_overlay(tree)
-        print("[spike] overlay unmounted")
-
-    print("[spike] OK")
+    probe_backend()
+    print("strict-play namespace backend available")
     return 0
 
 
