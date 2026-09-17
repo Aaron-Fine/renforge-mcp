@@ -215,18 +215,35 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             ),
             "audio": "Audio strategy: `auto`, `native`, `dummy`, or `none`; both `dummy` and `none` use SDL dummy audio.",
             "savedir": (
-                "Save location. Default `temporary` creates an isolated directory so this session cannot read or write "
-                "the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory. "
-                "Any other non-empty value is an arbitrary save directory path that is created if missing and is never "
-                "removed by stop."
+                "Save location. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` "
+                "(default isolated `temporary`) so this session cannot read or write the "
+                "user's normal Ren'Py saves. Pass `existing` (or `default`) to use the "
+                "game's normal save directory. Any other non-empty value is an arbitrary "
+                "save directory path that is created if missing and is never removed by stop."
             ),
             "persistent": (
-                "Persistent mode: `existing` preserves current persistent data and `empty` removes it in the isolated session; "
-                "`copy` and `fixture` currently set an environment marker only and do not copy or load fixture data."
+                "Persistent mode. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` "
+                "(default `empty` so isolated sessions start without host persistent data). "
+                "`existing` preserves current persistent data; `empty` removes it in the "
+                "isolated session; `copy` and `fixture` currently set an environment marker "
+                "only and do not copy or load fixture data."
+            ),
+            "home": (
+                "Process HOME for the launched game. Omitted, empty, or `auto` follows "
+                "`RENFORGE_ISOLATION` (default a private directory) so preferences and "
+                "`~/.renpy` writes miss the user's files. Pass `existing` to keep the host "
+                "HOME. `savedir=existing` also selects `home=existing` unless this is set. "
+                "Any other non-empty value is an explicit HOME path."
+            ),
+            "preferences": (
+                "Preference isolation. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` "
+                "(default `empty`). Isolated sessions start without host preference files; "
+                "`existing` keeps them when the save/HOME location can see them."
             ),
             "cleanup_on_stop": (
-                "When true, stop removes only the temporary save directory created by `savedir=temporary`; arbitrary save "
-                "directories and existing saves are not deleted."
+                "When true, stop removes only the disposable session directory created for "
+                "isolated `savedir`/`home` (saves plus private HOME). Arbitrary save "
+                "directories, explicit HOME paths, and existing user files are not deleted."
             ),
             "timeout": (
                 "Ren'Py background startup deadline in seconds (0 uses the launcher default). This does not control the MCP "
@@ -236,7 +253,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         parameter_schemas={
             "display": _enum("auto", "native", "xvfb", "external", "none"),
             "audio": _enum("auto", "native", "dummy", "none"),
-            "persistent": _enum("existing", "empty", "copy", "fixture"),
+            "persistent": _enum("auto", "existing", "empty", "copy", "fixture"),
+            "preferences": _enum("auto", "existing", "empty"),
             "timeout": {"minimum": 0},
         },
     ),

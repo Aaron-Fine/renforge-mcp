@@ -28,7 +28,7 @@ from ..launch_env import (
     resolve_display_strategy,
 )
 from ..project import RenpyProject
-from ..save_isolation import resolve_save_isolation
+from ..save_isolation import resolve_launch_isolation
 from ..sdk import RenpySdk
 from .artifacts import (
     ArtifactOwnershipError,
@@ -512,6 +512,8 @@ class BridgeSession:
         *,
         display_mode: str = "native",
         temporary_savedir: Path | None = None,
+        temporary_home: Path | None = None,
+        session_root: Path | None = None,
         cleanup_savedir: bool = False,
         environment: dict[str, Any] | None = None,
         startup_ms: int | None = None,
@@ -524,6 +526,8 @@ class BridgeSession:
         self.headless = headless
         self.display_mode = display_mode
         self.temporary_savedir = temporary_savedir
+        self.temporary_home = temporary_home
+        self.session_root = session_root
         self.cleanup_savedir = cleanup_savedir
         self.environment = environment or {}
         self.startup_ms = startup_ms
@@ -554,7 +558,13 @@ class BridgeSession:
             if self._closed:
                 return self._close_result or {"cleaned": self._cleaned, "failed": ["close"]}
             self._close_result = self._close_resources(timeout)
-            ownership_failures = {"process_alive", "bridge_artifacts", "temporary_savedir", "editor_coordinator"}
+            ownership_failures = {
+                "process_alive",
+                "bridge_artifacts",
+                "temporary_savedir",
+                "session_root",
+                "editor_coordinator",
+            }
             if ownership_failures.intersection(self._close_result.get("failed", [])):
                 return self._close_result
             if self._project_lock is not None:
@@ -569,6 +579,7 @@ class BridgeSession:
             "process_group": False,
             "bridge_artifacts": False,
             "temporary_savedir": False,
+            "session_root": False,
             "editor_coordinator": self._editor_coordinator is None,
         }
         failed: list[str] = []
@@ -627,7 +638,17 @@ class BridgeSession:
         except Exception:
             failed.append("bridge_artifacts")
 
-        if self.cleanup_savedir and self.temporary_savedir is not None:
+        if self.cleanup_savedir and self.session_root is not None:
+            try:
+                shutil.rmtree(self.session_root, ignore_errors=False)
+                cleaned["session_root"] = True
+                cleaned["temporary_savedir"] = True
+            except FileNotFoundError:
+                cleaned["session_root"] = True
+                cleaned["temporary_savedir"] = True
+            except Exception:
+                failed.append("session_root")
+        elif self.cleanup_savedir and self.temporary_savedir is not None:
             try:
                 shutil.rmtree(self.temporary_savedir, ignore_errors=False)
                 cleaned["temporary_savedir"] = True
@@ -775,6 +796,7 @@ def _launch_after_project_lock(
     persistent: str = "existing",
     cleanup_on_stop: bool = True,
     preferences: str = "existing",
+    home: str | None = None,
     editor_endpoint: EditorEndpoint | None = None,
     editor_coordinator: EditorCoordinator | None = None,
 ) -> BridgeSession:
@@ -784,10 +806,11 @@ def _launch_after_project_lock(
     capabilities, fall back to Xvfb and ``SDL_AUDIODRIVER=dummy`` when needed,
     and fail fast with a structured :class:`LaunchError` otherwise.
 
-    ``savedir='temporary'`` isolates saves under a temp directory that is
-    removed on session close when ``cleanup_on_stop`` is true. Omit *savedir*
-    to keep the game's normal save location; MCP/dashboard launches pass
-    ``temporary`` by default so agent sessions do not touch user saves.
+    ``savedir='temporary'`` isolates saves under a disposable session directory
+    that is removed on session close when ``cleanup_on_stop`` is true. Isolated
+    launches also get a private HOME so preferences and ``~/.renpy`` writes miss
+    the user's files. Omit *savedir* / *home* to keep the game's normal
+    locations; MCP/dashboard launches pass isolated values by default.
     """
     started = time.monotonic()
     phases: list[dict[str, Any]] = []
@@ -811,19 +834,21 @@ def _launch_after_project_lock(
     env.update(audio_env)
 
     headless = display_mode == "xvfb"
-    isolation = resolve_save_isolation(savedir, cleanup_on_stop=cleanup_on_stop)
+    isolation = resolve_launch_isolation(
+        savedir,
+        home=home,
+        persistent=persistent,
+        preferences=preferences,
+        cleanup_on_stop=cleanup_on_stop,
+        host_env=env,
+    )
     temporary_savedir = isolation.savedir
     cleanup_savedir = isolation.cleanup
-    env.update(isolation.environ())
+    env.update(isolation.environ(host_env=env))
     savedir_path = str(isolation.savedir) if isolation.savedir is not None else None
 
-    if persistent in {"empty", "existing", "copy", "fixture"}:
-        env["RENFORGE_PERSISTENT_MODE"] = persistent
-    elif persistent:
+    if persistent not in {"empty", "existing", "copy", "fixture"} and persistent:
         env["RENFORGE_PERSISTENT_MODE"] = str(persistent)
-
-    # preferences reserved for future fixture support; accepted for API stability.
-    _ = preferences
 
     # Token may be caller-supplied; session id is allocated with the artifact
     # intent so names, ownership, and bridge.json share one identity.
@@ -850,7 +875,11 @@ def _launch_after_project_lock(
         materialized = allocate_and_materialize(
             project,
             bridge_payload=_BRIDGE_RESOURCE.read_bytes(),
-            include_session_init=bool(savedir_path),
+            include_session_init=(
+                bool(savedir_path)
+                or isolation.persistent_mode == "empty"
+                or isolation.preferences_mode == "empty"
+            ),
             editor_payload=editor_payload,
             editor_asset_files=editor_assets,
             editor_font_relative=editor_font_relative,
@@ -1036,6 +1065,8 @@ def _launch_after_project_lock(
                     headless=headless,
                     display_mode=display_mode,
                     temporary_savedir=temporary_savedir,
+                    temporary_home=isolation.home,
+                    session_root=isolation.session_root,
                     cleanup_savedir=cleanup_savedir,
                     environment=capabilities.to_dict(),
                     startup_ms=startup_ms,
@@ -1051,7 +1082,7 @@ def _launch_after_project_lock(
             process,
             headless,
             project.root,
-            temporary_savedir if cleanup_savedir else None,
+            isolation.session_root if cleanup_savedir else None,
             project_lock,
             expected_session_id=session_id,
         )
@@ -1061,7 +1092,7 @@ def _launch_after_project_lock(
             process,
             headless,
             project.root,
-            temporary_savedir if cleanup_savedir else None,
+            isolation.session_root if cleanup_savedir else None,
             project_lock,
             expected_session_id=session_id,
         )
@@ -1071,7 +1102,7 @@ def _launch_after_project_lock(
         process,
         headless,
         project.root,
-        temporary_savedir if cleanup_savedir else None,
+        isolation.session_root if cleanup_savedir else None,
         project_lock,
         expected_session_id=session_id,
     )
@@ -1101,6 +1132,7 @@ def launch_with_bridge(
     persistent: str = "existing",
     cleanup_on_stop: bool = True,
     preferences: str = "existing",
+    home: str | None = None,
     editor: bool = False,
 ) -> BridgeSession:
     """Launch a bridge while exclusively owning this project's artifacts."""
@@ -1130,6 +1162,7 @@ def launch_with_bridge(
             persistent=persistent,
             cleanup_on_stop=cleanup_on_stop,
             preferences=preferences,
+            home=home,
             editor_endpoint=editor_endpoint,
             editor_coordinator=editor_coordinator,
         )

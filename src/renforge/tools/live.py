@@ -33,7 +33,7 @@ from ..effect_wait import expected_events_for_action
 from ..effect_wait import wait_for_effect as _wait_for_business_effect
 from ..launch_env import LaunchError
 from ..project import RenpyProject
-from ..save_isolation import default_launch_savedir
+from ..save_isolation import apply_launch_isolation_defaults
 from ..sdk import get_or_install_sdk
 from ..state_compact import (
     apply_serialization_limits,
@@ -435,18 +435,22 @@ def launch_game(
     display: str = "auto",
     audio: str = "auto",
     savedir: str | None = None,
-    persistent: str = "existing",
+    persistent: str | None = None,
     cleanup_on_stop: bool = True,
     timeout: float | None = None,
     session: dict[str, Any] | None = None,
     cancel_event: threading.Event | None = None,
+    home: str | None = None,
+    preferences: str | None = None,
 ) -> dict:
     """Launch the project with the bridge injected, or reuse a live session.
 
     ``display`` / ``audio`` default to ``auto`` (native when available, else
-    Xvfb + dummy SDL audio). Save directories default to ``temporary`` so the
-    session cannot read or write the user's normal Ren'Py saves. Pass
-    ``savedir='existing'`` to use the game's normal save location.
+    Xvfb + dummy SDL audio). Saves, preferences, and HOME default to isolated
+    temporary locations so the session cannot read or write the user's normal
+    Ren'Py state. Pass ``savedir='existing'`` (and optionally
+    ``home='existing'``) to use the game's normal save location, or set
+    ``RENFORGE_ISOLATION=existing`` to change the server-wide default.
     """
     try:
         project = RenpyProject(Path(project_path))
@@ -460,11 +464,18 @@ def launch_game(
         }
 
     session_cfg = dict(session or {})
-    savedir = default_launch_savedir(session_cfg.get("savedir", savedir))
-    persistent = str(session_cfg.get("persistent", persistent) or "existing")
+    isolation_defaults = apply_launch_isolation_defaults(
+        savedir=session_cfg.get("savedir", savedir),
+        home=session_cfg.get("home", home),
+        persistent=session_cfg.get("persistent", persistent),
+        preferences=session_cfg.get("preferences", preferences),
+    )
+    savedir = isolation_defaults["savedir"]
+    home = isolation_defaults["home"]
+    persistent = isolation_defaults["persistent"]
+    preferences = isolation_defaults["preferences"]
     if isinstance(session_cfg.get("cleanup_on_stop"), bool):
         cleanup_on_stop = session_cfg["cleanup_on_stop"]
-    preferences = str(session_cfg.get("preferences", "existing") or "existing")
     requested_editor = bool(editor)
 
     key = _key(project.root)
@@ -577,6 +588,7 @@ def launch_game(
             "persistent": persistent,
             "cleanup_on_stop": cleanup_on_stop,
             "preferences": preferences,
+            "home": home,
         }
         if warp is not None:
             launch_kwargs["warp"] = warp
@@ -626,6 +638,9 @@ def launch_game(
         pass
     if session_obj.temporary_savedir is not None:
         result["savedir"] = str(session_obj.temporary_savedir)
+    home_path = getattr(session_obj, "temporary_home", None)
+    if home_path is not None:
+        result["home"] = str(home_path)
     if session_obj.headless:
         # Running under xvfb-run: no visible window, but the bridge (state,
         # screenshots, input) works normally.

@@ -153,6 +153,13 @@ def session_init_payload() -> bytes:
             "            renpy.loadsave.location.unlink('persistent')",
             "        except Exception:",
             "            pass",
+            "    _renforge_preferences = os.environ.get('RENFORGE_PREFERENCES_MODE')",
+            "    if _renforge_preferences in ('empty', 'temporary'):",
+            "        # Isolated sessions should not inherit host preference files.",
+            "        try:",
+            "            persistent._preferences = None",
+            "        except Exception:",
+            "            pass",
             "",
         ]
     ).encode("utf-8")

@@ -18,12 +18,15 @@ versioning.
   custom-named and one-item menus, without inferring narrative intent from
   arbitrary focusable screen controls.
 - `renforge_launch`, `renforge_jump`, `renforge_new_game`, and dashboard
-  launches now isolate saves by default (`savedir=temporary`). The game is
-  started with native `--savedir` plus `RENFORGE_SAVEDIR` /
-  `RENPY_PATH_TO_SAVES` / `RENPY_MULTIPERSISTENT`, so agent sessions do not
-  read or write the user's normal Ren'Py save tree. Pass `savedir=existing`
-  to use the game's normal save location. This is application-layer save
-  isolation, not the Linux Bubblewrap/FUSE strict-play sandbox.
+  launches now isolate the running game from the user's Ren'Py state by
+  default. Each session gets a disposable save directory (`savedir=temporary`,
+  native `--savedir` plus `RENFORGE_SAVEDIR` / `RENPY_PATH_TO_SAVES` /
+  `RENPY_MULTIPERSISTENT`), a private HOME/XDG/temp tree, empty persistent
+  data, and reset preferences. Pass `savedir=existing` (which also keeps host
+  HOME unless `home` is set) or set `RENFORGE_ISOLATION=existing` to use the
+  user's files. This is application-layer isolation, not the Linux
+  Bubblewrap/FUSE contract suite, which remains test-only and is not on the
+  MCP launch path.
 
 ### Fixed
 

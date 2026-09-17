@@ -1351,30 +1351,33 @@
     }
   },
   "renforge_launch": {
-    "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": false,
-      "openWorldHint": true,
-      "readOnlyHint": false
-    },
     "description": "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and publish authenticated ownership/bridge metadata under `.renforge/control/`. `renforge_stop` removes only owned session artifacts.",
+    "annotations": {
+      "readOnlyHint": false,
+      "idempotentHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
     "parameters": {
       "additionalProperties": false,
       "properties": {
-        "audio": {
-          "default": "auto",
-          "description": "Audio strategy: `auto`, `native`, `dummy`, or `none`; both `dummy` and `none` use SDL dummy audio.",
-          "enum": [
-            "auto",
-            "native",
-            "dummy",
-            "none"
-          ],
+        "project_path": {
+          "description": "Project root passed to the launcher and runtime bridge.",
           "type": "string"
         },
-        "cleanup_on_stop": {
+        "warp": {
+          "default": "",
+          "description": "Optional Ren'Py `file.rpy:line` startup target; this launch tool does not resolve label names.",
+          "type": "string"
+        },
+        "version": {
+          "default": "stable",
+          "description": "Launcher version selector, either `stable` or an explicit semantic version (for example `8.5.3`).",
+          "type": "string"
+        },
+        "editor": {
           "default": true,
-          "description": "When true, stop removes only the temporary save directory created by `savedir=temporary`; arbitrary save directories and existing saves are not deleted.",
+          "description": "Enable/disable live editor injection; default True for interactive work.",
           "type": "boolean"
         },
         "display": {
@@ -1389,15 +1392,27 @@
           ],
           "type": "string"
         },
-        "editor": {
-          "default": true,
-          "description": "Enable/disable live editor injection; default True for interactive work.",
-          "type": "boolean"
+        "audio": {
+          "default": "auto",
+          "description": "Audio strategy: `auto`, `native`, `dummy`, or `none`; both `dummy` and `none` use SDL dummy audio.",
+          "enum": [
+            "auto",
+            "native",
+            "dummy",
+            "none"
+          ],
+          "type": "string"
+        },
+        "savedir": {
+          "default": "auto",
+          "description": "Save location. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default isolated `temporary`) so this session cannot read or write the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory. Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop.",
+          "type": "string"
         },
         "persistent": {
-          "default": "existing",
-          "description": "Persistent mode: `existing` preserves current persistent data and `empty` removes it in the isolated session; `copy` and `fixture` currently set an environment marker only and do not copy or load fixture data.",
+          "default": "auto",
+          "description": "Persistent mode. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default `empty` so isolated sessions start without host persistent data). `existing` preserves current persistent data; `empty` removes it in the isolated session; `copy` and `fixture` currently set an environment marker only and do not copy or load fixture data.",
           "enum": [
+            "auto",
             "existing",
             "empty",
             "copy",
@@ -1405,14 +1420,10 @@
           ],
           "type": "string"
         },
-        "project_path": {
-          "description": "Project root passed to the launcher and runtime bridge.",
-          "type": "string"
-        },
-        "savedir": {
-          "default": "temporary",
-          "description": "Save location. Default `temporary` creates an isolated directory so this session cannot read or write the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory. Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop.",
-          "type": "string"
+        "cleanup_on_stop": {
+          "default": true,
+          "description": "When true, stop removes only the disposable session directory created for isolated `savedir`/`home` (saves plus private HOME). Arbitrary save directories, explicit HOME paths, and existing user files are not deleted.",
+          "type": "boolean"
         },
         "timeout": {
           "default": 0,
@@ -1420,14 +1431,19 @@
           "minimum": 0,
           "type": "number"
         },
-        "version": {
-          "default": "stable",
-          "description": "Launcher version selector, either `stable` or an explicit semantic version (for example `8.5.3`).",
+        "home": {
+          "default": "auto",
+          "description": "Process HOME for the launched game. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default a private directory) so preferences and `~/.renpy` writes miss the user's files. Pass `existing` to keep the host HOME. `savedir=existing` also selects `home=existing` unless this is set. Any other non-empty value is an explicit HOME path.",
           "type": "string"
         },
-        "warp": {
-          "default": "",
-          "description": "Optional Ren'Py `file.rpy:line` startup target; this launch tool does not resolve label names.",
+        "preferences": {
+          "default": "auto",
+          "description": "Preference isolation. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default `empty`). Isolated sessions start without host preference files; `existing` keeps them when the save/HOME location can see them.",
+          "enum": [
+            "auto",
+            "existing",
+            "empty"
+          ],
           "type": "string"
         }
       },

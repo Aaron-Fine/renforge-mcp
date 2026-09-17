@@ -28,22 +28,32 @@ def build_wrappers(context):
         display: str = "auto",
         audio: str = "auto",
         savedir: str | None = None,
-        persistent: str = "existing",
+        persistent: str | None = None,
         cleanup_on_stop: bool = True,
         timeout: float | None = None,
         session: dict[str, Any] | None = None,
         cancel_event: threading.Event | None = None,
+        home: str | None = None,
+        preferences: str | None = None,
     ) -> dict:
         from ..dashboard_client import (
             launch_game as launch_via_dashboard,
             stop_game as stop_via_dashboard,
         )
-        from ..save_isolation import default_launch_savedir
+        from ..save_isolation import apply_launch_isolation_defaults
 
         canonical_editor = bool(editor)
         session_cfg = dict(session or {})
-        effective_savedir = default_launch_savedir(session_cfg.get("savedir", savedir))
-        effective_persistent = str(session_cfg.get("persistent", persistent) or "existing")
+        isolation_defaults = apply_launch_isolation_defaults(
+            savedir=session_cfg.get("savedir", savedir),
+            home=session_cfg.get("home", home),
+            persistent=session_cfg.get("persistent", persistent),
+            preferences=session_cfg.get("preferences", preferences),
+        )
+        effective_savedir = isolation_defaults["savedir"]
+        effective_home = isolation_defaults["home"]
+        effective_persistent = isolation_defaults["persistent"]
+        effective_preferences = isolation_defaults["preferences"]
         effective_cleanup = (
             session_cfg["cleanup_on_stop"]
             if isinstance(session_cfg.get("cleanup_on_stop"), bool)
@@ -65,6 +75,8 @@ def build_wrappers(context):
             persistent=effective_persistent,
             cleanup_on_stop=bool(effective_cleanup),
             timeout=timeout,
+            home=effective_home,
+            preferences=effective_preferences,
         )
         if delegated is not None:
             if cancel_event is not None and cancel_event.is_set():
@@ -113,6 +125,8 @@ def build_wrappers(context):
             timeout=timeout,
             session=session,
             cancel_event=cancel_event,
+            home=effective_home,
+            preferences=effective_preferences,
         )
 
 
@@ -152,10 +166,12 @@ def build_wrappers(context):
         editor: bool = True,
         display: str = "auto",
         audio: str = "auto",
-        savedir: str = "temporary",
-        persistent: str = "existing",
+        savedir: str = "auto",
+        persistent: str = "auto",
         cleanup_on_stop: bool = True,
         timeout: float = 0,
+        home: str = "auto",
+        preferences: str = "auto",
     ) -> dict:
         """Launch or reuse a game with the Live Editor enabled by default.
 
@@ -170,11 +186,12 @@ def build_wrappers(context):
         The call waits at most 20 seconds for readiness, then returns
         ``status="starting"`` while startup continues in the background. Poll
         ``renforge_launch_status`` until it reports ``ready`` or ``failed``.
-        display/audio default to auto; saves default to an isolated temporary
-        directory so this session does not read or write the user's normal
-        Ren'Py saves. Pass savedir='existing' to use the game's normal save
-        location. timeout controls the background startup deadline, not the MCP
-        call.
+        display/audio default to auto. Saves, preferences, and HOME default to
+        isolated temporary locations so this session does not read or write the
+        user's normal Ren'Py state. Pass savedir='existing' (and home='existing'
+        if needed) to use the user's files, or set RENFORGE_ISOLATION=existing
+        as a server-wide default. timeout controls the background startup
+        deadline, not the MCP call.
         """
         kwargs: dict[str, Any] = {
             "version": version,
@@ -182,9 +199,11 @@ def build_wrappers(context):
             "editor": editor,
             "display": display or "auto",
             "audio": audio or "auto",
-            "persistent": persistent or "existing",
+            "persistent": persistent,
             "cleanup_on_stop": cleanup_on_stop,
-            "savedir": savedir or "temporary",
+            "savedir": savedir,
+            "home": home,
+            "preferences": preferences,
         }
         if timeout and timeout > 0:
             kwargs["timeout"] = float(timeout)
@@ -201,6 +220,8 @@ def build_wrappers(context):
                 "persistent": persistent,
                 "cleanup_on_stop": cleanup_on_stop,
                 "timeout": timeout,
+                "home": home,
+                "preferences": preferences,
             },
             project_root=project_path,
             fn=_start_launch,

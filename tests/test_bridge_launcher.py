@@ -225,12 +225,15 @@ def test_launch_with_bridge_isolates_saves_via_native_savedir(
     assert command[2] == "run"
     assert env["RENPY_PATH_TO_SAVES"] == str(isolated)
     assert env["RENPY_MULTIPERSISTENT"] == str(isolated / "multipersistent")
+    assert env["HOME"] != str(home)
+    assert not Path(env["HOME"]).is_relative_to(home)
     assert isolated != normal_saves
     assert not isolated.is_relative_to(home)
     assert list((project_root / "game").glob("00renforge_session_*.rpy"))
     assert canary.read_text(encoding="utf-8") == "USER-SAVE\n"
     session.close(timeout=0.1)
     assert not isolated.exists()
+    assert not Path(env["HOME"]).exists()
 
 
 def test_launch_with_bridge_existing_savedir_does_not_redirect(
@@ -256,6 +259,7 @@ def test_launch_with_bridge_existing_savedir_does_not_redirect(
     assert command[2:] == ["run"]
     assert "RENFORGE_SAVEDIR" not in env
     assert "RENPY_PATH_TO_SAVES" not in env
+    assert "RENFORGE_PERSISTENT_MODE" not in env
     assert not list((project_root / "game").glob("00renforge_session_*.rpy"))
     session.close(timeout=0.1)
 

@@ -83,7 +83,10 @@ def test_emitted_tool_schemas_encode_options_limits_and_required_relationships()
     launch = schemas["renforge_launch"]["properties"]
     assert launch["display"]["enum"] == ["auto", "native", "xvfb", "external", "none"]
     assert launch["audio"]["enum"] == ["auto", "native", "dummy", "none"]
-    assert launch["persistent"]["enum"] == ["existing", "empty", "copy", "fixture"]
+    assert launch["persistent"]["enum"] == ["auto", "existing", "empty", "copy", "fixture"]
+    assert launch["preferences"]["enum"] == ["auto", "existing", "empty"]
+    assert launch["savedir"]["default"] == "auto"
+    assert launch["home"]["default"] == "auto"
     assert launch["timeout"]["minimum"] == 0
 
     compact = schemas["renforge_game_state_compact"]["properties"]
@@ -400,8 +403,11 @@ def test_catalog_states_exact_runtime_and_filesystem_contracts() -> None:
     assert "arbitrary save directory" in launch.parameters["savedir"].lower()
     assert "user's normal" in launch.parameters["savedir"].lower()
     assert "`existing`" in launch.parameters["savedir"]
+    assert "renforge_isolation" in launch.parameters["savedir"].lower()
+    assert "private directory" in launch.parameters["home"].lower()
+    assert "preference" in launch.parameters["preferences"].lower()
     assert "only" in launch.parameters["cleanup_on_stop"].lower()
-    assert "temporary" in launch.parameters["cleanup_on_stop"].lower()
+    assert "disposable session directory" in launch.parameters["cleanup_on_stop"].lower()
 
     launch_status = definitions["renforge_launch_status"].description.lower()
     for status in ("idle", "starting", "ready", "failed", "closing", "closed"):
