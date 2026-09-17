@@ -33,6 +33,14 @@ from ..effect_wait import expected_events_for_action
 from ..effect_wait import wait_for_effect as _wait_for_business_effect
 from ..launch_env import LaunchError
 from ..project import RenpyProject
+from ..save_isolation import (
+    apply_launch_isolation_defaults,
+    agent_session_id,
+    import_host_slots,
+    isolation_report,
+    list_host_slots,
+    path_exposes_user_saves,
+)
 from ..sdk import get_or_install_sdk
 from ..state_compact import (
     apply_serialization_limits,
@@ -269,6 +277,7 @@ def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
                 "current_label": state.get("current_label"),
                 "editor": bool(getattr(session, "editor", task.requested_editor)),
                 "elapsed_ms": elapsed_ms,
+                **_isolation_result(session),
             }
         except Exception:
             # Stale ready: initiate close and report closing/failure.
@@ -359,6 +368,7 @@ def launch_status(project_path: str) -> dict[str, Any]:
                     "status": "ready",
                     "current_label": state.get("current_label"),
                     "editor": bool(getattr(session, "editor", False)),
+                    **_isolation_result(session),
                 }
             except Exception:
                 pass
@@ -385,6 +395,35 @@ def launch_status(project_path: str) -> dict[str, Any]:
 def _key(project_path: str | Path) -> str:
     canonical = Path(project_path).expanduser().resolve()
     return os.path.normcase(str(canonical))
+
+
+def _owned_session(project_path: str | Path) -> BridgeSession | None:
+    return _SESSIONS.get(_key(project_path))
+
+
+def _isolation_result(session: Any) -> dict[str, Any]:
+    isolation = getattr(session, "isolation", None)
+    artifact_id = getattr(session, "session_id", None)
+    session_id = agent_session_id(artifact_id)
+    result: dict[str, Any] = {}
+    if isolation is not None:
+        report = isolation_report(isolation, session_id=session_id)
+        result.update(report)
+        isolation_obj = report.get("isolation") or {}
+        if isolation_obj.get("savedir"):
+            result["savedir"] = isolation_obj["savedir"]
+        if isolation_obj.get("home"):
+            result["home"] = isolation_obj["home"]
+        return result
+    if session_id:
+        result["session_id"] = session_id
+    savedir = getattr(session, "temporary_savedir", None)
+    home = getattr(session, "temporary_home", None)
+    if savedir is not None:
+        result["savedir"] = str(savedir)
+    if home is not None:
+        result["home"] = str(home)
+    return result
 
 
 def _client(project_path: str | Path) -> BridgeClient:
@@ -434,17 +473,22 @@ def launch_game(
     display: str = "auto",
     audio: str = "auto",
     savedir: str | None = None,
-    persistent: str = "existing",
+    persistent: str | None = None,
     cleanup_on_stop: bool = True,
     timeout: float | None = None,
     session: dict[str, Any] | None = None,
     cancel_event: threading.Event | None = None,
+    home: str | None = None,
+    preferences: str | None = None,
 ) -> dict:
     """Launch the project with the bridge injected, or reuse a live session.
 
     ``display`` / ``audio`` default to ``auto`` (native when available, else
-    Xvfb + dummy SDL audio). Pass a ``session`` object or individual kwargs to
-    isolate saves (``savedir='temporary'``) and persistent state.
+    Xvfb + dummy SDL audio). Saves, preferences, and HOME default to isolated
+    temporary locations so the session cannot read or write the user's normal
+    Ren'Py state. Pass ``savedir='existing'`` (and optionally
+    ``home='existing'``) to use the game's normal save location, or set
+    ``RENFORGE_ISOLATION=existing`` to change the server-wide default.
     """
     try:
         project = RenpyProject(Path(project_path))
@@ -458,11 +502,18 @@ def launch_game(
         }
 
     session_cfg = dict(session or {})
-    savedir = session_cfg.get("savedir", savedir)
-    persistent = str(session_cfg.get("persistent", persistent) or "existing")
+    isolation_defaults = apply_launch_isolation_defaults(
+        savedir=session_cfg.get("savedir", savedir),
+        home=session_cfg.get("home", home),
+        persistent=session_cfg.get("persistent", persistent),
+        preferences=session_cfg.get("preferences", preferences),
+    )
+    savedir = isolation_defaults["savedir"]
+    home = isolation_defaults["home"]
+    persistent = isolation_defaults["persistent"]
+    preferences = isolation_defaults["preferences"]
     if isinstance(session_cfg.get("cleanup_on_stop"), bool):
         cleanup_on_stop = session_cfg["cleanup_on_stop"]
-    preferences = str(session_cfg.get("preferences", "existing") or "existing")
     requested_editor = bool(editor)
 
     key = _key(project.root)
@@ -490,6 +541,7 @@ def launch_game(
                     "ready": True,
                     "current_label": state.get("current_label"),
                     "editor": existing_editor,
+                    **_isolation_result(existing),
                 }
             except Exception:
                 pass  # unreachable session; fall through and relaunch
@@ -575,11 +627,11 @@ def launch_game(
             "persistent": persistent,
             "cleanup_on_stop": cleanup_on_stop,
             "preferences": preferences,
+            "home": home,
         }
         if warp is not None:
             launch_kwargs["warp"] = warp
-        if savedir is not None:
-            launch_kwargs["savedir"] = savedir
+        launch_kwargs["savedir"] = savedir
         if timeout is not None:
             launch_kwargs["startup_timeout"] = float(timeout)
         launch_signature = inspect.signature(launch_with_bridge)
@@ -625,6 +677,10 @@ def launch_game(
         pass
     if session_obj.temporary_savedir is not None:
         result["savedir"] = str(session_obj.temporary_savedir)
+    home_path = getattr(session_obj, "temporary_home", None)
+    if home_path is not None:
+        result["home"] = str(home_path)
+    result.update(_isolation_result(session_obj))
     if session_obj.headless:
         # Running under xvfb-run: no visible window, but the bridge (state,
         # screenshots, input) works normally.
@@ -1047,20 +1103,32 @@ def saves(
     slot: str | None = None,
     extra_info: str | None = None,
     regexp: str | None = None,
+    slots: list[str] | None = None,
 ) -> dict:
-    """Save, load, or list named save slots through the running bridge."""
-    if action not in {"save", "load", "list"}:
-        return {"ok": False, "error": "action must be one of: save, load, list"}
+    """Save, load, or list named save slots, or copy selected host slots in."""
+    if action not in {"save", "load", "list", "list_user", "import"}:
+        return {
+            "ok": False,
+            "error": "action must be one of: save, load, list, list_user, import",
+        }
 
     if action in {"save", "load"}:
         if not isinstance(slot, str) or not slot.strip():
             return {"ok": False, "error": "slot is required for action '%s'" % action}
+        if slots is not None:
+            return {"ok": False, "error": "slots is only valid for action 'import'"}
+    elif action == "import":
+        if slot is not None and (not isinstance(slot, str) or not slot.strip()):
+            return {"ok": False, "error": "slot must be a non-empty string"}
     elif slot is not None:
-        return {"ok": False, "error": "slot is only valid for save or load"}
+        return {"ok": False, "error": "slot is only valid for save, load, or import"}
+
+    if action != "import" and slots is not None:
+        return {"ok": False, "error": "slots is only valid for action 'import'"}
 
     if action == "save":
         if regexp is not None:
-            return {"ok": False, "error": "regexp is only valid for action 'list'"}
+            return {"ok": False, "error": "regexp is only valid for list, list_user, or import"}
         if extra_info is not None and not isinstance(extra_info, str):
             return {"ok": False, "error": "extra_info must be a string"}
         return _with_client(
@@ -1072,14 +1140,53 @@ def saves(
         if extra_info is not None:
             return {"ok": False, "error": "extra_info is only valid for action 'save'"}
         if regexp is not None:
-            return {"ok": False, "error": "regexp is only valid for action 'list'"}
+            return {"ok": False, "error": "regexp is only valid for list, list_user, or import"}
         return _with_client(project_path, lambda client: client.load_slot(slot))
 
     if extra_info is not None:
         return {"ok": False, "error": "extra_info is only valid for action 'save'"}
     if regexp is not None and not isinstance(regexp, str):
         return {"ok": False, "error": "regexp must be a string"}
-    return _with_client(project_path, lambda client: client.list_slots(regexp=regexp))
+
+    if action == "list":
+        return _with_client(project_path, lambda client: client.list_slots(regexp=regexp))
+
+    try:
+        project = RenpyProject(Path(project_path))
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    if action == "list_user":
+        return list_host_slots(project.root, regexp=regexp)
+
+    session = _owned_session(project.root)
+    destination = getattr(session, "temporary_savedir", None) if session is not None else None
+    isolation = getattr(session, "isolation", None) if session is not None else None
+    savedir_mode = getattr(isolation, "savedir_mode", None)
+    if session is None or destination is None:
+        return {
+            "ok": False,
+            "code": "NO_ISOLATED_SESSION",
+            "error": "import requires an isolated launch; call renforge_launch first",
+        }
+    if savedir_mode == "existing" or path_exposes_user_saves(
+        destination, project_path=project.root
+    ):
+        return {
+            "ok": False,
+            "code": "SAVE_IMPORT_NOT_ISOLATED",
+            "error": "import refuses to copy into the user's save tree; use an isolated session",
+        }
+    return import_host_slots(
+        project.root,
+        destination,
+        slot=slot,
+        slots=slots,
+        regexp=regexp,
+    )
 
 
 def _filter_narrative_choices(raw_choices: list[dict[str, Any]]) -> list[dict[str, Any]]:

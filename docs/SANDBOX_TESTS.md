@@ -5,7 +5,9 @@
 This change adds test infrastructure for Linux filesystem and process isolation.
 It does not add isolation to RenForge's application launcher, register strict-play
 MCP tools, or establish that untrusted projects are safe to run. The sandbox
-helper is a test-only prototype, not a production security boundary.
+helper is a test-only prototype, not a production security boundary, and it is
+not a launch prerequisite. MCP save/preference/HOME isolation is implemented
+separately in `src/renforge/save_isolation.py`.
 
 Engine compatibility reuses the Ren'Py **8.5.3** harness already on `main`.
 There is no separate SDK downloader, runtime cache, bundled launcher, or render
@@ -57,10 +59,13 @@ See `.github/workflows/ci.yml` for display setup, SDK caching, and diagnostics.
 
 ## Reuse and limits
 
-Keep the canaries, write-routing assertions, and descendant checks as regression
-contracts. When production isolation is implemented, evolve the command builder
-into one shared implementation and point these tests at it. Do not leave a
-second test-only sandbox passing while the real launcher follows another path.
+Keep the canaries, write-routing assertions, and descendant checks as
+regression contracts for this **test-only** Linux helper. Do not wire
+Bubblewrap, FUSE, or `scripts/sandbox_test_support.py` into MCP or dashboard
+launch. Production `renforge_launch` isolation is application-layer
+(`src/renforge/save_isolation.py`): a disposable session root with native
+`--savedir`, a private HOME/XDG/temp tree, and empty persistent/preferences.
+That path must stay independent of this sandbox prototype.
 
 Current evidence is deliberately narrow:
 
@@ -76,44 +81,39 @@ Current evidence is deliberately narrow:
   not ready for hostile project execution. Path validation, bounded failure
   cleanup, resource ownership, and broader isolation tests remain future work.
 
-## Future application work (not implemented by this PR)
+MCP/dashboard `renforge_launch` defaults to application-layer isolation
+(temporary savedir, private HOME, empty persistent/preferences). That keeps
+ordinary engine save, preference, and `~/.renpy` writes out of the user's
+files, but it is **not** the Bubblewrap/FUSE sandbox and must not be described
+as equivalent. Missing bwrap/FUSE must never fail an MCP launch.
 
-The eventual goal is an MCP client that launches a supported project in an
-isolated profile, observes coherent image and semantic state, makes guarded
-choices, resumes verified checkpoints, and retains an auditable trace.
-Use the shared Ren'Py 8.5.3 harness and extend the repository demo with focused
-synthetic cases as needed, rather than introducing another SDK bootstrap.
-A real target project must not run until the synthetic route passes.
+## Future application work (not on the MCP launch path)
 
-The intended application boundary gives each launch a fresh display, sandbox,
-profile lease, session, and trace. It must validate loose source and launcher
-paths, restrict environment and network access, separate guest publication from
-trusted control files, and treat all guest output as untrusted.
+A Linux namespace/FUSE supervisor remains an optional research direction for
+hostile-project execution. It is **not** a prerequisite for MCP save or
+preference isolation, and it is not scheduled as production launcher work.
+If that experiment resumes, keep it behind the existing `sandbox-contract` CI
+job and `RENFORGE_SANDBOX_TESTS=1`; do not make it a launch dependency.
 
-## Stage 1: strict launch and stop
+The current product goal is already served by application-layer isolation:
+launch a supported project without touching the user's Ren'Py saves, HOME, or
+preferences, observe coherent image and semantic state, and stop cleanly.
 
-Build one production vertical slice: preflight, create a profile, launch the
-synthetic fixture, query status, and stop it.
+The later sandbox experiment, if pursued, would still need a fresh display,
+profile lease, session, and trace; path validation without following
+symlinks; restricted environment and network access; and treating all guest
+output as untrusted. That work is out of scope for MCP launches.
 
-- Add contracts only when their public operation is implemented.
-- Implement one reusable sandbox builder from the sandbox contract behavior.
-- Run a disposable backend probe during preflight; executable presence alone
-  is not sufficient.
-- Validate paths without following symlinks, reject special files and escaping
-  binds, and close unintended file descriptors.
-- Give one supervisor explicit ownership of the game namespace, Xvfb, FUSE
-  helper, and mount.
-- Allocate durable project, profile, session, and trace identities before
-  asynchronous launch.
-- Attest the live engine version, project paths, save paths, home/XDG/temp, and
-  publication path before reporting ready.
-- On stop or startup failure, reap every owned process and verify unmount. If
-  cleanup cannot be proved, quarantine the session and refuse profile reuse.
-- Reject legacy launch or attachment paths for a strict session.
+## Stage 1: strict launch and stop (deferred)
 
-Stage 1 exits when the synthetic game using the shared Ren'Py SDK harness reaches attested ready and stops
-without changing lower-project or normal-save canaries. Tests must kill the
-actual supervisor and independently fail game, display, and FUSE startup.
+This stage described a production Bubblewrap/FUSE vertical slice. It is
+deferred. Do not implement a reusable sandbox builder on the launcher, do not
+require a FUSE backend probe at preflight, and do not reject ordinary MCP
+launch when namespace tools are absent.
+
+The `sandbox-contract` CI job may keep exercising the test helper so the
+prototype does not rot. Application-layer isolation tests live in
+`tests/test_save_isolation.py` and the launch-path unit tests.
 
 ## Stage 2: observe, act, and resume
 

@@ -2,7 +2,9 @@
 """Test-only Linux sandbox helpers for disposable isolation contract tests.
 
 This prototype is not a production launcher and is not used by MCP tools.
-The contract suite should exercise the production sandbox builder once it exists.
+MCP/dashboard isolation is application-layer (`renforge.save_isolation`) and
+must not depend on Bubblewrap or FUSE. Keep this helper behind
+`RENFORGE_SANDBOX_TESTS=1` and `tests/test_sandbox_contract.py`.
 """
 from __future__ import annotations
 
