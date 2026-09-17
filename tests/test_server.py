@@ -139,8 +139,14 @@ def test_register_tools_preserves_metadata_on_mcp_fastmcp_backend() -> None:
     tool = app._tool_manager._tools["renforge_saves"]
     assert tool.description == TOOL_DEFINITIONS["renforge_saves"].description
     assert tool.annotations.destructiveHint is True
-    assert tool.parameters["properties"]["action"]["enum"] == ["save", "load", "list"]
-    assert len(tool.parameters["oneOf"]) == 3
+    assert tool.parameters["properties"]["action"]["enum"] == [
+        "save",
+        "load",
+        "list",
+        "list_user",
+        "import",
+    ]
+    assert len(tool.parameters["oneOf"]) == 5
 
 
 def test_register_tools_does_not_retry_internal_decorator_type_errors() -> None:
@@ -923,13 +929,14 @@ def test_saves_tool_dispatches_grouped_save_action(tmp_path, monkeypatch) -> Non
 
     calls = {}
 
-    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None):
+    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None, slots=None):
         calls.update(
             project_path=project_path,
             action=action,
             slot=slot,
             extra_info=extra_info,
             regexp=regexp,
+            slots=slots,
         )
         return {"ok": True, "slot": slot, "extra_info": extra_info}
 
@@ -957,6 +964,7 @@ def test_saves_tool_dispatches_grouped_save_action(tmp_path, monkeypatch) -> Non
         "slot": "branch-a",
         "extra_info": "before menu",
         "regexp": None,
+        "slots": None,
     }
 
 
@@ -976,7 +984,7 @@ def test_saves_tool_validates_action_and_required_slot(tmp_path) -> None:
     missing_slot = asyncio.run(_call("save"))
 
     assert invalid_action.is_error is True
-    assert "Input should be 'save', 'load' or 'list'" in invalid_action.content[0].text
+    assert "Input should be 'save', 'load', 'list', 'list_user' or 'import'" in invalid_action.content[0].text
     missing_payload = json.loads(next(block.text for block in missing_slot.content if block.type == "text"))
     assert missing_payload == {
         "ok": False,
@@ -996,7 +1004,7 @@ def test_saves_tool_dispatches_load_and_list_actions(tmp_path, monkeypatch) -> N
 
     calls = []
 
-    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None):
+    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None, slots=None):
         calls.append(
             {
                 "project_path": project_path,
@@ -1004,6 +1012,7 @@ def test_saves_tool_dispatches_load_and_list_actions(tmp_path, monkeypatch) -> N
                 "slot": slot,
                 "extra_info": extra_info,
                 "regexp": regexp,
+                "slots": slots,
             }
         )
         return {"ok": True, "action": action}
@@ -1036,6 +1045,7 @@ def test_saves_tool_dispatches_load_and_list_actions(tmp_path, monkeypatch) -> N
             "slot": "branch-a",
             "extra_info": None,
             "regexp": None,
+            "slots": None,
         },
         {
             "project_path": str(tmp_path),
@@ -1043,6 +1053,7 @@ def test_saves_tool_dispatches_load_and_list_actions(tmp_path, monkeypatch) -> N
             "slot": None,
             "extra_info": None,
             "regexp": "branch",
+            "slots": None,
         },
     ]
 
@@ -1053,7 +1064,7 @@ def test_saves_tool_is_listed_with_grouped_actions() -> None:
     tools = asyncio.run(create_app().list_tools())
     tool = next(tool for tool in tools if tool.name == "renforge_saves")
 
-    assert all(action in tool.description for action in ("save", "load", "list"))
+    assert all(action in tool.description for action in ("save", "load", "list", "list_user", "import"))
     assert tool.parameters["required"] == ["project_path", "action"]
     assert set(tool.parameters["properties"]) == {
         "project_path",
@@ -1061,6 +1072,7 @@ def test_saves_tool_is_listed_with_grouped_actions() -> None:
         "slot",
         "extra_info",
         "regexp",
+        "slots",
         "authorize",
     }
 

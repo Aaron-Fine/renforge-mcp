@@ -232,7 +232,7 @@ def test_tool_definitions_describe_real_side_effects_and_exact_options() -> None
 
     assert all(
         action in parameter("renforge_saves", "action")
-        for action in ("save", "load", "list")
+        for action in ("save", "load", "list", "list_user", "import")
     )
     assert "delete" not in parameter("renforge_saves", "action")
     assert "clear" not in description("renforge_saves")
@@ -404,10 +404,20 @@ def test_catalog_states_exact_runtime_and_filesystem_contracts() -> None:
     assert "user's normal" in launch.parameters["savedir"].lower()
     assert "`existing`" in launch.parameters["savedir"]
     assert "renforge_isolation" in launch.parameters["savedir"].lower()
+    assert "authorize=true" in launch.parameters["savedir"]
     assert "private directory" in launch.parameters["home"].lower()
     assert "preference" in launch.parameters["preferences"].lower()
     assert "only" in launch.parameters["cleanup_on_stop"].lower()
     assert "disposable session directory" in launch.parameters["cleanup_on_stop"].lower()
+    assert "authorize=true" in launch.parameters["authorize"]
+    assert "session_id" in launch.description
+    assert "isolation" in launch.description.lower()
+
+    jump = definitions["renforge_jump"]
+    assert "savedir" in jump.parameters
+    assert "authorize" in jump.parameters
+    assert "temporary" in jump.description.lower()
+    assert "authorize=true" in definitions["renforge_new_game"].description
 
     launch_status = definitions["renforge_launch_status"].description.lower()
     for status in ("idle", "starting", "ready", "failed", "closing", "closed"):

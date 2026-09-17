@@ -28,7 +28,7 @@ from ..launch_env import (
     resolve_display_strategy,
 )
 from ..project import RenpyProject
-from ..save_isolation import resolve_launch_isolation
+from ..save_isolation import LaunchIsolation, resolve_launch_isolation
 from ..sdk import RenpySdk
 from .artifacts import (
     ArtifactOwnershipError,
@@ -520,6 +520,8 @@ class BridgeSession:
         phases: list[dict[str, Any]] | None = None,
         project_lock: ProjectBridgeLock | None = None,
         editor_coordinator: EditorCoordinator | None = None,
+        isolation: LaunchIsolation | None = None,
+        session_id: str | None = None,
     ):
         self.process = process
         self.client = client
@@ -533,6 +535,8 @@ class BridgeSession:
         self.startup_ms = startup_ms
         self.phases = phases or []
         self.editor = editor_coordinator is not None
+        self.isolation = isolation
+        self.session_id = session_id
         self._project_root = project_root
         self._cleaned: dict[str, Any] = {}
         self._project_lock = project_lock
@@ -1073,6 +1077,8 @@ def _launch_after_project_lock(
                     phases=phases,
                     project_lock=project_lock,
                     editor_coordinator=editor_coordinator,
+                    isolation=isolation,
+                    session_id=session_id,
                 )
             except Exception:
                 time.sleep(0.3)

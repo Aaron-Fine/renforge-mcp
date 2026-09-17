@@ -7,10 +7,17 @@ import shutil
 from pathlib import Path
 
 from renforge.save_isolation import (
+    agent_session_id,
     apply_launch_isolation_defaults,
     classify_savedir,
     configured_isolation_mode,
     default_launch_savedir,
+    import_host_slots,
+    isolation_report,
+    launch_exposes_user_saves,
+    list_host_slots,
+    parse_save_directory,
+    path_exposes_user_saves,
     resolve_launch_isolation,
     resolve_save_isolation,
 )
@@ -214,3 +221,162 @@ def test_session_init_payload_resets_persistent_and_preferences() -> None:
     assert "unlink('persistent')" in text
     assert "RENFORGE_PREFERENCES_MODE" in text
     assert "persistent._preferences = None" in text
+
+
+def test_isolation_report_and_session_id(tmp_path: Path) -> None:
+    isolation = resolve_launch_isolation("temporary")
+    try:
+        report = isolation_report(isolation, session_id="sess_abc")
+        assert report["session_id"] == "sess_abc"
+        payload = report["isolation"]
+        assert payload["savedir_mode"] == "temporary"
+        assert payload["home_mode"] == "temporary"
+        assert payload["exposes_user_saves"] is False
+        assert payload["savedir"] == str(isolation.savedir)
+        assert payload["home"] == str(isolation.home)
+        assert agent_session_id("deadbeef") == "sess_deadbeef"
+        assert agent_session_id("sess_deadbeef") == "sess_deadbeef"
+    finally:
+        _cleanup(isolation)
+
+    existing = resolve_launch_isolation("existing")
+    assert existing.exposes_user_saves is True
+    assert isolation_report(existing, session_id="sess_x")["isolation"]["exposes_user_saves"] is True
+
+
+def test_launch_exposes_user_saves_classifies_existing_and_host_paths(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    assert launch_exposes_user_saves() is False
+    assert launch_exposes_user_saves(savedir="temporary") is False
+    assert launch_exposes_user_saves(savedir="existing") is True
+    assert launch_exposes_user_saves(savedir="auto", home="existing") is True
+    host = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(host))
+    user_saves = host / ".renpy" / "renforge-demo"
+    user_saves.mkdir(parents=True)
+    assert path_exposes_user_saves(user_saves, home=host) is True
+    assert launch_exposes_user_saves(savedir=str(user_saves), home="temporary") is True
+    other = tmp_path / "scratch-saves"
+    other.mkdir()
+    assert launch_exposes_user_saves(savedir=str(other), home="temporary") is False
+
+
+def test_parse_save_directory_and_list_host_slots(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "game-root"
+    game = project / "game"
+    game.mkdir(parents=True)
+    (game / "script.rpy").write_text("label start:\n    return\n", encoding="utf-8")
+    (game / "options.rpy").write_text(
+        'define config.save_directory = "renforge-demo"\n', encoding="utf-8"
+    )
+    host = tmp_path / "home"
+    host_saves = host / ".renpy" / "renforge-demo"
+    host_saves.mkdir(parents=True)
+    (host_saves / "1-1-LT1.save").write_bytes(b"SLOT-1-1")
+    (host_saves / "1-1-LT1.save.json").write_text(
+        '{"_save_name": "after menu"}', encoding="utf-8"
+    )
+    (host_saves / "branch-a-LT1.save").write_bytes(b"SLOT-BRANCH")
+    project_saves = game / "saves"
+    project_saves.mkdir()
+    (project_saves / "local-LT1.save").write_bytes(b"LOCAL")
+    monkeypatch.setenv("HOME", str(host))
+
+    assert parse_save_directory(project) == "renforge-demo"
+    listed = list_host_slots(project, home=host)
+    assert listed["ok"] is True
+    names = [item["name"] for item in listed["slots"]]
+    assert names == ["1-1", "branch-a", "local"]
+    by_name = {item["name"]: item for item in listed["slots"]}
+    assert by_name["1-1"]["extra_info"] == "after menu"
+    assert str(host_saves) in listed["directories"]
+
+    filtered = list_host_slots(project, regexp="branch", home=host)
+    assert [item["name"] for item in filtered["slots"]] == ["branch-a"]
+
+
+def test_import_copies_selected_slots_and_refuses_user_tree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = tmp_path / "game-root"
+    game = project / "game"
+    game.mkdir(parents=True)
+    (game / "script.rpy").write_text("label start:\n    return\n", encoding="utf-8")
+    (game / "options.rpy").write_text(
+        'define config.save_directory = "renforge-demo"\n', encoding="utf-8"
+    )
+    host = tmp_path / "home"
+    host_saves = host / ".renpy" / "renforge-demo"
+    host_saves.mkdir(parents=True)
+    (host_saves / "1-1-LT1.save").write_bytes(b"SLOT-1-1")
+    (host_saves / "1-1-LT1.save.json").write_text(
+        '{"_save_name": "after menu"}', encoding="utf-8"
+    )
+    (host_saves / "branch-a-LT1.save").write_bytes(b"SLOT-BRANCH")
+    dest = tmp_path / "session" / "saves"
+    dest.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(host))
+
+    copied = import_host_slots(project, dest, slots=["1-1"], home=host)
+    assert copied["ok"] is True
+    assert (dest / "1-1-LT1.save").read_bytes() == b"SLOT-1-1"
+    assert (dest / "1-1-LT1.save.json").is_file()
+    assert not (dest / "branch-a-LT1.save").exists()
+    assert (host_saves / "1-1-LT1.save").read_bytes() == b"SLOT-1-1"
+
+    refused = import_host_slots(project, host_saves, slot="1-1", home=host)
+    assert refused["ok"] is False
+    assert refused["code"] == "SAVE_IMPORT_NOT_ISOLATED"
+
+    missing = import_host_slots(project, dest, slot="nope", home=host)
+    assert missing["ok"] is False
+    assert "no matching" in missing["error"]
+
+
+def test_live_saves_list_user_and_import(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from renforge.tools import live
+
+    project = tmp_path / "game-root"
+    game = project / "game"
+    game.mkdir(parents=True)
+    (game / "script.rpy").write_text("label start:\n    return\n", encoding="utf-8")
+    (game / "options.rpy").write_text(
+        'define config.save_directory = "renforge-demo"\n', encoding="utf-8"
+    )
+    host = tmp_path / "home"
+    host_saves = host / ".renpy" / "renforge-demo"
+    host_saves.mkdir(parents=True)
+    (host_saves / "1-1-LT1.save").write_bytes(b"SLOT-1-1")
+    dest = tmp_path / "session" / "saves"
+    dest.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(host))
+
+    listed = live.saves(str(project), "list_user")
+    assert listed["ok"] is True
+    assert [item["name"] for item in listed["slots"]] == ["1-1"]
+
+    refused = live.saves(str(project), "import", slot="1-1")
+    assert refused["ok"] is False
+    assert refused["code"] == "NO_ISOLATED_SESSION"
+
+    isolation = SimpleNamespace(savedir_mode="temporary", home_mode="temporary")
+    session = SimpleNamespace(temporary_savedir=dest, isolation=isolation)
+    live._SESSIONS[live._key(project)] = session  # type: ignore[assignment]
+    try:
+        imported = live.saves(str(project), "import", slot="1-1")
+        assert imported["ok"] is True
+        assert (dest / "1-1-LT1.save").read_bytes() == b"SLOT-1-1"
+        existing = SimpleNamespace(
+            temporary_savedir=host_saves,
+            isolation=SimpleNamespace(savedir_mode="existing"),
+        )
+        live._SESSIONS[live._key(project)] = existing  # type: ignore[assignment]
+        blocked = live.saves(str(project), "import", slot="1-1")
+        assert blocked["ok"] is False
+        assert blocked["code"] == "SAVE_IMPORT_NOT_ISOLATED"
+    finally:
+        live._SESSIONS.pop(live._key(project), None)

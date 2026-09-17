@@ -22,9 +22,14 @@ versioning.
   default. Each session gets a disposable save directory (`savedir=temporary`,
   native `--savedir` plus `RENFORGE_SAVEDIR` / `RENPY_PATH_TO_SAVES` /
   `RENPY_MULTIPERSISTENT`), a private HOME/XDG/temp tree, empty persistent
-  data, and reset preferences. Pass `savedir=existing` (which also keeps host
-  HOME unless `home` is set) or set `RENFORGE_ISOLATION=existing` to use the
-  user's files. This is application-layer isolation, not the Linux
+  data, and reset preferences. Ready payloads include `session_id` and an
+  `isolation` object so an agent can see the mode. Pass `savedir=existing`
+  (which also keeps host HOME unless `home` is set) or set
+  `RENFORGE_ISOLATION=existing` to use the user's files; that is classified
+  destructive and needs `authorize=true` when `RENFORGE_POLICY=enforce`.
+  `renforge_saves` gains `list_user` (observational host listing) and `import`
+  (copy selected host slots into the isolated session; never bind-mounts the
+  user tree). This is application-layer isolation, not the Linux
   Bubblewrap/FUSE contract suite, which remains test-only and is not on the
   MCP launch path.
 

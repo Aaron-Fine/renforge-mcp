@@ -172,6 +172,7 @@ def build_wrappers(context):
         timeout: float = 0,
         home: str = "auto",
         preferences: str = "auto",
+        authorize: bool = False,
     ) -> dict:
         """Launch or reuse a game with the Live Editor enabled by default.
 
@@ -188,9 +189,11 @@ def build_wrappers(context):
         ``renforge_launch_status`` until it reports ``ready`` or ``failed``.
         display/audio default to auto. Saves, preferences, and HOME default to
         isolated temporary locations so this session does not read or write the
-        user's normal Ren'Py state. Pass savedir='existing' (and home='existing'
+        user's normal Ren'Py state. The ready payload includes ``session_id``
+        and an ``isolation`` object. Pass savedir='existing' (and home='existing'
         if needed) to use the user's files, or set RENFORGE_ISOLATION=existing
-        as a server-wide default. timeout controls the background startup
+        as a server-wide default; that requires authorize=true when
+        RENFORGE_POLICY=enforce. timeout controls the background startup
         deadline, not the MCP call.
         """
         kwargs: dict[str, Any] = {
@@ -222,6 +225,7 @@ def build_wrappers(context):
                 "timeout": timeout,
                 "home": home,
                 "preferences": preferences,
+                "authorize": authorize,
             },
             project_root=project_path,
             fn=_start_launch,
@@ -242,8 +246,21 @@ def build_wrappers(context):
         )
 
 
-    def renforge_jump(project_path: str, target: str, version: str = "stable") -> dict:
-        """Restart at a label or file:line; poll launch status when still starting."""
+    def renforge_jump(
+        project_path: str,
+        target: str,
+        version: str = "stable",
+        savedir: str = "auto",
+        persistent: str = "auto",
+        home: str = "auto",
+        preferences: str = "auto",
+        authorize: bool = False,
+    ) -> dict:
+        """Restart at a label or file:line; poll launch status when still starting.
+
+        Isolation knobs match ``renforge_launch``. Exposing the user save tree
+        requires authorize=true when RENFORGE_POLICY=enforce.
+        """
         from ..navigation import resolve_warp_target
 
         def _jump() -> dict:
@@ -254,11 +271,24 @@ def build_wrappers(context):
                 project_path,
                 version=version,
                 warp=str(resolved["target"]),
+                savedir=savedir,
+                persistent=persistent,
+                home=home,
+                preferences=preferences,
             )
 
         return _log_tool_call(
             name="renforge_jump",
-            params={"project_path": project_path, "target": target, "version": version},
+            params={
+                "project_path": project_path,
+                "target": target,
+                "version": version,
+                "savedir": savedir,
+                "persistent": persistent,
+                "home": home,
+                "preferences": preferences,
+                "authorize": authorize,
+            },
             project_root=project_path,
             fn=_jump,
             args=(),
@@ -266,8 +296,20 @@ def build_wrappers(context):
         )
 
 
-    def renforge_new_game(project_path: str, version: str = "stable") -> dict:
-        """Start at the ``start`` label; poll launch status when still starting."""
+    def renforge_new_game(
+        project_path: str,
+        version: str = "stable",
+        savedir: str = "auto",
+        persistent: str = "auto",
+        home: str = "auto",
+        preferences: str = "auto",
+        authorize: bool = False,
+    ) -> dict:
+        """Start at the ``start`` label; poll launch status when still starting.
+
+        Isolation knobs match ``renforge_launch``. Exposing the user save tree
+        requires authorize=true when RENFORGE_POLICY=enforce.
+        """
         from ..navigation import resolve_warp_target
 
         def _new_game() -> dict:
@@ -278,11 +320,23 @@ def build_wrappers(context):
                 project_path,
                 version=version,
                 warp=str(resolved["target"]),
+                savedir=savedir,
+                persistent=persistent,
+                home=home,
+                preferences=preferences,
             )
 
         return _log_tool_call(
             name="renforge_new_game",
-            params={"project_path": project_path, "version": version},
+            params={
+                "project_path": project_path,
+                "version": version,
+                "savedir": savedir,
+                "persistent": persistent,
+                "home": home,
+                "preferences": preferences,
+                "authorize": authorize,
+            },
             project_root=project_path,
             fn=_new_game,
             args=(),

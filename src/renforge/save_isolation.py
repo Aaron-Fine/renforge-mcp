@@ -5,17 +5,24 @@ game cannot read or write the user's normal Ren'Py state (saves, persistent
 data, preferences, and ``$HOME/.renpy``). Pass ``savedir=existing`` /
 ``home=existing`` / ``RENFORGE_ISOLATION=existing`` to use the user's files.
 
+Selected host slots can be copied into an isolated session with
+``renforge_saves(action="import")``. This module never bind-mounts the user
+tree.
+
 This is not the Linux Bubblewrap/FUSE sandbox. That helper stays test-only
 and is not on the MCP launch path.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Iterable, Mapping
 
 EXISTING_TOKENS: frozenset[str] = frozenset({"existing", "default"})
 TEMPORARY_TOKENS: frozenset[str] = frozenset({"", "temporary"})
@@ -23,9 +30,17 @@ EMPTY_TOKENS: frozenset[str] = frozenset({"empty", "temporary"})
 AUTO_TOKENS: frozenset[str] = frozenset({"auto"})
 ISOLATION_ENV: str = "RENFORGE_ISOLATION"
 SESSION_PREFIX: str = "renforge-session-"
+SESSION_ID_PREFIX: str = "sess_"
 MULTIPERSISTENT_DIRNAME: str = "multipersistent"
 SAVES_DIRNAME: str = "saves"
 HOME_DIRNAME: str = "home"
+SAVE_DIRECTORY_RE: re.Pattern[str] = re.compile(
+    r"^\s*define\s+config\.save_directory\s*=\s*[\"']([^\"']+)[\"']",
+    re.MULTILINE,
+)
+SLOT_FILE_RE: re.Pattern[str] = re.compile(
+    r"^(?P<slot>.+)-[A-Za-z]{2}\d+\.save(?P<json>\.json)?$"
+)
 
 
 def classify_token(value: str | None, *, omitted: str) -> str:
@@ -141,6 +156,17 @@ class LaunchIsolation:
         """Backward-compatible alias for :attr:`savedir_mode`."""
         return self.savedir_mode
 
+    @property
+    def exposes_user_saves(self) -> bool:
+        """Whether this launch can read or write the host Ren'Py save tree."""
+        if self.savedir_mode == "existing" or self.home_mode == "existing":
+            return True
+        if self.savedir_mode == "path" and self.savedir is not None:
+            return path_exposes_user_saves(self.savedir)
+        if self.home_mode == "path" and self.home is not None:
+            return path_is_host_home(self.home)
+        return False
+
     def command_args(self) -> list[str]:
         if self.savedir is None:
             return []
@@ -241,6 +267,445 @@ def resolve_launch_isolation(
         session_root=session_root,
         cleanup=cleanup,
     )
+
+
+def agent_session_id(artifact_session_id: str | None) -> str | None:
+    """Return the agent-facing isolation id for a bridge artifact session."""
+    if not artifact_session_id:
+        return None
+    token = str(artifact_session_id).strip()
+    if not token:
+        return None
+    if token.startswith(SESSION_ID_PREFIX):
+        return token
+    return f"{SESSION_ID_PREFIX}{token}"
+
+
+def isolation_report(
+    isolation: LaunchIsolation,
+    *,
+    session_id: str | None = None,
+    project_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """JSON object attached to launch/status so agents can see isolation."""
+    exposes = isolation.exposes_user_saves
+    if isolation.savedir_mode == "path" and isolation.savedir is not None:
+        exposes = exposes or path_exposes_user_saves(
+            isolation.savedir, project_path=project_path
+        )
+    return {
+        "session_id": session_id,
+        "isolation": {
+            "savedir_mode": isolation.savedir_mode,
+            "home_mode": isolation.home_mode,
+            "persistent_mode": isolation.persistent_mode,
+            "preferences_mode": isolation.preferences_mode,
+            "savedir": str(isolation.savedir) if isolation.savedir is not None else None,
+            "home": str(isolation.home) if isolation.home is not None else None,
+            "exposes_user_saves": bool(exposes),
+        },
+    }
+
+
+def launch_exposes_user_saves(
+    *,
+    savedir: str | None = None,
+    home: str | None = None,
+    persistent: str | None = None,
+    preferences: str | None = None,
+    project_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """True when the resolved launch can read or write the host save tree."""
+    resolved = apply_launch_isolation_defaults(
+        savedir=savedir,
+        home=home,
+        persistent=persistent,
+        preferences=preferences,
+        environ=environ,
+    )
+    savedir_mode = classify_savedir(resolved["savedir"])
+    home_mode = classify_token(resolved["home"], omitted="temporary")
+    if home_mode == "empty":
+        home_mode = "temporary"
+    if savedir_mode == "existing" or home_mode == "existing":
+        return True
+    if savedir_mode == "path" and path_exposes_user_saves(
+        resolved["savedir"], project_path=project_path
+    ):
+        return True
+    if home_mode == "path" and path_is_host_home(resolved["home"]):
+        return True
+    return False
+
+
+def path_is_host_home(value: str | Path, *, home: Path | None = None) -> bool:
+    """True when *value* is the host HOME directory."""
+    try:
+        path = Path(value).expanduser().resolve()
+        host = (home or Path.home()).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return os.path.normcase(str(path)) == os.path.normcase(str(host))
+
+
+def path_exposes_user_saves(
+    savedir: str | Path,
+    project_path: str | Path | None = None,
+    *,
+    home: Path | None = None,
+) -> bool:
+    """True when *savedir* is the host Ren'Py tree or the project's ``game/saves``."""
+    try:
+        path = Path(savedir).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    for root in user_save_roots(project_path, home=home):
+        try:
+            resolved = root.expanduser().resolve()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if _is_relative_to(path, resolved) or path == resolved:
+            return True
+    return False
+
+
+def user_save_roots(
+    project_path: str | Path | None = None,
+    *,
+    home: Path | None = None,
+) -> list[Path]:
+    """Host locations that hold the user's normal Ren'Py saves."""
+    host_home = home if home is not None else Path.home()
+    roots = [host_renpy_root(home=host_home)]
+    if project_path not in (None, ""):
+        try:
+            roots.append(Path(str(project_path)).expanduser().resolve() / "game" / "saves")
+        except (OSError, RuntimeError, ValueError):
+            pass
+    return roots
+
+
+def host_renpy_root(*, home: Path | None = None) -> Path:
+    """Platform directory that contains per-game host save folders."""
+    host_home = home if home is not None else Path.home()
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / "RenPy"
+        return host_home / "AppData" / "Roaming" / "RenPy"
+    if sys_platform() == "darwin":
+        return host_home / "Library" / "RenPy"
+    return host_home / ".renpy"
+
+
+def sys_platform() -> str:
+    """Indirection so tests can monkeypatch the platform check."""
+    import sys
+
+    return sys.platform
+
+
+def parse_save_directory(project_root: str | Path) -> str | None:
+    """Return ``config.save_directory`` from ``game/*.rpy``, if defined."""
+    game_dir = Path(project_root) / "game"
+    if not game_dir.is_dir():
+        return None
+    candidates = [game_dir / "options.rpy", *sorted(game_dir.glob("*.rpy"))]
+    seen: set[Path] = set()
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if resolved in seen or not path.is_file():
+            continue
+        seen.add(resolved)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        match = SAVE_DIRECTORY_RE.search(text)
+        if match:
+            name = match.group(1).strip()
+            if name:
+                return name
+    return None
+
+
+def host_save_directories(
+    project_root: str | Path,
+    *,
+    home: Path | None = None,
+) -> list[Path]:
+    """Existing host directories that may contain this project's user saves."""
+    directories: list[Path] = []
+    save_name = parse_save_directory(project_root)
+    if save_name:
+        host_dir = host_renpy_root(home=home) / save_name
+        if host_dir.is_dir():
+            directories.append(host_dir)
+    project_saves = Path(project_root) / "game" / "saves"
+    if project_saves.is_dir() and project_saves not in directories:
+        directories.append(project_saves)
+    return directories
+
+
+def list_host_slots(
+    project_root: str | Path,
+    *,
+    regexp: str | None = None,
+    home: Path | None = None,
+) -> dict[str, Any]:
+    """List host save slots without touching a running game or writing files."""
+    compiled = None
+    if regexp is not None:
+        if not isinstance(regexp, str):
+            return {"ok": False, "error": "regexp must be a string"}
+        try:
+            compiled = re.compile(regexp)
+        except re.error as exc:
+            return {"ok": False, "error": f"invalid regexp: {exc}"}
+
+    directories = host_save_directories(project_root, home=home)
+    slots: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for directory in directories:
+        for slot in _slots_in_directory(directory):
+            name = slot["name"]
+            if name in seen:
+                continue
+            if compiled is not None and compiled.search(name) is None:
+                continue
+            seen.add(name)
+            slots.append(slot)
+    return {
+        "ok": True,
+        "slots": slots,
+        "directories": [str(path) for path in directories],
+    }
+
+
+def import_host_slots(
+    project_root: str | Path,
+    destination: str | Path,
+    *,
+    slot: str | None = None,
+    slots: Iterable[str] | None = None,
+    regexp: str | None = None,
+    home: Path | None = None,
+) -> dict[str, Any]:
+    """Copy selected host slot files into an isolated session savedir."""
+    dest = Path(destination).expanduser().resolve()
+    if path_exposes_user_saves(dest, project_path=project_root, home=home):
+        return {
+            "ok": False,
+            "code": "SAVE_IMPORT_NOT_ISOLATED",
+            "error": "import refuses to copy into the user's save tree; launch an isolated session first",
+        }
+    dest.mkdir(parents=True, exist_ok=True)
+
+    resolved = select_host_slot_names(
+        project_root, slot=slot, slots=slots, regexp=regexp, home=home
+    )
+    if not resolved.get("ok"):
+        return resolved
+    selected = list(resolved.get("names") or [])
+    missing = list(resolved.get("missing") or [])
+    listed = list_host_slots(project_root, regexp=None, home=home)
+    if not listed.get("ok"):
+        return listed
+    available = {item["name"]: item for item in listed.get("slots", [])}
+
+    imported: list[dict[str, Any]] = []
+    for name in selected:
+        record = available.get(name)
+        if record is None:
+            continue
+        directory = Path(record["directory"])
+        copied = _copy_slot_files(directory, dest, name)
+        imported.append({"name": name, "files": copied, "directory": str(directory)})
+
+    if not imported:
+        return {
+            "ok": False,
+            "error": "no matching host save slots",
+            "missing": missing,
+            "savedir": str(dest),
+        }
+    result: dict[str, Any] = {
+        "ok": True,
+        "imported": imported,
+        "savedir": str(dest),
+    }
+    if missing:
+        result["missing"] = missing
+    return result
+
+
+def select_host_slot_names(
+    project_root: str | Path,
+    *,
+    slot: str | None = None,
+    slots: Iterable[str] | None = None,
+    regexp: str | None = None,
+    home: Path | None = None,
+) -> dict[str, Any]:
+    """Resolve import selectors to host slot names."""
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: Any) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return "slot names must be non-empty strings"
+        token = value.strip()
+        if token not in seen:
+            seen.add(token)
+            names.append(token)
+        return None
+
+    if slot is not None:
+        error = _add(slot)
+        if error is not None:
+            return {"ok": False, "error": error}
+    if slots is not None:
+        if isinstance(slots, (str, bytes)) or not isinstance(slots, Iterable):
+            return {"ok": False, "error": "slots must be a list of slot names"}
+        for item in slots:
+            error = _add(item)
+            if error is not None:
+                return {"ok": False, "error": error}
+
+    compiled = None
+    if regexp is not None:
+        if not isinstance(regexp, str):
+            return {"ok": False, "error": "regexp must be a string"}
+        try:
+            compiled = re.compile(regexp)
+        except re.error as exc:
+            return {"ok": False, "error": f"invalid regexp: {exc}"}
+
+    if not names and compiled is None:
+        return {"ok": False, "error": "import requires slot, slots, or regexp"}
+
+    listed = list_host_slots(project_root, regexp=None, home=home)
+    if not listed.get("ok"):
+        return listed
+    available = [item["name"] for item in listed.get("slots", [])]
+    selected: list[str] = []
+    missing: list[str] = []
+    if names:
+        available_set = set(available)
+        for name in names:
+            if name in available_set:
+                selected.append(name)
+            else:
+                missing.append(name)
+    if compiled is not None:
+        for name in available:
+            if name in selected:
+                continue
+            if compiled.search(name) is not None:
+                selected.append(name)
+    return {
+        "ok": True,
+        "names": selected,
+        "missing": missing,
+        "directories": listed.get("directories", []),
+    }
+
+
+def _slots_in_directory(directory: Path) -> list[dict[str, Any]]:
+    slots: list[dict[str, Any]] = []
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return slots
+    by_name: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        try:
+            if not entry.is_file() or entry.is_symlink():
+                continue
+        except OSError:
+            continue
+        match = SLOT_FILE_RE.match(entry.name)
+        if match is None or match.group("json"):
+            continue
+        name = match.group("slot")
+        sidecar = entry.with_name(entry.name + ".json")
+        extra_info = extra_info_from_sidecar(sidecar)
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            mtime = None
+        previous = by_name.get(name)
+        if previous is not None and (previous.get("mtime") or 0) >= (mtime or 0):
+            continue
+        by_name[name] = {
+            "name": name,
+            "extra_info": extra_info,
+            "mtime": mtime,
+            "directory": str(directory),
+        }
+    slots.extend(by_name[name] for name in sorted(by_name))
+    return slots
+
+
+def extra_info_from_sidecar(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return ""
+    if isinstance(payload, dict):
+        value = payload.get("_save_name", payload.get("extra_info", ""))
+        return value if isinstance(value, str) else ""
+    if isinstance(payload, list) and payload:
+        last = payload[-1]
+        if isinstance(last, dict):
+            value = last.get("_save_name", "")
+            return value if isinstance(value, str) else ""
+    return ""
+
+
+def _copy_slot_files(source_dir: Path, dest_dir: Path, slot: str) -> list[str]:
+    pattern = re.compile(
+        r"^%s-[A-Za-z]{2}\d+\.save(?:\.json)?$" % (re.escape(slot),)
+    )
+    copied: list[str] = []
+    dest_root = dest_dir.resolve()
+    source_root = source_dir.resolve()
+    try:
+        entries = list(source_dir.iterdir())
+    except OSError:
+        return copied
+    for entry in entries:
+        if pattern.match(entry.name) is None:
+            continue
+        try:
+            if entry.is_symlink() or not entry.is_file():
+                continue
+            source = entry.resolve()
+        except OSError:
+            continue
+        if not _is_relative_to(source, source_root):
+            continue
+        destination = (dest_root / source.name).resolve()
+        if destination.parent != dest_root:
+            continue
+        shutil.copy2(source, destination)
+        copied.append(source.name)
+    copied.sort()
+    return copied
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _prepare_isolated_home(home: Path) -> None:

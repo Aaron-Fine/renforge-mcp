@@ -1297,13 +1297,13 @@
     }
   },
   "renforge_jump": {
+    "description": "Restart into a specific label/file position and keep interacting in a fresh game session. If needed, this may download and cache the required SDK before restart. Isolation matches `renforge_launch`: saves, preferences, and HOME default to temporary locations. Exposing the user save tree requires `authorize=true` when `RENFORGE_POLICY=enforce`. Use for deterministic positioning before scripted checks.",
     "annotations": {
-      "destructiveHint": true,
+      "readOnlyHint": false,
       "idempotentHint": false,
-      "openWorldHint": true,
-      "readOnlyHint": false
+      "destructiveHint": true,
+      "openWorldHint": true
     },
-    "description": "Restart into a specific label/file position and keep interacting in a fresh game session. If needed, this may download and cache the required SDK before restart. Use for deterministic positioning before scripted checks.",
     "parameters": {
       "additionalProperties": false,
       "properties": {
@@ -1319,6 +1319,43 @@
           "default": "stable",
           "description": "Runtime version to use when restarting at target.",
           "type": "string"
+        },
+        "savedir": {
+          "default": "auto",
+          "description": "Save location. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default isolated `temporary`) so this session cannot read or write the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory; that is destructive and requires `authorize=true` when `RENFORGE_POLICY=enforce`. Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop. Prefer `renforge_saves(action=\"import\")` to copy selected host slots into an isolated session.",
+          "type": "string"
+        },
+        "persistent": {
+          "default": "auto",
+          "description": "Persistent mode. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default `empty` so isolated sessions start without host persistent data). `existing` preserves current persistent data; `empty` removes it in the isolated session; `copy` and `fixture` currently set an environment marker only and do not copy or load fixture data.",
+          "enum": [
+            "auto",
+            "existing",
+            "empty",
+            "copy",
+            "fixture"
+          ],
+          "type": "string"
+        },
+        "home": {
+          "default": "auto",
+          "description": "Process HOME for the launched game. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default a private directory) so preferences and `~/.renpy` writes miss the user's files. Pass `existing` to keep the host HOME. `savedir=existing` also selects `home=existing` unless this is set. Any other non-empty value is an explicit HOME path.",
+          "type": "string"
+        },
+        "preferences": {
+          "default": "auto",
+          "description": "Preference isolation. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default `empty`). Isolated sessions start without host preference files; `existing` keeps them when the save/HOME location can see them.",
+          "enum": [
+            "auto",
+            "existing",
+            "empty"
+          ],
+          "type": "string"
+        },
+        "authorize": {
+          "default": false,
+          "description": "Explicitly authorize launching against the user's Ren'Py saves with `authorize=true` (`savedir=existing`, a host save path, `home=existing`, or `RENFORGE_ISOLATION=existing`) when `RENFORGE_POLICY=enforce`. Isolated launches do not need this.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -1351,7 +1388,7 @@
     }
   },
   "renforge_launch": {
-    "description": "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and publish authenticated ownership/bridge metadata under `.renforge/control/`. `renforge_stop` removes only owned session artifacts.",
+    "description": "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. Saves, preferences, and HOME default to isolated temporary locations so the session does not read or write the user's normal Ren'Py state; the ready payload includes `session_id` and an `isolation` object. It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and publish authenticated ownership/bridge metadata under `.renforge/control/`. `renforge_stop` removes only owned session artifacts. Exposing the user save tree (`savedir=existing`) requires `authorize=true` when `RENFORGE_POLICY=enforce`. Copy selected host slots with `renforge_saves(action=\"import\")` instead of bind-mounting the user tree.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -1405,7 +1442,7 @@
         },
         "savedir": {
           "default": "auto",
-          "description": "Save location. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default isolated `temporary`) so this session cannot read or write the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory. Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop.",
+          "description": "Save location. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default isolated `temporary`) so this session cannot read or write the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory; that is destructive and requires `authorize=true` when `RENFORGE_POLICY=enforce`. Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop. Prefer `renforge_saves(action=\"import\")` to copy selected host slots into an isolated session.",
           "type": "string"
         },
         "persistent": {
@@ -1445,6 +1482,11 @@
             "empty"
           ],
           "type": "string"
+        },
+        "authorize": {
+          "default": false,
+          "description": "Explicitly authorize launching against the user's Ren'Py saves with `authorize=true` (`savedir=existing`, a host save path, `home=existing`, or `RENFORGE_ISOLATION=existing`) when `RENFORGE_POLICY=enforce`. Isolated launches do not need this.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -1454,13 +1496,13 @@
     }
   },
   "renforge_launch_status": {
+    "description": "Poll launch progress and return `idle`, `starting`, `ready`, `failed`, `closing`, or `closed`. Use after any launch start when the first call has not returned an immediate ready state. A ready payload repeats `session_id` and the `isolation` object from launch.",
     "annotations": {
-      "destructiveHint": false,
+      "readOnlyHint": true,
       "idempotentHint": true,
-      "openWorldHint": false,
-      "readOnlyHint": true
+      "destructiveHint": false,
+      "openWorldHint": false
     },
-    "description": "Poll launch progress and return `idle`, `starting`, `ready`, `failed`, `closing`, or `closed`. Use after any launch start when the first call has not returned an immediate ready state.",
     "parameters": {
       "additionalProperties": false,
       "properties": {
@@ -1608,13 +1650,13 @@
     }
   },
   "renforge_new_game": {
+    "description": "Restart at `start` and begin a new story progression. This may download and cache the required SDK before the fresh launch. Isolation matches `renforge_launch`: saves, preferences, and HOME default to temporary locations. Exposing the user save tree requires `authorize=true` when `RENFORGE_POLICY=enforce`. Prefer this for clean scenario entry rather than reusing unstable runtime state.",
     "annotations": {
-      "destructiveHint": true,
+      "readOnlyHint": false,
       "idempotentHint": false,
-      "openWorldHint": true,
-      "readOnlyHint": false
+      "destructiveHint": true,
+      "openWorldHint": true
     },
-    "description": "Restart at `start` and begin a new story progression. This may download and cache the required SDK before the fresh launch. Prefer this for clean scenario entry rather than reusing unstable runtime state.",
     "parameters": {
       "additionalProperties": false,
       "properties": {
@@ -1626,6 +1668,43 @@
           "default": "stable",
           "description": "Runtime version used for the fresh launch.",
           "type": "string"
+        },
+        "savedir": {
+          "default": "auto",
+          "description": "Save location. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default isolated `temporary`) so this session cannot read or write the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory; that is destructive and requires `authorize=true` when `RENFORGE_POLICY=enforce`. Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop. Prefer `renforge_saves(action=\"import\")` to copy selected host slots into an isolated session.",
+          "type": "string"
+        },
+        "persistent": {
+          "default": "auto",
+          "description": "Persistent mode. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default `empty` so isolated sessions start without host persistent data). `existing` preserves current persistent data; `empty` removes it in the isolated session; `copy` and `fixture` currently set an environment marker only and do not copy or load fixture data.",
+          "enum": [
+            "auto",
+            "existing",
+            "empty",
+            "copy",
+            "fixture"
+          ],
+          "type": "string"
+        },
+        "home": {
+          "default": "auto",
+          "description": "Process HOME for the launched game. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default a private directory) so preferences and `~/.renpy` writes miss the user's files. Pass `existing` to keep the host HOME. `savedir=existing` also selects `home=existing` unless this is set. Any other non-empty value is an explicit HOME path.",
+          "type": "string"
+        },
+        "preferences": {
+          "default": "auto",
+          "description": "Preference isolation. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default `empty`). Isolated sessions start without host preference files; `existing` keeps them when the save/HOME location can see them.",
+          "enum": [
+            "auto",
+            "existing",
+            "empty"
+          ],
+          "type": "string"
+        },
+        "authorize": {
+          "default": false,
+          "description": "Explicitly authorize launching against the user's Ren'Py saves with `authorize=true` (`savedir=existing`, a host save path, `home=existing`, or `RENFORGE_ISOLATION=existing`) when `RENFORGE_POLICY=enforce`. Isolated launches do not need this.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -2882,86 +2961,42 @@
     }
   },
   "renforge_saves": {
+    "description": "List, load, save, or import named slots in a single command family. `list` reads the running (usually isolated) session; `list_user` observes host slots under `~/.renpy` / `game/saves` without a running game and never writes. `import` copies selected host slots into the isolated session savedir (never bind-mounts the user tree) and is refused when the session exposes user saves. `load` replaces live state and `save` can overwrite the chosen slot. Verify slot names before mutating gameplay progress. `load` requires `authorize=true` when `RENFORGE_POLICY=enforce`.",
     "annotations": {
-      "destructiveHint": true,
+      "readOnlyHint": false,
       "idempotentHint": false,
-      "openWorldHint": true,
-      "readOnlyHint": false
+      "destructiveHint": true,
+      "openWorldHint": true
     },
-    "description": "List, load, or save named slots in a single command family. `list` is read-only; `load` replaces live state and `save` can overwrite the chosen slot. Verify slot names before mutating gameplay progress. `load` requires `authorize=true` when `RENFORGE_POLICY=enforce`.",
     "parameters": {
       "additionalProperties": false,
-      "oneOf": [
-        {
-          "properties": {
-            "action": {
-              "const": "save"
-            },
-            "regexp": {
-              "type": "null"
-            },
-            "slot": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "action",
-            "slot"
-          ]
-        },
-        {
-          "properties": {
-            "action": {
-              "const": "load"
-            },
-            "extra_info": {
-              "type": "null"
-            },
-            "regexp": {
-              "type": "null"
-            },
-            "slot": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "action",
-            "slot"
-          ]
-        },
-        {
-          "properties": {
-            "action": {
-              "const": "list"
-            },
-            "extra_info": {
-              "type": "null"
-            },
-            "slot": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "action"
-          ]
-        }
-      ],
       "properties": {
+        "project_path": {
+          "description": "Project root of the live game (or of the project whose host saves should be listed or imported).",
+          "type": "string"
+        },
         "action": {
-          "description": "One of `list`, `load`, or `save`.",
+          "description": "One of `list`, `list_user`, `import`, `load`, or `save`.",
           "enum": [
             "save",
             "load",
-            "list"
+            "list",
+            "list_user",
+            "import"
           ],
           "type": "string"
         },
-        "authorize": {
-          "default": false,
-          "description": "Explicitly authorize `load` when `RENFORGE_POLICY=enforce`; ignored for list/save.",
-          "type": "boolean"
+        "slot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Slot label used by save/load/import. Import also accepts `slots` or `regexp`."
         },
         "extra_info": {
           "anyOf": [
@@ -2975,10 +3010,6 @@
           "default": null,
           "description": "Optional save metadata for save actions."
         },
-        "project_path": {
-          "description": "Project root of the running live game.",
-          "type": "string"
-        },
         "regexp": {
           "anyOf": [
             {
@@ -2989,26 +3020,136 @@
             }
           ],
           "default": null,
-          "description": "Optional regex filter for list only, selecting matching slots."
+          "description": "Optional regex filter for `list`, `list_user`, or `import`."
         },
-        "slot": {
+        "slots": {
           "anyOf": [
             {
-              "type": "string"
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "description": "Slot label used by save/load actions."
+          "description": "Optional list of host slot names to copy for `import`.",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "authorize": {
+          "default": false,
+          "description": "Explicitly authorize `load` when `RENFORGE_POLICY=enforce`; ignored for list, list_user, import, and save.",
+          "type": "boolean"
         }
       },
       "required": [
         "project_path",
         "action"
       ],
-      "type": "object"
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {
+            "action": {
+              "const": "save"
+            },
+            "slot": {
+              "type": "string",
+              "minLength": 1
+            },
+            "regexp": {
+              "type": "null"
+            },
+            "slots": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "action",
+            "slot"
+          ]
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "load"
+            },
+            "slot": {
+              "type": "string",
+              "minLength": 1
+            },
+            "extra_info": {
+              "type": "null"
+            },
+            "regexp": {
+              "type": "null"
+            },
+            "slots": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "action",
+            "slot"
+          ]
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "list"
+            },
+            "slot": {
+              "type": "null"
+            },
+            "extra_info": {
+              "type": "null"
+            },
+            "slots": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "list_user"
+            },
+            "slot": {
+              "type": "null"
+            },
+            "extra_info": {
+              "type": "null"
+            },
+            "slots": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "import"
+            },
+            "extra_info": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      ]
     }
   },
   "renforge_scan_project": {
