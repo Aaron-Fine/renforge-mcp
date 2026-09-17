@@ -199,6 +199,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap fuse-overlayfs xvfb x11-utils imagemagick
+          # Ubuntu's hosted-runner AppArmor policy disables unprivileged user
+          # namespaces even though the kernel supports them. Strict play is
+          # allowed only on hosts whose administrator enables this prerequisite;
+          # configure the disposable CI VM explicitly, then let Gate A prove it.
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --unshare-user --unshare-pid --die-with-parent --ro-bind /usr /usr --proc /proc -- /usr/bin/true
 
       - name: Install test dependencies
         run: python -m pip install -e '.[test]'
