@@ -225,13 +225,13 @@ screen _rf_editor_inspector_panel():
                             use _rf_editor_field("xpos", str(_rf_facts["rect"]["x"]))
                             use _rf_editor_field("ypos", str(_rf_facts["rect"]["y"]))
 
-                        if _rf_facts.get("position_mode") == "style_gui_dialogue":
+                        if _rf_facts.get("position_mode") in ("style_gui_dialogue", "style_gui_namebox"):
                             text _renforge_editor_t("inspector.ownership_chain"):
                                 color _renforge_editor_ui_color("meta")
                                 font _renforge_editor_ui_font()
                                 size _renforge_editor_ui_px(14)
                                 yoffset _renforge_editor_ui_px(6)
-                            text _renforge_editor_t("inspector.ownership_style_position"):
+                            text _renforge_editor_t(_renforge_editor_ownership_style_position_key(_rf_facts.get("position_mode"))):
                                 id "rf_inspector_ownership_style_position"
                                 color _renforge_editor_ui_color("surface")
                                 font _renforge_editor_ui_font()

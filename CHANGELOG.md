@@ -7,6 +7,8 @@ versioning.
 
 ### Added
 
+- Public MCP tool `renforge_editor` (`status` / `select` / `save`) so agents
+  can drive the Live Editor without private `editor_task0_*` handlers.
 - Every pull request now runs the broad Ren'Py 8.5.3 SDK integration suite on
   Linux/Xvfb, with SDK caching and an explicit diagnostic artifact allowlist.
 

@@ -95,3 +95,34 @@ def test_missing_gui_rpy_returns_unresolved() -> None:
 
     assert stmt.position_lock_code == "STYLE_POSITION_SOURCE_UNRESOLVED"
     assert stmt.position_mode is None
+
+
+def test_clean_fixture_unlocks_style_gui_namebox() -> None:
+    stmt = analyze_say_what_style_position(
+        "define gui.name_xpos = gui.scale(240)\n"
+        "define gui.name_ypos = gui.scale(0)\n",
+        xpos_var="gui.name_xpos",
+        ypos_var="gui.name_ypos",
+        position_mode="style_gui_namebox",
+    )
+    assert stmt.position_mode == "style_gui_namebox"
+    assert stmt.position_lock_code is None
+    assert stmt.xpos == 240
+    assert stmt.ypos == 0
+
+
+def test_name_variant_returns_variant_unsupported() -> None:
+    stmt = analyze_say_what_style_position(
+        "define gui.name_xpos = gui.scale(240)\n"
+        "define gui.name_ypos = gui.scale(0)\n"
+        "\n"
+        "init python:\n"
+        "    @gui.variant\n"
+        "    def small():\n"
+        "        gui.name_xpos = gui.scale(90)\n",
+        xpos_var="gui.name_xpos",
+        ypos_var="gui.name_ypos",
+        position_mode="style_gui_namebox",
+    )
+    assert stmt.position_lock_code == "STYLE_POSITION_VARIANT_UNSUPPORTED"
+    assert stmt.position_mode is None

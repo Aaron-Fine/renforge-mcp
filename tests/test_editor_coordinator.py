@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from renforge.editor import EditorCoordinator, RuntimeProbe
+from renforge.editor.coordinator import expected_measurement_method
 from renforge.editor.exceptions import EditorError
 from renforge.editor.source import peek_statement_kind
 from renforge.project import RenpyProject
@@ -929,6 +930,333 @@ def test_say_what_style_position_commit_preserves_crlf_gui_source(tmp_path: Path
         coordinator.close()
 
 
+def _say_who_observation() -> dict[str, Any]:
+    return {
+        "runtime_key": {
+            "screen": "say",
+            "invocation_path": "say",
+            "widget_id": "who",
+            "source_location": ["screens.rpy", 5],
+            "instance_discriminator": {"kind": "singleton", "instance_count": 1},
+            "ancestry": [
+                {
+                    "index": 0,
+                    "type": "ScreenDisplayable",
+                    "source_location": ["screens.rpy", 1],
+                    "screen_owner": "say",
+                    "crop_state": "none",
+                    "editor_owned": False,
+                },
+                {
+                    "index": 1,
+                    "type": "Text",
+                    "source_location": ["screens.rpy", 5],
+                    "screen_owner": "say",
+                    "crop_state": "none",
+                    "editor_owned": False,
+                },
+            ],
+        },
+        "rect": [240, 535, 80, 24],
+        "measurement_method": "scene_tree_text",
+        "frame_id": "say-who-frame",
+        "script_generation": 4,
+        "object_id": "say-who",
+    }
+
+
+def _write_say_who_project(tmp_path: Path, *, gui_bytes: bytes) -> tuple[Path, Path]:
+    root = tmp_path / "project"
+    game_dir = root / "game"
+    game_dir.mkdir(parents=True)
+    screens = game_dir / "screens.rpy"
+    screens.write_text(
+        'screen say(who, what):\n'
+        '    window:\n'
+        '        id "namebox"\n'
+        '        style "namebox"\n'
+        '        text who id "who"\n'
+        '    text what id "what" style "say_dialogue"\n'
+        '\n'
+        'style namebox:\n'
+        '    xpos gui.name_xpos\n'
+        '    ypos gui.name_ypos\n',
+        encoding="utf-8",
+    )
+    gui = game_dir / "gui.rpy"
+    gui.write_bytes(gui_bytes)
+    return screens, gui
+
+
+def test_say_who_style_position_commit_writes_gui_name_vars(tmp_path: Path) -> None:
+    original = (
+        b"define gui.name_xpos = gui.scale(240)\r\n"
+        b"define gui.name_ypos = gui.scale(0)\r\n"
+        b"define gui.dialogue_xpos = gui.scale(268)\r\n"
+    )
+    _screens, gui = _write_say_who_project(tmp_path, gui_bytes=original)
+    observation = _say_who_observation()
+    probe = _Probe(observe_reply={**observation, "frame_id": "say-who-independent"})
+    coordinator = EditorCoordinator(
+        RenpyProject(tmp_path / "project"),
+        _make_sdk(tmp_path),
+        attestation_timeout=2.0,
+    )
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analysis = _analyze(sock, auth, observation, request_id="an-say-who")
+            assert analysis["ok"] is True
+            assert analysis["result"]["capabilities"]["move"] is True
+            source_key = analysis["result"]["source_key"]
+            assert source_key["position_mode"] == "style_gui_namebox"
+            assert source_key["gui_xpos_var"] == "gui.name_xpos"
+            assert source_key["gui_ypos_var"] == "gui.name_ypos"
+            assert source_key["gui_style_name"] == "namebox"
+
+            commit = _commit(
+                sock,
+                auth,
+                analysis,
+                x=260,
+                y=30,
+                request_id="co-say-who",
+            )
+            assert commit["ok"] is True
+            assert gui.read_bytes() == (
+                b"define gui.name_xpos = gui.scale(260)\r\n"
+                b"define gui.name_ypos = gui.scale(30)\r\n"
+                b"define gui.dialogue_xpos = gui.scale(268)\r\n"
+            )
+    finally:
+        coordinator.close()
+
+
+def test_say_who_style_position_variant_stays_locked(tmp_path: Path) -> None:
+    gui_bytes = (
+        b"define gui.name_xpos = gui.scale(240)\n"
+        b"define gui.name_ypos = gui.scale(0)\n"
+        b"\n"
+        b"init python:\n"
+        b"    @gui.variant\n"
+        b"    def small():\n"
+        b"        gui.name_xpos = gui.scale(90)\n"
+    )
+    _write_say_who_project(tmp_path, gui_bytes=gui_bytes)
+    observation = _say_who_observation()
+    probe = _Probe(observe_reply={**observation, "frame_id": "say-who-variant"})
+    coordinator = EditorCoordinator(
+        RenpyProject(tmp_path / "project"),
+        _make_sdk(tmp_path),
+        attestation_timeout=2.0,
+    )
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analysis = _analyze(sock, auth, observation, request_id="an-say-who-var")
+            assert analysis["ok"] is True
+            assert analysis["result"]["capabilities"]["move"] is False
+            assert analysis["result"]["lock_reason"]["code"] == "STYLE_POSITION_VARIANT_UNSUPPORTED"
+    finally:
+        coordinator.close()
+
+
+def test_say_who_style_position_rejects_mixed_textbutton_intent(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    game_dir = root / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "screens.rpy").write_text(
+        'screen say(who, what):\n'
+        '    window:\n'
+        '        id "namebox"\n'
+        '        style "namebox"\n'
+        '        text who id "who"\n'
+        '    text what id "what" style "say_dialogue"\n'
+        '\n'
+        'style namebox:\n'
+        '    xpos gui.name_xpos\n'
+        '    ypos gui.name_ypos\n'
+        '\n'
+        'screen hud:\n'
+        '    textbutton "Play" id "start_btn" xpos 12 ypos 10 action NullAction()\n',
+        encoding="utf-8",
+    )
+    (game_dir / "gui.rpy").write_bytes(
+        b"define gui.name_xpos = gui.scale(240)\n"
+        b"define gui.name_ypos = gui.scale(0)\n"
+    )
+    who_obs = _say_who_observation()
+    button_obs = {
+        "runtime_key": {
+            "screen": "hud",
+            "invocation_path": "hud",
+            "widget_id": "start_btn",
+            "source_location": ["screens.rpy", 13],
+            "instance_discriminator": {"kind": "singleton", "instance_count": 1},
+            "ancestry": [
+                {
+                    "index": 0,
+                    "type": "ScreenDisplayable",
+                    "source_location": ["screens.rpy", 12],
+                    "screen_owner": "hud",
+                    "crop_state": "none",
+                    "editor_owned": False,
+                },
+                {
+                    "index": 1,
+                    "type": "Button",
+                    "source_location": ["screens.rpy", 13],
+                    "screen_owner": "hud",
+                    "crop_state": "none",
+                    "editor_owned": False,
+                },
+            ],
+        },
+        "rect": [12, 10, 120, 40],
+        "measurement_method": "focus_list",
+        "frame_id": "hud-frame",
+        "script_generation": 4,
+        "object_id": "hud-btn",
+    }
+
+    class _KeyedProbe(RuntimeProbe):
+        def __init__(self) -> None:
+            self._replies = {"who": who_obs, "start_btn": button_obs}
+            self._counts: dict[str, int] = {}
+
+        def observe(self, runtime_key: dict[str, Any], *, deadline: float) -> dict[str, Any]:
+            widget_id = str(runtime_key.get("widget_id"))
+            reply = dict(self._replies[widget_id])
+            self._counts[widget_id] = self._counts.get(widget_id, 0) + 1
+            reply["frame_id"] = f"{reply['frame_id']}-{self._counts[widget_id]}"
+            return reply
+
+        def attest(
+            self,
+            *,
+            transaction_id: str,
+            script_generation: int,
+            deadline: float,
+            expected_targets: list[dict[str, Any]],
+        ) -> dict[str, Any]:
+            return {"ok": True, "state": "all_targets_attested"}
+
+    coordinator = EditorCoordinator(
+        RenpyProject(root),
+        _make_sdk(tmp_path),
+        attestation_timeout=2.0,
+    )
+    coordinator.attach_runtime_probe(_KeyedProbe())
+    endpoint = coordinator.start()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            who_analysis = _analyze(sock, auth, who_obs, request_id="an-who-mix")
+            button_analysis = _analyze(sock, auth, button_obs, request_id="an-btn-mix")
+            assert who_analysis["ok"] is True
+            assert button_analysis["ok"] is True
+            mixed = _send_editor_command(
+                sock,
+                auth,
+                command="commit",
+                payload={
+                    "session_id": auth["session_id"],
+                    "intents": [
+                        {
+                            "analysis_id": who_analysis["result"]["analysis_id"],
+                            "source_key": who_analysis["result"]["source_key"],
+                            "x": 260,
+                            "y": 30,
+                        },
+                        {
+                            "analysis_id": button_analysis["result"]["analysis_id"],
+                            "source_key": button_analysis["result"]["source_key"],
+                            "x": 20,
+                            "y": 18,
+                        },
+                    ],
+                },
+                request_id="co-who-mix",
+            )
+            assert mixed["ok"] is False
+            assert mixed["error"]["code"] == "MULTI_FILE_WRITE_UNSUPPORTED"
+    finally:
+        coordinator.close()
+
+
+def test_say_who_style_position_locks_when_who_is_outside_namebox(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    game_dir = root / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "screens.rpy").write_text(
+        'screen say(who, what):\n'
+        '    text who id "who"\n'
+        '    text what id "what" style "say_dialogue"\n'
+        '\n'
+        'style namebox:\n'
+        '    xpos gui.name_xpos\n'
+        '    ypos gui.name_ypos\n',
+        encoding="utf-8",
+    )
+    (game_dir / "gui.rpy").write_bytes(
+        b"define gui.name_xpos = gui.scale(240)\n"
+        b"define gui.name_ypos = gui.scale(0)\n"
+    )
+    observation = {
+        "runtime_key": {
+            "screen": "say",
+            "invocation_path": "say",
+            "widget_id": "who",
+            "source_location": ["screens.rpy", 2],
+            "instance_discriminator": {"kind": "singleton", "instance_count": 1},
+            "ancestry": [
+                {
+                    "index": 0,
+                    "type": "ScreenDisplayable",
+                    "source_location": ["screens.rpy", 1],
+                    "screen_owner": "say",
+                    "crop_state": "none",
+                    "editor_owned": False,
+                },
+                {
+                    "index": 1,
+                    "type": "Text",
+                    "source_location": ["screens.rpy", 2],
+                    "screen_owner": "say",
+                    "crop_state": "none",
+                    "editor_owned": False,
+                },
+            ],
+        },
+        "rect": [240, 535, 80, 24],
+        "measurement_method": "scene_tree_text",
+        "frame_id": "say-who-orphan",
+        "script_generation": 4,
+        "object_id": "say-who-orphan",
+    }
+    probe = _Probe(observe_reply=observation)
+    coordinator = EditorCoordinator(
+        RenpyProject(root),
+        _make_sdk(tmp_path),
+        attestation_timeout=2.0,
+    )
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analysis = _analyze(sock, auth, observation, request_id="an-who-orphan")
+            assert analysis["ok"] is True
+            assert analysis["result"]["capabilities"]["move"] is False
+            assert analysis["result"]["lock_reason"]["code"] == "STYLE_POSITION_SOURCE_UNRESOLVED"
+    finally:
+        coordinator.close()
+
+
 @pytest.mark.parametrize(
     "crop_state,expected_code",
     [
@@ -1635,7 +1963,125 @@ def test_analyze_rejects_unsupported_statement_kind(tmp_path: Path) -> None:
             reply = _analyze(sock, auth, observation, request_id="an-frame")
             assert reply["ok"] is True
             assert reply["result"]["capabilities"] == {"move": False, "resize": False}
-            assert reply["result"]["lock_reason"]["code"] == "STATEMENT_KIND_MISMATCH"
+            assert reply["result"]["lock_reason"]["code"] == "MULTILINE_STATEMENT_REJECTED"
+    finally:
+        coordinator.close()
+
+
+def _make_add_project(tmp_path: Path) -> tuple[RenpyProject, Path]:
+    root = tmp_path / "project_add"
+    game_dir = root / "game"
+    game_dir.mkdir(parents=True)
+    source = game_dir / "script.rpy"
+    source.write_text(
+        "screen test_screen:\n"
+        '    add Solid("#4f46e5", xysize=(160, 100)) id "start_btn" xpos 12 ypos 10\n',
+        encoding="utf-8",
+    )
+    return RenpyProject(root), source
+
+
+def _add_observation(script_generation: int = 12) -> dict[str, Any]:
+    observation = _base_observation(script_generation=script_generation)
+    observation["measurement_method"] = "scene_tree_displayable"
+    observation["runtime_key"]["ancestry"][1]["type"] = "Solid"
+    return observation
+
+
+def test_analyze_and_commit_add_statement(tmp_path: Path) -> None:
+    project, source = _make_add_project(tmp_path)
+    observation = _add_observation()
+    probe = _Probe(
+        observe_reply={
+            **json.loads(json.dumps(observation)),
+            "frame_id": "independent-frame-add",
+            "object_id": "obj-independent-add",
+        },
+        attest_reply={"ok": True, "state": "all_targets_attested"},
+    )
+    coordinator = EditorCoordinator(project, _make_sdk(tmp_path), attestation_timeout=2.0)
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analyzed = _analyze(sock, auth, observation, request_id="an-add")
+            assert analyzed["ok"] is True
+            result = analyzed["result"]
+            assert result["lock_reason"] is None
+            assert result["capabilities"] == {"move": True, "resize": False}
+            assert result["source_key"]["statement_kind"] == "add"
+            assert result["original_position"] == [12, 10]
+
+            committed = _commit(sock, auth, analyzed, x=40, y=50, request_id="co-add")
+            assert committed.get("ok") is True, (
+                f"error={committed.get('error')!r} diagnostics={committed.get('diagnostics')!r}"
+            )
+            assert committed["result"]["state"] == "published"
+            assert "xpos 40 ypos 50" in source.read_text(encoding="utf-8")
+            assert 'id "start_btn"' in source.read_text(encoding="utf-8")
+    finally:
+        coordinator.close()
+
+
+def test_analyze_add_rejects_focus_list_measurement(tmp_path: Path) -> None:
+    project, _source = _make_add_project(tmp_path)
+    observation = _add_observation()
+    observation["measurement_method"] = "focus_list"
+    probe = _Probe(
+        observe_reply={
+            **json.loads(json.dumps(observation)),
+            "frame_id": "independent-frame-add-focus",
+            "object_id": "obj-independent-add-focus",
+        }
+    )
+    coordinator = EditorCoordinator(project, _make_sdk(tmp_path))
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analyzed = _analyze(sock, auth, observation, request_id="an-add-focus")
+            assert analyzed["ok"] is True
+            assert analyzed["result"]["lock_reason"]["code"] == "MEASUREMENT_METHOD_INVALID"
+            assert analyzed["result"]["capabilities"]["move"] is False
+    finally:
+        coordinator.close()
+
+
+def test_analyze_and_commit_frame_statement(tmp_path: Path) -> None:
+    root = tmp_path / "project_frame"
+    game_dir = root / "game"
+    game_dir.mkdir(parents=True)
+    source = game_dir / "script.rpy"
+    source.write_text(
+        "screen test_screen:\n"
+        '    frame id "start_btn" xpos 12 ypos 10 xysize (80, 48) background Solid("#22c55e")\n',
+        encoding="utf-8",
+    )
+    observation = _add_observation()
+    observation["runtime_key"]["ancestry"][1]["type"] = "Window"
+    probe = _Probe(
+        observe_reply={
+            **json.loads(json.dumps(observation)),
+            "frame_id": "independent-frame-frameok",
+            "object_id": "obj-independent-frameok",
+        },
+        attest_reply={"ok": True, "state": "all_targets_attested"},
+    )
+    coordinator = EditorCoordinator(RenpyProject(root), _make_sdk(tmp_path), attestation_timeout=2.0)
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analyzed = _analyze(sock, auth, observation, request_id="an-frame-ok")
+            assert analyzed["ok"] is True
+            assert analyzed["result"]["lock_reason"] is None
+            assert analyzed["result"]["source_key"]["statement_kind"] == "frame"
+            committed = _commit(sock, auth, analyzed, x=22, y=30, request_id="co-frame-ok")
+            assert committed.get("ok") is True, committed
+            assert "xpos 22 ypos 30" in source.read_text(encoding="utf-8")
     finally:
         coordinator.close()
 
@@ -3176,3 +3622,10 @@ def test_zorder_structural_swap_rejections(tmp_path: Path) -> None:
             assert non_adj_res["error"]["code"] in ("BUTTON_SIBLING_ORDER_INVALID", "SOURCE_LINE_INVALID", "BUTTON_BLOCK_REQUIRED", "TARGET_NOT_BUTTON")
     finally:
         coordinator.close()
+
+
+def test_expected_measurement_method_for_add_and_frame() -> None:
+    assert expected_measurement_method("text") == "scene_tree_text"
+    assert expected_measurement_method("add") == "scene_tree_displayable"
+    assert expected_measurement_method("frame") == "scene_tree_displayable"
+    assert expected_measurement_method("textbutton") == "focus_list"

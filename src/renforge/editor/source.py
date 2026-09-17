@@ -23,8 +23,13 @@ RUNTIME_DELTA_POSITION_MODES = frozenset({"align", "offset"})
 BAR_SIZE_MODE_XSIZE_YSIZE = "xsize_ysize"
 # Issue #50: pure hex string-literal ``color`` on a single-line ``text`` statement.
 TEXT_STYLE_COLOR_MODE_LITERAL = "literal_hex"
-# Issue #81: style-backed gui.dialogue_xpos/ypos for say.what movement.
+# Style-backed gui.scale positions: say.what via dialogue_*, say.who via name_*.
 SAY_WHAT_STYLE_POSITION_MODE = "style_gui_dialogue"
+# Namebox / say.who via gui.name_xpos/ypos. Same gui.scale contract, distinct mode.
+SAY_WHO_STYLE_POSITION_MODE = "style_gui_namebox"
+STYLE_GUI_POSITION_MODES = frozenset(
+    {SAY_WHAT_STYLE_POSITION_MODE, SAY_WHO_STYLE_POSITION_MODE}
+)
 
 
 class _BarSizeModel(TypedDict):
@@ -170,6 +175,28 @@ class TextPositionStatement:
 
 
 @dataclass(frozen=True)
+class AddPositionStatement:
+    """Writable literal position for a one-line ``add`` statement."""
+
+    widget_id: str
+    xpos: int
+    ypos: int
+    xpos_span: tuple[int, int]
+    ypos_span: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class FramePositionStatement:
+    """Writable literal position for a one-line decorative ``frame`` statement."""
+
+    widget_id: str
+    xpos: int
+    ypos: int
+    xpos_span: tuple[int, int]
+    ypos_span: tuple[int, int]
+
+
+@dataclass(frozen=True)
 class ButtonStatement:
     widget_id: str
     xpos: int
@@ -279,6 +306,8 @@ _StatementT = TypeVar(
     "_StatementT",
     bound=TextbuttonStatement
     | TextPositionStatement
+    | AddPositionStatement
+    | FramePositionStatement
     | ImagebuttonStatement
     | BarStatement
     | VbarStatement
@@ -414,6 +443,12 @@ def peek_statement_kind(line: str) -> str | None:
     return None
 
 
+# Expression operators that may follow a coordinate literal. Absent from the
+# property/action allow-path so `xpos 10 if flag else 20` is rejected rather
+# than half-patched by `_apply_integer_span_patch`.
+_EXPRESSION_OPERATOR_WORDS = frozenset({"if", "else", "elif", "or", "and", "not"})
+
+
 def _analyze_positioned_kind_statement(
     line: str,
     *,
@@ -459,11 +494,14 @@ def _analyze_positioned_kind_statement(
             invalid_literals.add(keyword)
             continue
         # Reject compound expressions like `xpos 100-20` (NUMBER followed by
-        # non-WORD). A pure literal is followed by a keyword/action WORD or EOS.
+        # a symbol) and conditionals like `xpos 10 if flag else 20`. A pure
+        # literal is followed by a property/action WORD or EOS — never `if`.
         following_index = _next_top_level_index(tokens, value_index)
-        if following_index is not None and tokens[following_index].kind != "WORD":
-            invalid_literals.add(keyword)
-            continue
+        if following_index is not None:
+            following = tokens[following_index]
+            if following.kind != "WORD" or following.text in _EXPRESSION_OPERATOR_WORDS:
+                invalid_literals.add(keyword)
+                continue
         value = int(value_token.text)
         if keyword == "xpos":
             xpos_value = value
@@ -1805,6 +1843,10 @@ def analyze_editable_statement(
     kind = peek_statement_kind(line)
     if kind == "textbutton":
         return kind, analyze_textbutton_statement(line, expected_widget_id=expected_widget_id)
+    if kind == "add":
+        return kind, analyze_add_position_statement(line, expected_widget_id=expected_widget_id)
+    if kind == "frame":
+        return kind, analyze_frame_position_statement(line, expected_widget_id=expected_widget_id)
     if kind == "imagebutton":
         return kind, analyze_imagebutton_statement(line, expected_widget_id=expected_widget_id)
     if kind == "bar":
@@ -1826,6 +1868,8 @@ def apply_editable_statement_patch(
     source_bytes: bytes,
     kind: str,
     statement: TextbuttonStatement
+    | AddPositionStatement
+    | FramePositionStatement
     | ImagebuttonStatement
     | BarStatement
     | VbarStatement
@@ -1845,6 +1889,24 @@ def apply_editable_statement_patch(
                 "resize is only supported for bar xsize/ysize",
             )
         return apply_textbutton_patch(source_bytes, statement, x=x, y=y)
+    if kind == "add":
+        if not isinstance(statement, AddPositionStatement):
+            raise EditorSourceError("STATEMENT_KIND_MISMATCH", "statement does not match add kind")
+        if width is not None or height is not None:
+            raise EditorSourceError(
+                "BAR_SIZE_NOT_DIRECTLY_AUTHORED",
+                "resize is only supported for bar xsize/ysize",
+            )
+        return apply_add_position_patch(source_bytes, statement, x=x, y=y)
+    if kind == "frame":
+        if not isinstance(statement, FramePositionStatement):
+            raise EditorSourceError("STATEMENT_KIND_MISMATCH", "statement does not match frame kind")
+        if width is not None or height is not None:
+            raise EditorSourceError(
+                "BAR_SIZE_NOT_DIRECTLY_AUTHORED",
+                "resize is only supported for bar xsize/ysize",
+            )
+        return apply_frame_position_patch(source_bytes, statement, x=x, y=y)
     if kind == "imagebutton":
         if not isinstance(statement, ImagebuttonStatement):
             raise EditorSourceError("STATEMENT_KIND_MISMATCH", "statement does not match imagebutton kind")
@@ -2256,6 +2318,97 @@ def apply_text_position_patch(
     )
 
 
+def _reject_single_line_block_header(line: str, *, kind: str) -> None:
+    if _statement_text(line).rstrip().endswith(":"):
+        raise EditorSourceError(
+            "MULTILINE_STATEMENT_REJECTED",
+            f"{kind} adapter accepts a single-line statement only",
+        )
+
+
+def _reject_add_side_image(line: str) -> None:
+    tokens = _lex_single_line(_statement_text(line))
+    for index, token in enumerate(tokens):
+        if token.depth != 0 or token.kind != "WORD" or token.text != "add":
+            continue
+        value_index = _next_top_level_index(tokens, index)
+        if (
+            value_index is not None
+            and tokens[value_index].kind == "WORD"
+            and tokens[value_index].text == "SideImage"
+        ):
+            raise EditorSourceError(
+                "STATEMENT_KIND_MISMATCH",
+                "add SideImage() is not a writable literal add",
+            )
+        return
+
+
+def analyze_add_position_statement(
+    line: str,
+    *,
+    expected_widget_id: str,
+) -> AddPositionStatement:
+    """Analyze a one-line ``add`` with one literal id and integer xpos/ypos."""
+    _reject_single_line_block_header(line, kind="add")
+    _reject_add_side_image(line)
+    return _analyze_positioned_kind_statement(
+        line,
+        expected_widget_id=expected_widget_id,
+        expected_kind="add",
+        statement_cls=AddPositionStatement,
+    )
+
+
+def apply_add_position_patch(
+    source_bytes: bytes,
+    statement: AddPositionStatement,
+    *,
+    x: int,
+    y: int,
+) -> bytes:
+    """Rewrite only the literal position tokens of an add statement."""
+    return _apply_integer_span_patch(
+        source_bytes,
+        xpos_span=statement.xpos_span,
+        ypos_span=statement.ypos_span,
+        x=x,
+        y=y,
+    )
+
+
+def analyze_frame_position_statement(
+    line: str,
+    *,
+    expected_widget_id: str,
+) -> FramePositionStatement:
+    """Analyze a one-line decorative ``frame`` with literal id and xpos/ypos."""
+    _reject_single_line_block_header(line, kind="frame")
+    return _analyze_positioned_kind_statement(
+        line,
+        expected_widget_id=expected_widget_id,
+        expected_kind="frame",
+        statement_cls=FramePositionStatement,
+    )
+
+
+def apply_frame_position_patch(
+    source_bytes: bytes,
+    statement: FramePositionStatement,
+    *,
+    x: int,
+    y: int,
+) -> bytes:
+    """Rewrite only the literal position tokens of a frame statement."""
+    return _apply_integer_span_patch(
+        source_bytes,
+        xpos_span=statement.xpos_span,
+        ypos_span=statement.ypos_span,
+        x=x,
+        y=y,
+    )
+
+
 def analyze_text_color_style(
     line: str,
     *,
@@ -2457,11 +2610,11 @@ def analyze_say_what_style_position(
     *,
     xpos_var: str,
     ypos_var: str,
+    position_mode: str = SAY_WHAT_STYLE_POSITION_MODE,
 ) -> SayWhatStylePositionStatement:
-    """Analyze ownership of gui.dialogue_xpos/ypos for say.what movement.
+    """Analyze ownership of one gui.scale xpos/ypos pair.
 
-    This is a dedicated style-position contract for ONE bounded adapter.
-    Unlocked form: ``define gui.dialogue_xpos = gui.scale(<int>)`` where
+    Unlocked form: ``define <xpos_var> = gui.scale(<int>)`` where
     ``<int>`` is a pure decimal literal (negative values supported).
 
     Missing, duplicate, expression-based, arithmetic, non-gui.scale, variant,
@@ -2541,7 +2694,7 @@ def analyze_say_what_style_position(
     if has_variant_writer:
         code, message = _style_position_lock(
             "STYLE_POSITION_VARIANT_UNSUPPORTED",
-            "gui.dialogue_xpos or gui.dialogue_ypos has phone/small variant overrides",
+            f"{xpos_var} or {ypos_var} has phone/small variant overrides",
         )
         return SayWhatStylePositionStatement(
             position_lock_code=code,
@@ -2552,7 +2705,7 @@ def analyze_say_what_style_position(
     if has_expression_error:
         code, message = _style_position_lock(
             "STYLE_POSITION_EXPRESSION_UNSUPPORTED",
-            "gui.dialogue_xpos or gui.dialogue_ypos uses an unsupported expression",
+            f"{xpos_var} or {ypos_var} uses an unsupported expression",
         )
         return SayWhatStylePositionStatement(
             position_lock_code=code,
@@ -2563,7 +2716,7 @@ def analyze_say_what_style_position(
     if not xpos_matches or not ypos_matches:
         code, message = _style_position_lock(
             "STYLE_POSITION_SOURCE_UNRESOLVED",
-            "gui.dialogue_xpos or gui.dialogue_ypos not found or malformed",
+            f"{xpos_var} or {ypos_var} not found or malformed",
         )
         return SayWhatStylePositionStatement(
             position_lock_code=code,
@@ -2574,7 +2727,7 @@ def analyze_say_what_style_position(
     if len(xpos_matches) > 1 or len(ypos_matches) > 1:
         code, message = _style_position_lock(
             "STYLE_POSITION_SOURCE_AMBIGUOUS",
-            "gui.dialogue_xpos or gui.dialogue_ypos has multiple definitions",
+            f"{xpos_var} or {ypos_var} has multiple definitions",
         )
         return SayWhatStylePositionStatement(
             position_lock_code=code,
@@ -2590,7 +2743,7 @@ def analyze_say_what_style_position(
         xpos_span=xpos_span,
         ypos_span=ypos_span,
         baseline_sha256=hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
-        position_mode=SAY_WHAT_STYLE_POSITION_MODE,
+        position_mode=position_mode,
         position_lock_code=None,
         position_lock_message=None,
     )
@@ -2701,7 +2854,7 @@ def apply_say_what_style_position_patch(
     the gui.scale(...) wrapper, whitespace, and comments are preserved.
     """
     if (
-        statement.position_mode != SAY_WHAT_STYLE_POSITION_MODE
+        statement.position_mode not in STYLE_GUI_POSITION_MODES
         or statement.xpos_span is None
         or statement.ypos_span is None
         or statement.baseline_sha256 is None
@@ -2711,14 +2864,14 @@ def apply_say_what_style_position_patch(
         code = statement.position_lock_code or "STYLE_POSITION_SOURCE_UNRESOLVED"
         message = (
             statement.position_lock_message
-            or "say.what style position patch requires an unlocked gui.scale() form"
+            or "style position patch requires an unlocked gui.scale() form"
         )
         raise EditorSourceError(code, message)
 
     if hashlib.sha256(source_bytes).hexdigest() != statement.baseline_sha256:
         raise EditorSourceError(
             "STALE_SOURCE",
-            "source changed since say.what style position analysis",
+            "source changed since style position analysis",
         )
 
     # Work with bytes to handle UTF-8 correctly
@@ -2752,38 +2905,133 @@ class SayDialogueStyleBinding:
     lock_message: str | None = None
 
 
-def prove_say_what_text_binding(line: str) -> None:
-    """Require the bounded standard ``say.what`` source statement."""
+def _prove_say_text_binding(
+    line: str,
+    *,
+    token_name: str,
+    widget_id: str,
+    optional_style: str,
+) -> None:
+    """Require ``text <token_name> id "<widget_id>"`` with an optional style."""
     tokens = [token for token in _lex_single_line(_statement_text(line)) if token.depth == 0]
     if len(tokens) not in (4, 6):
         raise EditorSourceError(
             "STYLE_POSITION_SOURCE_UNRESOLVED",
-            "say.what must use the canonical text statement",
+            f"say.{widget_id} must use the canonical text statement",
         )
     if not (
         tokens[0].kind == "WORD"
         and tokens[0].text == "text"
         and tokens[1].kind == "WORD"
-        and tokens[1].text == "what"
+        and tokens[1].text == token_name
         and tokens[2].kind == "WORD"
         and tokens[2].text == "id"
         and tokens[3].kind == "STRING"
-        and _parse_string_token(tokens[3]) == "what"
+        and _parse_string_token(tokens[3]) == widget_id
     ):
         raise EditorSourceError(
             "STYLE_POSITION_SOURCE_UNRESOLVED",
-            "source statement is not the canonical text what id \"what\" target",
+            f'source statement is not the canonical text {token_name} id "{widget_id}" target',
         )
     if len(tokens) == 6 and not (
         tokens[4].kind == "WORD"
         and tokens[4].text == "style"
         and tokens[5].kind == "STRING"
-        and _parse_string_token(tokens[5]) == "say_dialogue"
+        and _parse_string_token(tokens[5]) == optional_style
     ):
         raise EditorSourceError(
             "STYLE_POSITION_SOURCE_UNRESOLVED",
-            "say.what uses a custom or unresolved style",
+            f"say.{widget_id} uses a custom or unresolved style",
         )
+
+
+def prove_say_what_text_binding(line: str) -> None:
+    """Require the bounded standard ``say.what`` source statement."""
+    _prove_say_text_binding(
+        line,
+        token_name="what",
+        widget_id="what",
+        optional_style="say_dialogue",
+    )
+
+
+def prove_say_who_text_binding(line: str) -> None:
+    """Require the bounded standard ``say.who`` source statement."""
+    _prove_say_text_binding(
+        line,
+        token_name="who",
+        widget_id="who",
+        optional_style="say_label",
+    )
+
+
+_NAMEBOX_CONTAINER_KINDS = frozenset({"window", "frame"})
+
+
+def _block_header_and_direct_child_lines(lines: list[str], header_index: int) -> list[str]:
+    header = lines[header_index]
+    header_indent = _header_indent(header)
+    collected = [header]
+    child_indent: int | None = None
+    for index in range(header_index + 1, len(lines)):
+        line = lines[index]
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = _header_indent(line)
+        if indent <= header_indent:
+            break
+        if child_indent is None:
+            child_indent = indent
+        if indent == child_indent:
+            collected.append(line)
+    return collected
+
+
+def _line_has_literal_keyword(line: str, keyword: str, value: str) -> bool:
+    try:
+        tokens = [token for token in _lex_single_line(_statement_text(line)) if token.depth == 0]
+    except EditorSourceError:
+        return False
+    for index, token in enumerate(tokens[:-1]):
+        if token.kind != "WORD" or token.text != keyword:
+            continue
+        next_token = tokens[index + 1]
+        if next_token.kind == "STRING" and _parse_string_token(next_token) == value:
+            return True
+    return False
+
+
+def prove_say_who_namebox_ancestry(source_text: str, source_line: int) -> None:
+    """Require ``text who`` to sit inside a namebox that uses ``style namebox``.
+
+    ``gui.name_*`` positions the namebox window, not the who text. Unlock only
+    when an ancestor ``window``/``frame`` has both ``id "namebox"`` and
+    ``style "namebox"`` on its header or direct children.
+    """
+    lines = source_text.splitlines()
+    if source_line < 1 or source_line > len(lines):
+        raise EditorSourceError("SOURCE_LINE_INVALID", "source line is outside the source file")
+    current_line = source_line
+    while True:
+        parent_index = _find_parent_line(lines, current_line)
+        if parent_index < 0:
+            break
+        if peek_statement_kind(lines[parent_index]) in _NAMEBOX_CONTAINER_KINDS:
+            container_lines = _block_header_and_direct_child_lines(lines, parent_index)
+            has_id = any(
+                _line_has_literal_keyword(line, "id", "namebox") for line in container_lines
+            )
+            has_style = any(
+                _line_has_literal_keyword(line, "style", "namebox") for line in container_lines
+            )
+            if has_id and has_style:
+                return
+        current_line = parent_index + 1
+    raise EditorSourceError(
+        "STYLE_POSITION_SOURCE_UNRESOLVED",
+        'say.who is not nested in a window/frame with id "namebox" and style "namebox"',
+    )
 
 
 def analyze_say_dialogue_style_binding(
@@ -2791,26 +3039,14 @@ def analyze_say_dialogue_style_binding(
     *,
     xpos_var: str,
     ypos_var: str,
+    style_name: str = "say_dialogue",
 ) -> SayDialogueStyleBinding:
-    """Prove screens.rpy style say_dialogue binds xpos/ypos to gui.dialogue_* vars.
+    """Prove one screens.rpy style block binds xpos/ypos to the given gui vars.
 
     Unlocks only if:
-    - Exactly one `style say_dialogue` block found
-    - Block contains `xpos <xpos_var>` (no arithmetic/expressions)
-    - Block contains `ypos <ypos_var>` (no arithmetic/expressions)
-
-    Lock codes:
-    - STYLE_POSITION_SOURCE_UNRESOLVED: style say_dialogue not found
-    - STYLE_POSITION_SOURCE_AMBIGUOUS: multiple style say_dialogue blocks
-    - STYLE_POSITION_EXPRESSION_UNSUPPORTED: xpos/ypos uses expressions
-
-    Args:
-        source_text: screens.rpy contents
-        xpos_var: Expected xpos variable (e.g., "gui.dialogue_xpos")
-        ypos_var: Expected ypos variable (e.g., "gui.dialogue_ypos")
-
-    Returns:
-        SayDialogueStyleBinding with proven/locked status
+    - Exactly one ``style <style_name>`` block found
+    - Block contains ``xpos <xpos_var>`` (no arithmetic/expressions)
+    - Block contains ``ypos <ypos_var>`` (no arithmetic/expressions)
     """
     lines = source_text.splitlines()
 
@@ -2829,7 +3065,7 @@ def analyze_say_dialogue_style_binding(
             and header_tokens[0].kind == "WORD"
             and header_tokens[0].text == "style"
             and header_tokens[1].kind == "WORD"
-            and header_tokens[1].text == "say_dialogue"
+            and header_tokens[1].text == style_name
             and header_tokens[2].kind == "SYMBOL"
             and header_tokens[2].text == ":"
         )
@@ -2855,14 +3091,14 @@ def analyze_say_dialogue_style_binding(
         return SayDialogueStyleBinding(
             binding_proven=False,
             lock_code="STYLE_POSITION_SOURCE_UNRESOLVED",
-            lock_message="style say_dialogue not found in screens.rpy",
+            lock_message=f"style {style_name} not found in screens.rpy",
         )
 
     if len(style_blocks) > 1:
         return SayDialogueStyleBinding(
             binding_proven=False,
             lock_code="STYLE_POSITION_SOURCE_AMBIGUOUS",
-            lock_message=f"multiple style say_dialogue blocks found ({len(style_blocks)} total)",
+            lock_message=f"multiple style {style_name} blocks found ({len(style_blocks)} total)",
         )
 
     start_line, end_line = style_blocks[0]
@@ -2887,7 +3123,7 @@ def analyze_say_dialogue_style_binding(
             return SayDialogueStyleBinding(
                 binding_proven=False,
                 lock_code="STYLE_POSITION_SOURCE_AMBIGUOUS",
-                lock_message=f"style say_dialogue defines {property_name} multiple times",
+                lock_message=f"style {style_name} defines {property_name} multiple times",
             )
         expected_tokens = [
             (token.kind, token.text)
@@ -2903,7 +3139,7 @@ def analyze_say_dialogue_style_binding(
                     if values and len(actual_tokens) > len(expected_tokens)
                     else "STYLE_POSITION_SOURCE_UNRESOLVED"
                 ),
-                lock_message=f"style say_dialogue does not bind {property_name} exactly to {expected_var}",
+                lock_message=f"style {style_name} does not bind {property_name} exactly to {expected_var}",
             )
 
     return SayDialogueStyleBinding(binding_proven=True)

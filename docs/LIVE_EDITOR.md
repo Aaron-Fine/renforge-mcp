@@ -25,9 +25,9 @@ This guide is for **humans** (dashboard / game window) and **AI agents**
 
 | State | What you can do |
 | --- | --- |
-| **Editable** | Select, inspect, move / measure / resize (when that capability is available), preview, then **Save** to source. |
-| **Locked / read-only** | Select and inspect; the overlay names **why** write-back is blocked (missing identity, unsupported form, ambiguous ancestry, and similar gates). |
-| **Not selectable** | Some pure decoration is outside the editor's selection model; use `renforge_scene_tree` to observe layout without selecting. |
+| **Editable** | Select, inspect, move / measure / resize (when that capability is available), preview, then **Save** to source. One-line `add` and decorative `frame` statements with a literal `id` and integer `xpos`/`ypos` are included. |
+| **Locked / read-only** | Select and inspect; the overlay names **why** write-back is blocked (missing identity, unsupported form, ambiguous ancestry, overlapping non-focusables, and similar gates). |
+| **Not selectable** | Overlay chrome, `add SideImage()`, Transform ancestry, and some pure decoration stay outside the writable model; use `renforge_scene_tree` to observe layout without selecting. |
 
 Do **not** assume every visible pixel is editable. Treat lock reasons as product
 state, not failures to retry blindly.
@@ -87,14 +87,18 @@ renforge_launch_status(project_path)   # poll while starting
   -> starting | ready | failed | idle
 renforge_screenshot(project_path)      # fresh visual observation
 renforge_scene_tree(project_path)      # structured layout (logical coords)
-  # optional: renforge_list_ui_elements for focusable controls + frame_id
-renforge_click_at(
+renforge_editor(project_path, action="status")
+  -> selected_widget_id, lock_reason, capabilities, frame_id
+renforge_editor(
   project_path,
+  action="select",
   x=..., y=...,
   coordinate_space="logical",          # or "screenshot" from image search
   expected_frame_id=frame_id,          # when you have one
 )
-  # or renforge_click_element(project_path, element_id=..., expected_frame_id=frame_id)
+  -> overlay hit path; capabilities.move when the target is proven
+renforge_editor(project_path, action="save", x=..., y=...)  # optional destination
+  -> overlay Save (reload + attest). Locked targets return the lock code.
 renforge_screenshot / renforge_scene_tree / renforge_get_errors
   -> verify visible result, status, or source outcome
 renforge_stop(project_path)
@@ -108,11 +112,12 @@ renforge_stop(project_path)
   or re-capture before the next guarded click (`expected_frame_id`).
 - Prefer `coordinate_space` and `frame_id` values returned by the tools you
   just called; do not invent private bridge RPC names.
-- Distinguish **editable** vs **locked** from what the overlay and status UI
-  show in screenshots — locked is not “click harder”.
-- After a Live Editor **Save**, wait for its final status and observe again; the
-  editor already reloaded and attested the change. After your own external `.rpy`
-  edits, call `renforge_control(project_path, action="reload_script")` first.
+- Distinguish **editable** vs **locked** from `renforge_editor` `status` /
+  `select` (`lock_reason`, `capabilities`) — locked is not “click harder”.
+- After `renforge_editor` `save`, wait for its final `status_code` and observe
+  again; the editor already reloaded and attested the change. After your own
+  external `.rpy` edits, call `renforge_control(project_path, action="reload_script")`
+  first.
 - Always end with `renforge_stop` so the session can clean up.
 
 ## Related docs

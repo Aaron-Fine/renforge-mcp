@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from copy import deepcopy
 import ipaddress
 import json
@@ -44,6 +45,8 @@ from .source import (
     BAR_SIZE_MODE_XSIZE_YSIZE,
     DEFAULT_ALIGN_PARENT_SIZE,
     SAY_WHAT_STYLE_POSITION_MODE,
+    SAY_WHO_STYLE_POSITION_MODE,
+    STYLE_GUI_POSITION_MODES,
     BarStatement,
     EditorSourceError,
     SayDialogueStyleBinding,
@@ -71,9 +74,56 @@ from .source import (
     is_textbutton_block_header,
     peek_statement_kind,
     prove_say_what_text_binding,
+    prove_say_who_namebox_ancestry,
+    prove_say_who_text_binding,
     textbutton_patch_kwargs,
     uses_runtime_delta_position,
 )
+
+
+def expected_measurement_method(statement_kind: str) -> str:
+    """Return the only measurement method the coordinator will attest for a kind."""
+    if statement_kind == "text":
+        return "scene_tree_text"
+    if statement_kind in ("add", "frame"):
+        return "scene_tree_displayable"
+    return "focus_list"
+
+
+@dataclass(frozen=True)
+class _SayStyleGuiAdapter:
+    prove: Callable[[str], None]
+    prove_container: Callable[[str, int], None] | None
+    style_name: str
+    xpos_var: str
+    ypos_var: str
+    position_mode: str
+    binding_fail_message: str
+    locked_message: str
+
+
+_SAY_STYLE_GUI_ADAPTERS: dict[str, _SayStyleGuiAdapter] = {
+    "what": _SayStyleGuiAdapter(
+        prove=prove_say_what_text_binding,
+        prove_container=None,
+        style_name="say_dialogue",
+        xpos_var="gui.dialogue_xpos",
+        ypos_var="gui.dialogue_ypos",
+        position_mode=SAY_WHAT_STYLE_POSITION_MODE,
+        binding_fail_message="style say_dialogue binding not proven",
+        locked_message="say.what style position is locked",
+    ),
+    "who": _SayStyleGuiAdapter(
+        prove=prove_say_who_text_binding,
+        prove_container=prove_say_who_namebox_ancestry,
+        style_name="namebox",
+        xpos_var="gui.name_xpos",
+        ypos_var="gui.name_ypos",
+        position_mode=SAY_WHO_STYLE_POSITION_MODE,
+        binding_fail_message="style namebox binding not proven",
+        locked_message="say.who style position is locked",
+    ),
+}
 
 
 def _now_deadline(seconds: float) -> float:
@@ -607,6 +657,7 @@ class EditorCoordinator:
             text_position: TextPositionStatement | None = None
             text_style: TextColorStyleStatement | None = None
             say_style_position: SayWhatStylePositionStatement | None = None
+            say_gui_adapter: _SayStyleGuiAdapter | None = None
             move_lock_reason: dict[str, Any] | None = None
             style_lock_reason: dict[str, Any] | None = None
             gui_rpy_path: str | None = None
@@ -635,36 +686,34 @@ class EditorCoordinator:
                 except EditorSourceError as exc:
                     style_lock_reason = self._lock_reason(exc.code, str(exc))
 
-                # Critical finding #1/#2: If direct position failed for say.what,
-                # attempt style-backed ownership resolution
-                if (
-                    text_position is None
-                    and widget_id == "what"
-                    and runtime_key.get("screen") == "say"
-                ):
-                    # CRITICAL: Clear move_lock_reason from direct position failure
-                    # say.what has separate ownership path via gui.rpy
+                # Style-backed say.what / say.who: identity in screens.rpy, xy in gui.rpy.
+                if text_position is None and runtime_key.get("screen") == "say":
+                    say_gui_adapter = _SAY_STYLE_GUI_ADAPTERS.get(str(widget_id))
+                if say_gui_adapter is not None:
+                    # Direct-position failure is not the lock for this path.
                     move_lock_reason = None
 
                     try:
-                        prove_say_what_text_binding(header_line)
+                        say_gui_adapter.prove(header_line)
+                        if say_gui_adapter.prove_container is not None:
+                            say_gui_adapter.prove_container(source_text, source_line)
                     except EditorSourceError as exc:
                         move_lock_reason = self._lock_reason(exc.code, str(exc))
                         say_style_position = None
                     else:
-                        # Ownership proof part 3: screens.rpy must have style say_dialogue binding
-                        # xpos/ypos to gui.dialogue_xpos/ypos (fail-closed if missing/ambiguous/expressions)
                         try:
                             style_binding = analyze_say_dialogue_style_binding(
                                 source_text,
-                                xpos_var="gui.dialogue_xpos",
-                                ypos_var="gui.dialogue_ypos",
+                                xpos_var=say_gui_adapter.xpos_var,
+                                ypos_var=say_gui_adapter.ypos_var,
+                                style_name=say_gui_adapter.style_name,
                             )
                             if not style_binding.binding_proven:
                                 if move_lock_reason is None:
                                     move_lock_reason = self._lock_reason(
                                         style_binding.lock_code or "STYLE_POSITION_SOURCE_UNRESOLVED",
-                                        style_binding.lock_message or "style say_dialogue binding not proven",
+                                        style_binding.lock_message
+                                        or say_gui_adapter.binding_fail_message,
                                     )
                                 say_style_position = None
                         except Exception as exc:
@@ -675,29 +724,26 @@ class EditorCoordinator:
                                 )
                             say_style_position = None
 
-                        # Ownership proof part 4: gui.rpy must have unlocked gui.dialogue_xpos/ypos
-                        # Use game-relative path: resolve_game_path already joins project_root/game/
                         if move_lock_reason is None:
                             gui_rpy_path = "gui.rpy"
 
                             try:
-                                # Load gui.rpy to analyze style-backed position
                                 gui_absolute = resolve_game_path(self._project.root, gui_rpy_path)
                                 gui_source = gui_absolute.read_bytes().decode("utf-8")
                                 say_style_position = analyze_say_what_style_position(
                                     gui_source,
-                                    xpos_var="gui.dialogue_xpos",
-                                    ypos_var="gui.dialogue_ypos",
+                                    xpos_var=say_gui_adapter.xpos_var,
+                                    ypos_var=say_gui_adapter.ypos_var,
+                                    position_mode=say_gui_adapter.position_mode,
                                 )
                                 if say_style_position.position_lock_code is not None:
-                                    # Style position locked - use its reason instead of misleading XPOS_DUPLICATE
                                     move_lock_reason = self._lock_reason(
                                         say_style_position.position_lock_code,
-                                        say_style_position.position_lock_message or say_style_position.position_lock_code,
+                                        say_style_position.position_lock_message
+                                        or say_style_position.position_lock_code,
                                     )
-                                    say_style_position = None  # Don't unlock
+                                    say_style_position = None
                             except EditorPathError as exc:
-                                # gui.rpy not found or path error - keep original lock reason but don't use XPOS_DUPLICATE
                                 if move_lock_reason is None:
                                     move_lock_reason = self._lock_reason(
                                         "STYLE_POSITION_SOURCE_UNRESOLVED",
@@ -705,7 +751,6 @@ class EditorCoordinator:
                                     )
                                 say_style_position = None
                             except Exception as exc:
-                                # Malformed gui.rpy or analysis error - surface as lock reason
                                 if move_lock_reason is None:
                                     move_lock_reason = self._lock_reason(
                                         "STYLE_POSITION_SOURCE_UNRESOLVED",
@@ -794,12 +839,16 @@ class EditorCoordinator:
                 "position_mode": position_mode,
             }
 
-            # For say.what style position: store gui.rpy path and parsed statement
+            # Style-backed say position: store gui.rpy path, authored xy, and var names.
             if say_style_position is not None and say_style_position.position_mode:
                 source_key["gui_rpy_path"] = gui_rpy_path
                 source_key["say_style_position_xpos"] = say_style_position.xpos
                 source_key["say_style_position_ypos"] = say_style_position.ypos
                 source_key["say_style_position_baseline_sha256"] = say_style_position.baseline_sha256
+                if say_gui_adapter is not None:
+                    source_key["gui_xpos_var"] = say_gui_adapter.xpos_var
+                    source_key["gui_ypos_var"] = say_gui_adapter.ypos_var
+                    source_key["gui_style_name"] = say_gui_adapter.style_name
             if statement_kind == "text":
                 source_key["move_lock_reason"] = move_lock_reason
                 source_key["style_lock_reason"] = style_lock_reason
@@ -890,7 +939,7 @@ class EditorCoordinator:
                             "independent observation must provide positive widget width and height",
                         )
             if lock_reason is None:
-                expected_measurement = "scene_tree_text" if statement_kind == "text" else "focus_list"
+                expected_measurement = expected_measurement_method(statement_kind)
                 if observation.get("measurement_method") != expected_measurement:
                     lock_reason = self._lock_reason(
                         "MEASUREMENT_METHOD_INVALID",
@@ -1230,10 +1279,8 @@ class EditorCoordinator:
                 raise EditorError("INDEPENDENT_OBSERVATION_INVALID", "runtime probe returned invalid observation")
             if not self._runtime_keys_equivalent_for_reobservation(record.runtime_key, independent.get("runtime_key")):
                 raise EditorError("RUNTIME_KEY_MISMATCH", "runtime reanalysis key mismatch")
-            expected_measurement = (
-                "scene_tree_text"
-                if selected.source_key.get("statement_kind") == "text"
-                else "focus_list"
+            expected_measurement = expected_measurement_method(
+                str(selected.source_key.get("statement_kind") or "")
             )
             if independent.get("measurement_method") != expected_measurement:
                 raise EditorError(
@@ -1259,31 +1306,41 @@ class EditorCoordinator:
         except EditorSourceError as exc:
             raise EditorError(exc.code, str(exc)) from exc
 
-        # Critical finding #1: Two-file write path for say.what style position
-        # Detect gui.rpy intents (position lives in gui.rpy, identity in screens.rpy)
+        # gui.rpy write path: identity stays in screens.rpy, xy lives in gui vars.
         gui_intents = [
             sel for sel in selected_records
-            if sel.source_key.get("position_mode") == SAY_WHAT_STYLE_POSITION_MODE
+            if sel.source_key.get("position_mode") in STYLE_GUI_POSITION_MODES
             and sel.x is not None
             and sel.y is not None
         ]
 
         if gui_intents:
-            # Verify screens.rpy unchanged (identity-only path)
             if staged_bytes != current_bytes:
                 raise EditorError(
                     "MULTI_FILE_WRITE_UNSUPPORTED",
-                    "say.what style position cannot be combined with other screen changes in V1",
+                    "style-backed say position cannot be combined with other screen changes in V1",
                 )
 
-            # Create gui.rpy transaction
             if len(gui_intents) != len(selected_records):
                 raise EditorError(
                     "MULTI_FILE_WRITE_UNSUPPORTED",
-                    "say.what style position cannot be combined with other intents in V1",
+                    "style-backed say position cannot be combined with other intents in V1",
                 )
 
-            # All intents are gui.rpy - create gui transaction
+            gui_signatures = {
+                (
+                    sel.source_key.get("position_mode"),
+                    sel.source_key.get("gui_xpos_var"),
+                    sel.source_key.get("gui_ypos_var"),
+                )
+                for sel in gui_intents
+            }
+            if len(gui_signatures) != 1:
+                raise EditorError(
+                    "MULTI_FILE_WRITE_UNSUPPORTED",
+                    "style-backed say positions cannot be combined in V1",
+                )
+
             gui_rpy_path = gui_intents[0].source_key.get("gui_rpy_path")
             if not gui_rpy_path:
                 raise EditorError("GUI_RPY_PATH_MISSING", "gui.rpy path is missing from source_key")
@@ -1292,26 +1349,28 @@ class EditorCoordinator:
             gui_current_bytes = gui_absolute.read_bytes()
             gui_current_sha = sha256_bytes(gui_current_bytes)
 
-            # Verify gui.rpy baseline
             gui_baseline = gui_intents[0].source_key.get("say_style_position_baseline_sha256")
             if gui_current_sha != gui_baseline:
                 raise EditorError("STALE_SOURCE", "gui.rpy has changed since analysis")
 
-            # Apply gui.rpy patch
             gui_source_text = gui_current_bytes.decode("utf-8")
+            xpos_var = gui_intents[0].source_key.get("gui_xpos_var") or "gui.dialogue_xpos"
+            ypos_var = gui_intents[0].source_key.get("gui_ypos_var") or "gui.dialogue_ypos"
+            position_mode = gui_intents[0].source_key.get("position_mode")
             say_statement = analyze_say_what_style_position(
                 gui_source_text,
-                xpos_var="gui.dialogue_xpos",
-                ypos_var="gui.dialogue_ypos",
+                xpos_var=xpos_var,
+                ypos_var=ypos_var,
+                position_mode=position_mode,
             )
             if say_statement.position_lock_code is not None:
                 raise EditorError(
                     say_statement.position_lock_code,
-                    say_statement.position_lock_message or "say.what style position is locked",
+                    say_statement.position_lock_message
+                    or "style-backed say position is locked",
                 )
 
-            # Calculate logical-pixel deltas: apply to authored gui.scale ints
-            # NEVER write absolute screen coords into gui.dialogue_xpos/ypos
+            # Logical-pixel deltas on authored gui.scale ints, never screen coords.
             authored_x = gui_intents[0].source_key.get("say_style_position_xpos")
             authored_y = gui_intents[0].source_key.get("say_style_position_ypos")
 
@@ -1768,6 +1827,9 @@ class EditorCoordinator:
             "Null",
             "Viewport",
             "Crop",
+            "Solid",
+            "Image",
+            "ImageReference",
         }
         # Issue #44: one viewport is editable because the engine already offsets
         # focus rects by its scroll, measured across scroll positions. Nested
@@ -1991,15 +2053,13 @@ class EditorCoordinator:
                 if width is not None or height is not None:
                     raise EditorError("ANALYSIS_RESIZE_UNSUPPORTED", "text resize is not supported")
 
-                # Critical finding #1: Two-file write path for say.what style position
-                # Position lives in gui.rpy, identity stays in screens.rpy
+                # Style-backed say position: skip screens.rpy, write gui.rpy instead.
                 position_mode = source_key.get("position_mode")
                 if (
                     x is not None
                     and y is not None
-                    and position_mode == SAY_WHAT_STYLE_POSITION_MODE
+                    and position_mode in STYLE_GUI_POSITION_MODES
                 ):
-                    # Skip patching screens.rpy - will be handled as gui.rpy transaction
                     continue
 
                 if x is not None or y is not None:
