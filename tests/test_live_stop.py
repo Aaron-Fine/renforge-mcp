@@ -389,6 +389,7 @@ def test_new_launch_passes_editor_mode_to_bridge_launcher(tmp_path: Path, monkey
     assert result["ok"] is True
     assert result["editor"] is True
     assert launch_kwargs["editor"] is True
+    assert launch_kwargs["savedir"] == "temporary"
 
     live._SESSIONS.pop(live._key(project), None)
     launch_kwargs.clear()

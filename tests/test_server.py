@@ -445,6 +445,7 @@ def test_launch_tool_defaults_editor_true(tmp_path, monkeypatch) -> None:
     assert calls["version"] == "stable"
     assert calls["warp"] is None
     assert calls["kwargs"]["editor"] is True
+    assert calls["kwargs"]["savedir"] == "temporary"
 
 
 def test_launch_tool_forwards_editor_mode_to_direct_launch(tmp_path, monkeypatch) -> None:
@@ -471,6 +472,7 @@ def test_launch_tool_forwards_editor_mode_to_direct_launch(tmp_path, monkeypatch
     assert calls["version"] == "stable"
     assert calls["warp"] is None
     assert calls["kwargs"]["editor"] is True
+    assert calls["kwargs"]["savedir"] == "temporary"
 
 
 def test_launch_tool_honors_editor_opt_out(tmp_path, monkeypatch) -> None:
@@ -499,6 +501,28 @@ def test_launch_tool_honors_editor_opt_out(tmp_path, monkeypatch) -> None:
 
     assert result["ok"] is True
     assert calls["kwargs"]["editor"] is False
+
+
+def test_launch_tool_can_opt_into_existing_saves(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    from renforge import dashboard_client
+    from renforge.tools import live
+
+    calls = {}
+    monkeypatch.setattr(dashboard_client, "launch_game", lambda *_args, **_kwargs: None)
+
+    def fake_launch(project_path: str, version: str = "stable", warp: str | None = None, **kwargs):
+        calls["kwargs"] = kwargs
+        return {"ok": True, "ready": True, "already_running": False, "editor": True}
+
+    monkeypatch.setattr(live, "launch_game", fake_launch)
+
+    app = _ToolRegistry()
+    _register_tools(app)
+    result = app.tools["renforge_launch"](str(tmp_path), savedir="existing")
+
+    assert result["ok"] is True
+    assert calls["kwargs"]["savedir"] == "existing"
 
 
 def test_launch_tool_prefers_the_active_dashboard_process(tmp_path, monkeypatch) -> None:

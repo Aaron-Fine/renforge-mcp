@@ -33,6 +33,7 @@ from ..effect_wait import expected_events_for_action
 from ..effect_wait import wait_for_effect as _wait_for_business_effect
 from ..launch_env import LaunchError
 from ..project import RenpyProject
+from ..save_isolation import default_launch_savedir
 from ..sdk import get_or_install_sdk
 from ..state_compact import (
     apply_serialization_limits,
@@ -443,8 +444,9 @@ def launch_game(
     """Launch the project with the bridge injected, or reuse a live session.
 
     ``display`` / ``audio`` default to ``auto`` (native when available, else
-    Xvfb + dummy SDL audio). Pass a ``session`` object or individual kwargs to
-    isolate saves (``savedir='temporary'``) and persistent state.
+    Xvfb + dummy SDL audio). Save directories default to ``temporary`` so the
+    session cannot read or write the user's normal Ren'Py saves. Pass
+    ``savedir='existing'`` to use the game's normal save location.
     """
     try:
         project = RenpyProject(Path(project_path))
@@ -458,7 +460,7 @@ def launch_game(
         }
 
     session_cfg = dict(session or {})
-    savedir = session_cfg.get("savedir", savedir)
+    savedir = default_launch_savedir(session_cfg.get("savedir", savedir))
     persistent = str(session_cfg.get("persistent", persistent) or "existing")
     if isinstance(session_cfg.get("cleanup_on_stop"), bool):
         cleanup_on_stop = session_cfg["cleanup_on_stop"]
@@ -578,8 +580,7 @@ def launch_game(
         }
         if warp is not None:
             launch_kwargs["warp"] = warp
-        if savedir is not None:
-            launch_kwargs["savedir"] = savedir
+        launch_kwargs["savedir"] = savedir
         if timeout is not None:
             launch_kwargs["startup_timeout"] = float(timeout)
         launch_signature = inspect.signature(launch_with_bridge)

@@ -215,8 +215,10 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             ),
             "audio": "Audio strategy: `auto`, `native`, `dummy`, or `none`; both `dummy` and `none` use SDL dummy audio.",
             "savedir": (
-                "Optional save directory override. `temporary` creates an isolated temporary directory; any other non-default "
-                "value is an arbitrary save directory path that is created if missing and is never removed by stop."
+                "Save location. Default `temporary` creates an isolated directory so this session cannot read or write "
+                "the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory. "
+                "Any other non-empty value is an arbitrary save directory path that is created if missing and is never "
+                "removed by stop."
             ),
             "persistent": (
                 "Persistent mode: `existing` preserves current persistent data and `empty` removes it in the isolated session; "

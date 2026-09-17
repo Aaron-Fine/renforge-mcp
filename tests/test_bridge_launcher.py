@@ -194,6 +194,72 @@ def test_launch_with_bridge_builds_run_command(monkeypatch, tmp_path: Path, warp
     session.close(timeout=0.1)
 
 
+def test_launch_with_bridge_isolates_saves_via_native_savedir(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    home = tmp_path / "home"
+    normal_saves = home / ".renpy" / "renforge-demo"
+    normal_saves.mkdir(parents=True)
+    canary = normal_saves / "slot1.save"
+    canary.write_text("USER-SAVE\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    project, sdk, project_root = _make_project(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_popen(command, env=None, stdout=None, stderr=None, start_new_session=False):
+        captured["command"] = command
+        captured["env"] = env
+        _write_bridge_info(project_root, env)
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
+
+    session = launch_with_bridge(sdk, project, savedir="temporary")
+    command = list(captured["command"])  # type: ignore[arg-type]
+    env = captured["env"]
+    assert isinstance(env, dict)
+    isolated = Path(env["RENFORGE_SAVEDIR"])
+    assert command[-2:] == ["--savedir", str(isolated)]
+    assert command[2] == "run"
+    assert env["RENPY_PATH_TO_SAVES"] == str(isolated)
+    assert env["RENPY_MULTIPERSISTENT"] == str(isolated / "multipersistent")
+    assert isolated != normal_saves
+    assert not isolated.is_relative_to(home)
+    assert list((project_root / "game").glob("00renforge_session_*.rpy"))
+    assert canary.read_text(encoding="utf-8") == "USER-SAVE\n"
+    session.close(timeout=0.1)
+    assert not isolated.exists()
+
+
+def test_launch_with_bridge_existing_savedir_does_not_redirect(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_popen(command, env=None, stdout=None, stderr=None, start_new_session=False):
+        captured["command"] = command
+        captured["env"] = env
+        _write_bridge_info(project_root, env)
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
+
+    session = launch_with_bridge(sdk, project, savedir="existing")
+    command = list(captured["command"])  # type: ignore[arg-type]
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert command[2:] == ["run"]
+    assert "RENFORGE_SAVEDIR" not in env
+    assert "RENPY_PATH_TO_SAVES" not in env
+    assert not list((project_root / "game").glob("00renforge_session_*.rpy"))
+    session.close(timeout=0.1)
+
+
 def test_launch_without_display_nor_xvfb_fails_fast(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("renforge.bridge.launcher.sys.platform", "linux")
     monkeypatch.delenv("DISPLAY", raising=False)

@@ -76,6 +76,12 @@ Current evidence is deliberately narrow:
   not ready for hostile project execution. Path validation, bounded failure
   cleanup, resource ownership, and broader isolation tests remain future work.
 
+MCP/dashboard `renforge_launch` now defaults to application-layer
+`savedir=temporary` (native `--savedir` plus environment redirects). That
+keeps ordinary engine save/persistent writes out of the user's normal save
+tree, but it is **not** the Bubblewrap/FUSE sandbox and must not be described
+as equivalent to the strict profile path.
+
 ## Future application work (not implemented by this PR)
 
 The eventual goal is an MCP client that launches a supported project in an

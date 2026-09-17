@@ -17,6 +17,13 @@ versioning.
 - Autopilot now identifies choices from active Ren'Py menu `items`, including
   custom-named and one-item menus, without inferring narrative intent from
   arbitrary focusable screen controls.
+- `renforge_launch`, `renforge_jump`, `renforge_new_game`, and dashboard
+  launches now isolate saves by default (`savedir=temporary`). The game is
+  started with native `--savedir` plus `RENFORGE_SAVEDIR` /
+  `RENPY_PATH_TO_SAVES` / `RENPY_MULTIPERSISTENT`, so agent sessions do not
+  read or write the user's normal Ren'Py save tree. Pass `savedir=existing`
+  to use the game's normal save location. This is application-layer save
+  isolation, not the Linux Bubblewrap/FUSE strict-play sandbox.
 
 ### Fixed
 

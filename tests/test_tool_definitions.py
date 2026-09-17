@@ -398,6 +398,8 @@ def test_catalog_states_exact_runtime_and_filesystem_contracts() -> None:
     assert "game/" in launch.description
     assert ".renforge/control" in launch.description
     assert "arbitrary save directory" in launch.parameters["savedir"].lower()
+    assert "user's normal" in launch.parameters["savedir"].lower()
+    assert "`existing`" in launch.parameters["savedir"]
     assert "only" in launch.parameters["cleanup_on_stop"].lower()
     assert "temporary" in launch.parameters["cleanup_on_stop"].lower()
 

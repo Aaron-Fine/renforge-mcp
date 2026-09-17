@@ -16,7 +16,6 @@ import shutil
 import signal
 import subprocess
 import sys  # retained for tests that patch renforge.bridge.launcher.sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -29,6 +28,7 @@ from ..launch_env import (
     resolve_display_strategy,
 )
 from ..project import RenpyProject
+from ..save_isolation import resolve_save_isolation
 from ..sdk import RenpySdk
 from .artifacts import (
     ArtifactOwnershipError,
@@ -785,7 +785,9 @@ def _launch_after_project_lock(
     and fail fast with a structured :class:`LaunchError` otherwise.
 
     ``savedir='temporary'`` isolates saves under a temp directory that is
-    removed on session close when ``cleanup_on_stop`` is true.
+    removed on session close when ``cleanup_on_stop`` is true. Omit *savedir*
+    to keep the game's normal save location; MCP/dashboard launches pass
+    ``temporary`` by default so agent sessions do not touch user saves.
     """
     started = time.monotonic()
     phases: list[dict[str, Any]] = []
@@ -809,22 +811,11 @@ def _launch_after_project_lock(
     env.update(audio_env)
 
     headless = display_mode == "xvfb"
-    temporary_savedir: Path | None = None
-    cleanup_savedir = False
-
-    if savedir == "temporary":
-        temporary_savedir = Path(tempfile.mkdtemp(prefix="renforge-saves-"))
-        env["RENFORGE_SAVEDIR"] = str(temporary_savedir)
-        cleanup_savedir = bool(cleanup_on_stop)
-        savedir_path = str(temporary_savedir)
-    elif savedir and savedir not in {"existing", "default"}:
-        temporary_savedir = Path(savedir).expanduser().resolve()
-        temporary_savedir.mkdir(parents=True, exist_ok=True)
-        env["RENFORGE_SAVEDIR"] = str(temporary_savedir)
-        cleanup_savedir = False
-        savedir_path = str(temporary_savedir)
-    else:
-        savedir_path = None
+    isolation = resolve_save_isolation(savedir, cleanup_on_stop=cleanup_on_stop)
+    temporary_savedir = isolation.savedir
+    cleanup_savedir = isolation.cleanup
+    env.update(isolation.environ())
+    savedir_path = str(isolation.savedir) if isolation.savedir is not None else None
 
     if persistent in {"empty", "existing", "copy", "fixture"}:
         env["RENFORGE_PERSISTENT_MODE"] = persistent
@@ -924,7 +915,11 @@ def _launch_after_project_lock(
             )
         )
 
-    command = project.renpy_command(sdk, ("run", "--warp", warp) if warp is not None else ("run",))
+    run_args: list[str] = ["run"]
+    if warp is not None:
+        run_args.extend(["--warp", warp])
+    run_args.extend(isolation.command_args())
+    command = project.renpy_command(sdk, tuple(run_args))
     if headless:
         if shutil.which("xvfb-run") is None:
             remove_bridge_artifacts(project.root, expected_session_id=session_id)

@@ -1410,8 +1410,8 @@
           "type": "string"
         },
         "savedir": {
-          "default": "",
-          "description": "Optional save directory override. `temporary` creates an isolated temporary directory; any other non-default value is an arbitrary save directory path that is created if missing and is never removed by stop.",
+          "default": "temporary",
+          "description": "Save location. Default `temporary` creates an isolated directory so this session cannot read or write the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory. Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop.",
           "type": "string"
         },
         "timeout": {

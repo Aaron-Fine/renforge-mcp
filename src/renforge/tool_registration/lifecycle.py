@@ -34,9 +34,15 @@ def build_wrappers(context):
         session: dict[str, Any] | None = None,
         cancel_event: threading.Event | None = None,
     ) -> dict:
+        from ..dashboard_client import (
+            launch_game as launch_via_dashboard,
+            stop_game as stop_via_dashboard,
+        )
+        from ..save_isolation import default_launch_savedir
+
         canonical_editor = bool(editor)
         session_cfg = dict(session or {})
-        effective_savedir = session_cfg.get("savedir", savedir)
+        effective_savedir = default_launch_savedir(session_cfg.get("savedir", savedir))
         effective_persistent = str(session_cfg.get("persistent", persistent) or "existing")
         effective_cleanup = (
             session_cfg["cleanup_on_stop"]
@@ -45,10 +51,6 @@ def build_wrappers(context):
         )
         if cancel_event is not None and cancel_event.is_set():
             return live.cancelled_launch_result(phase="detecting_environment")
-        from ..dashboard_client import (
-            launch_game as launch_via_dashboard,
-            stop_game as stop_via_dashboard,
-        )
 
         # None = no matching dashboard. Any dict (including failure) is final:
         # never fall back to a local launch after a contacted dashboard errors.
@@ -59,7 +61,7 @@ def build_wrappers(context):
             editor=canonical_editor,
             display=display,
             audio=audio,
-            savedir=effective_savedir if isinstance(effective_savedir, str) else None,
+            savedir=effective_savedir,
             persistent=effective_persistent,
             cleanup_on_stop=bool(effective_cleanup),
             timeout=timeout,
@@ -105,7 +107,7 @@ def build_wrappers(context):
             editor=canonical_editor,
             display=display,
             audio=audio,
-            savedir=effective_savedir if isinstance(effective_savedir, str) else None,
+            savedir=effective_savedir,
             persistent=effective_persistent,
             cleanup_on_stop=bool(effective_cleanup),
             timeout=timeout,
@@ -150,7 +152,7 @@ def build_wrappers(context):
         editor: bool = True,
         display: str = "auto",
         audio: str = "auto",
-        savedir: str = "",
+        savedir: str = "temporary",
         persistent: str = "existing",
         cleanup_on_stop: bool = True,
         timeout: float = 0,
@@ -168,8 +170,11 @@ def build_wrappers(context):
         The call waits at most 20 seconds for readiness, then returns
         ``status="starting"`` while startup continues in the background. Poll
         ``renforge_launch_status`` until it reports ``ready`` or ``failed``.
-        display/audio default to auto; savedir='temporary' isolates saves.
-        timeout controls the background startup deadline, not the MCP call.
+        display/audio default to auto; saves default to an isolated temporary
+        directory so this session does not read or write the user's normal
+        Ren'Py saves. Pass savedir='existing' to use the game's normal save
+        location. timeout controls the background startup deadline, not the MCP
+        call.
         """
         kwargs: dict[str, Any] = {
             "version": version,
@@ -179,9 +184,8 @@ def build_wrappers(context):
             "audio": audio or "auto",
             "persistent": persistent or "existing",
             "cleanup_on_stop": cleanup_on_stop,
+            "savedir": savedir or "temporary",
         }
-        if savedir:
-            kwargs["savedir"] = savedir
         if timeout and timeout > 0:
             kwargs["timeout"] = float(timeout)
         return _log_tool_call(
