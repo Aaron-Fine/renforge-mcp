@@ -180,13 +180,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  strict-play-environment:
-    name: Strict play environment (Ren'Py 8.2.0.24012702)
+  sandbox-contract:
+    name: Linux sandbox contract tests (no SDK)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     env:
-      RENFORGE_STRICT_PLAY_TESTS: "1"
-      RENFORGE_STRICT_PLAY_BUNDLE: ${{ github.workspace }}/.strict-play/bundle
+      RENFORGE_SANDBOX_TESTS: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -195,47 +194,36 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install isolation and display dependencies
+      - name: Install sandbox test prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap fuse-overlayfs xvfb x11-utils imagemagick
+          sudo apt-get install -y bubblewrap fuse-overlayfs fuse3
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
-      - name: Probe namespace backend
-        run: python scripts/strict_play_environment.py --probe
-
       - name: Install test dependencies
-        run: python -m pip install -e '.[test]'
+        run: python -m pip install 'pytest>=8'
 
-      - name: Cache strict-play runtime
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.strict-play/cache
-          key: strict-play-renpy-8.2.0-e79ec1014bad6adb-${{ runner.os }}
+      - name: Run filesystem and process isolation contracts
+        run: |
+          mkdir -p .sandbox-test-artifacts
+          set -o pipefail
+          python -m pytest -q -rs \
+            --basetemp=.sandbox-test-artifacts/pytest \
+            --junitxml=.sandbox-test-artifacts/junit.xml \
+            tests/test_sandbox_contract.py \
+            2>&1 | tee .sandbox-test-artifacts/pytest.log
 
-      - name: Provision checksum-pinned bundled fixture
-        run: >-
-          python scripts/bootstrap_strict_play_runtime.py
-          --cache-dir "${{ github.workspace }}/.strict-play/cache"
-          --bundle "${{ env.RENFORGE_STRICT_PLAY_BUNDLE }}"
-
-      - name: Run required environment gate
-        run: >-
-          python -m pytest -q -rs --basetemp=.strict-play/pytest
-          tests/test_strict_play_environment.py
-          tests/test_strict_play_runtime_bootstrap.py
-          tests/test_integration_strict_play_environment.py
-
-      - name: Upload environment diagnostics
-        if: failure()
+      - name: Upload sandbox test diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: strict-play-environment-diagnostics
+          name: sandbox-contract-test-results
           path: |
-            .strict-play/**/game.stderr
-            .strict-play/**/xvfb.stderr
+            .sandbox-test-artifacts/pytest.log
+            .sandbox-test-artifacts/junit.xml
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 3
 

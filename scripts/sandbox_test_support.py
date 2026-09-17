@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Strict-play environment probe and disposable isolation test support."""
+"""Test-only Linux sandbox helpers for disposable isolation contract tests.
+
+This prototype is not a production launcher and is not used by MCP tools.
+The contract suite should exercise the production sandbox builder once it exists.
+"""
 from __future__ import annotations
 
 import shutil
@@ -9,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 @dataclass
-class EnvironmentTree:
+class SandboxTestTree:
     """Disposable filesystem layout for one isolation check."""
 
     root: Path
@@ -100,10 +104,10 @@ def missing_requirements() -> tuple[str, ...]:
 
 
 def probe_backend() -> None:
-    """Fail unless this host can create the namespace used by strict play."""
+    """Fail unless this host can create the namespace used by the contract tests."""
     missing = missing_requirements()
     if missing:
-        raise RuntimeError(f"Missing strict-play commands: {', '.join(missing)}")
+        raise RuntimeError(f"Missing sandbox test prerequisites: {', '.join(missing)}")
     subprocess.run(
         [
             BWRAP,
@@ -122,7 +126,7 @@ def probe_backend() -> None:
     )
 
 
-def mount_overlay(tree: EnvironmentTree) -> None:
+def mount_overlay(tree: SandboxTestTree) -> None:
     """Host-side CoW overlay. No privilege required; caller owns all dirs."""
     subprocess.run(
         [
@@ -135,12 +139,15 @@ def mount_overlay(tree: EnvironmentTree) -> None:
     )
 
 
-def umount_overlay(tree: EnvironmentTree) -> None:
+def umount_overlay(tree: SandboxTestTree) -> None:
     subprocess.run([FUSERMOUNT, "-u", str(tree.merged)], check=True)
 
 
-def build_guest_argv(tree: EnvironmentTree, inner: list[str]) -> list[str]:
-    """Construct the allowlisted bwrap command for a hostile guest.
+def build_guest_argv(tree: SandboxTestTree, inner: list[str]) -> list[str]:
+    """Construct the filesystem/PID boundary exercised by the contract tests.
+
+    This prototype does not isolate networking or sanitize the inherited
+    environment; do not use it to launch untrusted projects.
 
     The merged overlay is bound read-write at the logical project path. The
     profile's game-saves dir is bound over the runtime game/saves. Only the
@@ -233,10 +240,10 @@ def build_guest_argv(tree: EnvironmentTree, inner: list[str]) -> list[str]:
 
 def main() -> int:
     if sys.argv[1:] != ["--probe"]:
-        print("usage: strict_play_environment.py --probe", file=sys.stderr)
+        print("usage: sandbox_test_support.py --probe", file=sys.stderr)
         return 2
     probe_backend()
-    print("strict-play namespace backend available")
+    print("sandbox test namespace backend available")
     return 0
 
 

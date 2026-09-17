@@ -1,8 +1,11 @@
-"""Required filesystem and process checks for the strict-play environment."""
+"""Linux sandbox contract tests; no Ren'Py SDK or production MCP API.
+
+CI sets RENFORGE_SANDBOX_TESTS=1 so missing prerequisites fail instead of skip.
+These tests exercise scripts/sandbox_test_support.py, not application isolation.
+"""
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -13,10 +16,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-import strict_play_environment as environment  # noqa: E402
+import sandbox_test_support as sandbox  # noqa: E402
 
-REQUIRED = os.environ.get("RENFORGE_STRICT_PLAY_TESTS") == "1"
-MISSING = environment.missing_requirements()
+REQUIRED = os.environ.get("RENFORGE_SANDBOX_TESTS") == "1"
+MISSING = sandbox.missing_requirements()
 pytestmark = pytest.mark.skipif(
     not REQUIRED and bool(MISSING),
     reason=f"requires {', '.join(MISSING)}",
@@ -24,26 +27,26 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture()
-def tree(tmp_path: Path) -> environment.EnvironmentTree:
-    value = environment.EnvironmentTree(root=tmp_path / "case")
+def tree(tmp_path: Path) -> sandbox.SandboxTestTree:
+    value = sandbox.SandboxTestTree(root=tmp_path / "case")
     value.build()
     return value
 
 
 @pytest.fixture()
-def mounted(tree: environment.EnvironmentTree):
-    environment.mount_overlay(tree)
+def mounted(tree: sandbox.SandboxTestTree):
+    sandbox.mount_overlay(tree)
     try:
         yield tree
     finally:
-        environment.umount_overlay(tree)
+        sandbox.umount_overlay(tree)
 
 
 def _run_guest(
-    tree: environment.EnvironmentTree, script: str
+    tree: sandbox.SandboxTestTree, script: str
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        environment.build_guest_argv(tree, ["/bin/bash", "-c", script]),
+        sandbox.build_guest_argv(tree, ["/bin/bash", "-c", script]),
         capture_output=True,
         text=True,
         timeout=30,
@@ -51,11 +54,11 @@ def _run_guest(
 
 
 def test_backend_is_available() -> None:
-    assert not MISSING, f"missing strict-play commands: {', '.join(MISSING)}"
-    environment.probe_backend()
+    assert not MISSING, f"missing sandbox test prerequisites: {', '.join(MISSING)}"
+    sandbox.probe_backend()
 
 
-def test_guest_cannot_access_host_state(mounted: environment.EnvironmentTree) -> None:
+def test_guest_cannot_access_host_state(mounted: sandbox.SandboxTestTree) -> None:
     script = f"""
 set -u
 for target in '{mounted.normal_saves}' '{mounted.trusted_state}' \
@@ -74,7 +77,7 @@ echo "HOME_IS:$HOME"
     assert "HOME_IS:/home/guest" in result.stdout
 
 
-def test_project_writes_use_only_the_overlay(mounted: environment.EnvironmentTree) -> None:
+def test_project_writes_use_only_the_overlay(mounted: sandbox.SandboxTestTree) -> None:
     lower = mounted.lower_project / "game" / "script.rpy"
     before = lower.read_bytes()
     result = _run_guest(
@@ -90,7 +93,7 @@ def test_project_writes_use_only_the_overlay(mounted: environment.EnvironmentTre
     assert not (mounted.lower_project / "new.rpy").exists()
 
 
-def test_writes_land_in_designated_roots(mounted: environment.EnvironmentTree) -> None:
+def test_writes_land_in_designated_roots(mounted: sandbox.SandboxTestTree) -> None:
     result = _run_guest(
         mounted,
         """
@@ -124,7 +127,7 @@ chmod 600 /run/renforge/bridge.json
     assert (mounted.guest_pub / "bridge.json").stat().st_mode & 0o777 == 0o600
 
 
-def test_system_mounts_are_read_only(mounted: environment.EnvironmentTree) -> None:
+def test_system_mounts_are_read_only(mounted: sandbox.SandboxTestTree) -> None:
     result = _run_guest(
         mounted,
         "echo forbidden > /usr/renforge-write-test 2>/dev/null; test $? -ne 0",
@@ -181,8 +184,8 @@ def _descendant_namespaces(root_pid: int) -> set[str]:
     return namespaces
 
 
-def test_guest_descendants_die_with_namespace(mounted: environment.EnvironmentTree) -> None:
-    command = environment.build_guest_argv(
+def test_guest_descendants_die_with_namespace(mounted: sandbox.SandboxTestTree) -> None:
+    command = sandbox.build_guest_argv(
         mounted,
         [
             "/bin/bash",
@@ -202,8 +205,8 @@ def test_guest_descendants_die_with_namespace(mounted: environment.EnvironmentTr
     assert not _namespace_members(namespaces)
 
 
-def test_command_uses_only_read_only_system_binds(tree: environment.EnvironmentTree) -> None:
-    command = environment.build_guest_argv(tree, ["/bin/true"])
+def test_command_uses_only_read_only_system_binds(tree: sandbox.SandboxTestTree) -> None:
+    command = sandbox.build_guest_argv(tree, ["/bin/true"])
     for system_path in ("/usr", "/bin", "/lib", "/lib64"):
         if Path(system_path).exists():
             index = command.index(system_path)
