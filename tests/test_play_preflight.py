@@ -18,9 +18,7 @@ def _project(tmp_path: Path, version: str = "8.2.0.24012702") -> Path:
 
 def test_preflight_is_read_only_and_detects_exact_version(tmp_path: Path, monkeypatch) -> None:
     root = _project(tmp_path)
-    monkeypatch.setattr(preflight.shutil, "which", lambda name: f"/usr/bin/{name}")
-    original_exists = preflight.Path.exists
-    monkeypatch.setattr(preflight.Path, "exists", lambda self: True if str(self) == "/dev/fuse" else original_exists(self))
+    monkeypatch.setattr(preflight, "_backend_available", lambda: True)
     before = sorted(path.relative_to(root) for path in root.rglob("*"))
     result = preflight.inspect_project(root)
     after = sorted(path.relative_to(root) for path in root.rglob("*"))

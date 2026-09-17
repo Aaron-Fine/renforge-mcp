@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -34,19 +33,25 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
     fd, raw = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(raw)
     try:
-        os.fchmod(fd, 0o600)
+        # chmod by path is portable to Windows; fchmod on an open temporary
+        # file can fail there and leave the handle open during cleanup.
+        os.chmod(temporary, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            fd = -1
             json.dump(value, stream, sort_keys=True, separators=(",", ":"))
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        if os.name == "posix":
+            directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     finally:
+        if fd >= 0:
+            os.close(fd)
         temporary.unlink(missing_ok=True)
 
 

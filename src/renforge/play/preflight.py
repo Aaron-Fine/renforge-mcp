@@ -47,6 +47,14 @@ def _static_version(root: Path) -> str | None:
     return None
 
 
+def _backend_available() -> bool:
+    return (
+        os.name == "posix"
+        and all(shutil.which(name) for name in ("bwrap", "fuse-overlayfs", "fusermount3"))
+        and Path("/dev/fuse").exists()
+    )
+
+
 def inspect_project(project_path: str | Path, launcher_path: str | Path = "") -> PreflightResult:
     refusals: list[str] = []
     supplied = Path(project_path).expanduser()
@@ -101,7 +109,7 @@ def inspect_project(project_path: str | Path, launcher_path: str | Path = "") ->
         except (OSError, RuntimeError):
             refusals.append("runtime_path_missing")
 
-    backend_ok = all(shutil.which(name) for name in ("bwrap", "fuse-overlayfs", "fusermount3")) and Path("/dev/fuse").exists()
+    backend_ok = _backend_available()
     if not backend_ok:
         refusals.append("isolation_backend_unavailable")
     return PreflightResult(
