@@ -1,9 +1,17 @@
 # Minimal Play Implementation — Status
 
-**Plan:** `2026-08-31-renforge-end-to-end-minimal-play.md` (MVP 1: Safe Eyes and Hands)
-**Last updated:** 2026-08-31, session 1 close-out
+**Plan for review:** [Unified final plan](2026-09-16-renforge-minimal-play-final-plan.md) (MVP 1: Safe Eyes and Hands). Earlier plan/proposal documents are historical.
+**Last reviewed:** 2026-09-16. The implementation snapshot below is historical (2026-08-31).
 
-## Where things stand
+## Current repository update — 2026-09-16
+
+- Fetched `origin/main` at `e4fa61f` and merged it into this branch with merge commit `c7afdd4` without conflicts. The existing engine CI workflow was already present; the merge adds 0.7.2 metadata and the coordinator-result collection fix.
+- The Task 0 spike remains on `play/task0-spike` at `35ce6fe`, not merged here. Its 9/9 result has not been rerun in this review.
+- The recorded task worktrees are missing and Git marks them prunable; they must be recreated before use.
+- Gates A and B remain open. The historical instruction below to launch MyPigPrincess during Task 0 is superseded: use synthetic game code until both gates pass.
+- Three independent reviews (skeptical senior developer, isolation/recovery, runtime/MCP/CI) are consolidated into the [unified final plan](2026-09-16-renforge-minimal-play-final-plan.md). It replaces the old task/wave ordering for review; implementation and acceptance gates remain pending.
+
+## Historical implementation snapshot — 2026-08-31
 
 | Task | State | Branch / artifact |
 | --- | --- | --- |
@@ -13,7 +21,7 @@
 | Tasks 1–3 (wave 1) | Not started; worktrees ready | `play/task1-contracts`, `play/task2-preflight`, `play/task3-profiles` |
 | Tasks 4–12 | Not started | worktrees to be created per wave |
 
-## Ratified decisions (do not re-litigate)
+## Historical decisions — superseded where changed by the unified proposal
 
 1. **Display backend:** pluggable; cage headless (native Wayland) → weston headless → Xvfb; Xvfb unconditional in CI. Amended into the plan (amendment note, §5, Tasks 0/4/5/11, verification, risks).
 2. **Task 0 owner:** main session (done for isolation half).
@@ -46,7 +54,7 @@ Full detail: `docs/superpowers/reports/play-isolation-spike.md`.
 - No Ren'Py SDK cached locally (`RENPY_SDK_HOME` empty); SDK download mechanism exists (`sdk.py`, default 8.5.3) and MyPigPrincess supplies its own bundled 8.2.0 runtime.
 - Host runs many nested-namespace desktop apps (Steam, Flatpak) — irrelevant to isolation but relevant to test detection strategy.
 
-## Next session
+## Historical next-session instructions — do not execute; use unified Stage 0
 
 1. Finish Task 0 display matrix + negative exercises → close Gate A, update report + checkboxes.
 2. Kick off wave 1 (Tasks 1–3) with glm-flash subagents in the existing worktrees; review + merge into `feature/end-to-end-minimal-play-plan` in order 1→2→3.

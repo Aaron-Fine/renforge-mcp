@@ -1,5 +1,7 @@
 # RenForge End-to-End Minimal Play — Implementation Plan
 
+> **Historical plan — superseded for review:** Read the [unified final plan](2026-09-16-renforge-minimal-play-final-plan.md). It consolidates this document, the simplification proposal, and three independent reviews into one proposed execution plan. The text below preserves prior decisions/history and is not a second checklist to execute. No real target may launch before both proof gates pass.
+
 > **For agentic workers:** implement this plan task-by-task. Keep checkbox state in this document, use focused tests before broad suites, and do not launch a real user game until both proof gates in Tasks 0 and 11 pass.
 
 **Goal:** prove that an agent can play one complete click/advance-compatible route through a real Ren'Py 8 development project while seeing coherent decision frames, resuming from isolated state, recording a durable trace, and leaving normal saves and the host project untouched by the running game.
