@@ -1,0 +1,519 @@
+"""Classify one interaction snapshot into controls, chrome, and forward.
+
+The injected bridge extracts records and mirrors :func:`assign_control_ids`,
+:func:`guard_act`, and :func:`guard_dismiss`. It cannot import this module.
+Keep those three predicates in sync with ``bridge.rpy``.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import time
+from collections.abc import Callable, Mapping
+from typing import Any
+
+POLL_SECONDS = 0.05
+
+_BUTTON_ROLES = {"button", "imagebutton", "textbutton", "hotspot", "imagemap"}
+_BAR_ROLES = {"bar", "slider"}
+_TEXT_ROLES = {"input"}
+_EMPTY_ROLES = {"viewport", "drag", "draggroup"}
+_STOPS = {"choose", "wait", "none", "max_steps", "timeout", "stalled", "crash"}
+
+
+def normalize_role(role: Any) -> str:
+    raw = role.strip().casefold() if isinstance(role, str) else ""
+    if raw in _BUTTON_ROLES or "button" in raw or "hotspot" in raw:
+        return "button"
+    if raw in _BAR_ROLES:
+        return "bar"
+    if raw in _TEXT_ROLES:
+        return "input"
+    if raw in _EMPTY_ROLES or raw.startswith("drag"):
+        return "drag" if raw.startswith("drag") else raw
+    return raw or "unknown"
+
+
+def operations_for(role: str) -> list[str]:
+    if role == "button":
+        return ["click"]
+    if role == "input":
+        return ["text"]
+    return []
+
+
+def image_basename(image_name: Any) -> str | None:
+    if isinstance(image_name, (list, tuple)):
+        parts = [part.strip() for part in image_name if isinstance(part, str) and part.strip()]
+        image_name = "/".join(parts)
+    if not isinstance(image_name, str):
+        return None
+    name = image_name.strip().replace("\\", "/")
+    if not name or name in {".", ".."}:
+        return None
+    base = name.rsplit("/", 1)[-1].strip()
+    if not base or base in {".", ".."}:
+        return None
+    return base
+
+
+def _screen_name(value: Any) -> str | None:
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else None
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    return None
+
+
+def _menu_index(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _widget_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def assign_control_ids(elements: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Assign canonical ids. The bridge copies this order.
+
+    Widget id, else menu item index, else idle-image basename, else
+    ``screen/role/ordinal`` with ``synthetic`` set. Duplicates gain ``#2``.
+    """
+    used: dict[str, int] = {}
+    assigned: list[dict[str, Any]] = []
+    for fallback, element in enumerate(elements):
+        screen = _screen_name(element.get("screen"))
+        role = normalize_role(element.get("role"))
+        widget_id = _widget_id(element.get("widget_id"))
+        menu_index = _menu_index(element.get("menu_index"))
+        image_name = image_basename(element.get("image_name"))
+        synthetic = False
+        if widget_id:
+            base = f"{screen}/{widget_id}" if screen else widget_id
+        elif menu_index is not None:
+            base = f"{screen or 'choice'}/item/{menu_index}"
+        elif image_name:
+            base = f"{screen or 'screen'}/{image_name}"
+        else:
+            ordinal = _menu_index(element.get("ordinal"))
+            if ordinal is None:
+                ordinal = fallback
+            base = f"{screen or 'screen'}/{role}/{ordinal}"
+            synthetic = True
+        count = used.get(base, 0)
+        used[base] = count + 1
+        control_id = base if count == 0 else f"{base}#{count + 1}"
+        record = dict(element)
+        record["id"] = control_id
+        record["role"] = role
+        record["screen"] = screen
+        record["operations"] = operations_for(role)
+        record["synthetic"] = synthetic
+        assigned.append(record)
+    return assigned
+
+
+def _is_chrome(screen: str | None, overlay_screens: set[str]) -> bool:
+    if not screen:
+        return False
+    return screen in overlay_screens or screen.startswith("_renforge_")
+
+
+def normalize_say_dismiss(value: Any) -> str | None:
+    names: list[str] = []
+    if isinstance(value, str):
+        names = [value]
+    elif isinstance(value, (list, tuple, set)):
+        names = [item for item in value if isinstance(item, str)]
+    found = set(names)
+    if "dismiss" in found:
+        return "dismiss"
+    if "dismiss_hard_pause" in found:
+        return "dismiss_hard_pause"
+    return None
+
+
+def _interaction(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    return default
+
+
+def _public_control(control: Mapping[str, Any]) -> dict[str, Any]:
+    enabled = _bool(control.get("enabled"), True)
+    covered = _bool(control.get("covered"), False)
+    clickable = control.get("clickable")
+    if not isinstance(clickable, bool):
+        clickable = enabled and not covered
+    bounds = control.get("bounds") if isinstance(control.get("bounds"), dict) else None
+    action = control.get("action") if isinstance(control.get("action"), str) else None
+    text = control.get("text") if isinstance(control.get("text"), str) else None
+    return {
+        "id": control.get("id"),
+        "role": control.get("role"),
+        "text": text or None,
+        "screen": control.get("screen"),
+        "action": action,
+        "operations": list(control.get("operations") or []),
+        "enabled": enabled,
+        "clickable": clickable,
+        "covered": covered,
+        "bounds": bounds,
+        "synthetic": bool(control.get("synthetic")),
+    }
+
+
+def _is_decision(control: Mapping[str, Any]) -> bool:
+    if not control.get("enabled", True):
+        return False
+    if control.get("covered"):
+        return False
+    if control.get("clickable") is False:
+        return False
+    bounds = control.get("bounds")
+    if isinstance(bounds, dict):
+        width = bounds.get("width")
+        height = bounds.get("height")
+        if isinstance(width, int) and not isinstance(width, bool) and width <= 0:
+            return False
+        if isinstance(height, int) and not isinstance(height, bool) and height <= 0:
+            return False
+    return True
+
+
+def _screens(raw: Mapping[str, Any], overlay_screens: set[str]) -> list[dict[str, Any]]:
+    screens = []
+    seen: set[tuple[str, str | None]] = set()
+    for item in raw.get("screens") or []:
+        if not isinstance(item, Mapping):
+            continue
+        name = _screen_name(item.get("name"))
+        if not name:
+            continue
+        layer = item.get("layer") if isinstance(item.get("layer"), str) else None
+        key = (name, layer)
+        if key in seen:
+            continue
+        seen.add(key)
+        screens.append(
+            {
+                "name": name,
+                "layer": layer,
+                "modal": item.get("modal") is True,
+                "overlay": _is_chrome(name, overlay_screens),
+            }
+        )
+    return screens
+
+
+def _dialogue(raw: Mapping[str, Any]) -> dict[str, Any] | None:
+    dialogue = raw.get("dialogue")
+    if not isinstance(dialogue, Mapping):
+        return None
+    who = dialogue.get("who") if isinstance(dialogue.get("who"), str) else None
+    what = dialogue.get("what") if isinstance(dialogue.get("what"), str) else None
+    if who is None and what is None:
+        return None
+    return {"who": who, "what": what}
+
+
+def _statement(raw: Mapping[str, Any]) -> dict[str, Any] | None:
+    statement = raw.get("statement")
+    if not isinstance(statement, Mapping):
+        return None
+    file_name = statement.get("file") if isinstance(statement.get("file"), str) else None
+    line = statement.get("line")
+    if isinstance(line, bool) or not isinstance(line, int):
+        line = None
+    if file_name is None and line is None:
+        return None
+    return {"file": file_name, "line": line}
+
+
+def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Turn bridge records into the snapshot ``act`` and ``advance_until`` share."""
+    overlay_screens = {
+        name
+        for name in (raw.get("overlay_screens") or [])
+        if isinstance(name, str) and name
+    }
+    screens = _screens(raw, overlay_screens)
+    elements = [item for item in (raw.get("elements") or []) if isinstance(item, Mapping)]
+    controls = []
+    chrome = []
+    for control in (_public_control(item) for item in assign_control_ids(elements)):
+        if _is_chrome(control.get("screen"), overlay_screens):
+            chrome.append(control)
+        else:
+            controls.append(control)
+
+    say_dismiss = normalize_say_dismiss(raw.get("say_dismiss"))
+    modal = any(screen["modal"] for screen in screens)
+    decisions = [control for control in controls if _is_decision(control)]
+    if modal:
+        forward = "choose"
+    elif say_dismiss == "dismiss_hard_pause":
+        forward = "choose" if decisions else "wait"
+    elif say_dismiss == "dismiss":
+        forward = "dismiss"
+    elif decisions:
+        forward = "choose"
+    else:
+        forward = "none"
+
+    stable = raw.get("stable") is True
+    reason = raw.get("unstable_reason")
+    if reason not in {"transition", "not_ready"}:
+        reason = None
+    if stable:
+        reason = None
+    elif reason is None:
+        reason = "not_ready"
+
+    omitted = raw.get("omitted") if isinstance(raw.get("omitted"), Mapping) else {}
+    label = raw.get("label") if isinstance(raw.get("label"), str) else None
+    frame_hash = raw.get("frame_hash") if isinstance(raw.get("frame_hash"), str) else None
+    return {
+        "interaction": _interaction(raw.get("interaction")),
+        "stable": stable,
+        "unstable_reason": reason,
+        "statement": _statement(raw),
+        "label": label,
+        "dialogue": _dialogue(raw),
+        "screens": screens,
+        "say_dismiss": say_dismiss,
+        "forward": forward,
+        "controls": controls,
+        "chrome": chrome,
+        "frame_hash": frame_hash or None,
+        "omitted": {
+            "focus_truncated": bool(omitted.get("focus_truncated")),
+            "unclassified": bool(omitted.get("unclassified")),
+        },
+    }
+
+
+def _find_control(snapshot: Mapping[str, Any], control_id: str) -> dict[str, Any] | None:
+    for bucket in ("controls", "chrome"):
+        for item in snapshot.get(bucket) or []:
+            if isinstance(item, Mapping) and item.get("id") == control_id:
+                return dict(item)
+    return None
+
+
+def guard_act(
+    snapshot: Mapping[str, Any],
+    interaction: Any,
+    control_id: str,
+    *,
+    text: str | None = None,
+) -> str | None:
+    """Return a refusal, or None when the bridge may post this control's input.
+
+    ``stable`` false is never a legal token, even when ``interaction`` matches.
+    """
+    if snapshot.get("stable") is not True:
+        return "unstable"
+    if snapshot.get("interaction") != _interaction(interaction):
+        return "stale"
+    found = _find_control(snapshot, control_id)
+    if found is None:
+        return "missing"
+    if not found.get("enabled", True):
+        return "disabled"
+    if found.get("covered") or found.get("clickable") is False:
+        return "covered"
+    operations = found.get("operations") or []
+    if "click" in operations:
+        return None
+    if "text" in operations:
+        if not isinstance(text, str):
+            return "text_required"
+        return None
+    return "unsupported"
+
+
+def guard_dismiss(snapshot: Mapping[str, Any], interaction: Any) -> str | None:
+    """Return a refusal, or None when ``queue_event('dismiss')`` is legal."""
+    if snapshot.get("stable") is not True:
+        return "unstable"
+    if snapshot.get("interaction") != _interaction(interaction):
+        return "stale"
+    modal = any(
+        isinstance(screen, Mapping) and screen.get("modal") is True
+        for screen in snapshot.get("screens") or []
+    )
+    if snapshot.get("say_dismiss") != "dismiss" or modal:
+        return "not_dismiss"
+    return None
+
+
+def apply_screenshot(raw: Mapping[str, Any]) -> tuple[dict[str, Any], bytes | None]:
+    """Drop bridge image bytes and set ``frame_hash`` from those exact bytes."""
+    data = dict(raw)
+    encoded = data.pop("screenshot_base64", None)
+    data.pop("sha256", None)
+    if encoded is None:
+        return data, None
+    if not isinstance(encoded, str) or not encoded:
+        raise ValueError("screenshot_base64 must be a non-empty string")
+    png = base64.b64decode(encoded, validate=True)
+    data["frame_hash"] = hashlib.sha256(png).hexdigest()
+    return data, png
+
+
+def _finished(stop: str, steps: int, observation: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "stop": stop if stop in _STOPS else "crash",
+        "steps": steps,
+        "observation": observation,
+    }
+
+
+def run_advance_until(
+    fetch: Callable[[bool], Mapping[str, Any]],
+    dismiss: Callable[[int], Mapping[str, Any]],
+    *,
+    max_steps: int,
+    timeout: float,
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    """Post ``dismiss`` until the snapshot says the player must choose.
+
+    ``fetch(screenshot)`` returns raw bridge records. ``dismiss(interaction)``
+    re-checks on the main thread and posts the event only when it still listens
+    for ``dismiss``. This loop never clicks and never enables skip.
+    """
+    if isinstance(max_steps, bool) or not isinstance(max_steps, int) or not 1 <= max_steps <= 200:
+        return {
+            "ok": False,
+            "stop": "crash",
+            "steps": 0,
+            "observation": None,
+            "error": "max_steps must be an integer from 1 to 200",
+        }
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        timeout_ok = False
+    else:
+        timeout_ok = timeout >= 0.1 and timeout <= 120
+    if not timeout_ok:
+        return {
+            "ok": False,
+            "stop": "crash",
+            "steps": 0,
+            "observation": None,
+            "error": "timeout must be a number from 0.1 to 120 seconds",
+        }
+
+    deadline = now() + float(timeout)
+    steps = 0
+    last: dict[str, Any] | None = None
+
+    def look(screenshot: bool) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        nonlocal last
+        raw = fetch(screenshot)
+        if not isinstance(raw, Mapping) or raw.get("ok") is False:
+            error = raw.get("error") if isinstance(raw, Mapping) else "observe failed"
+            return None, {
+                "ok": False,
+                "stop": "crash",
+                "steps": steps,
+                "observation": last,
+                "error": error if isinstance(error, str) else "observe failed",
+            }
+        snapshot = classify(raw)
+        last = snapshot
+        return snapshot, None
+
+    def shot(fallback: dict[str, Any] | None) -> dict[str, Any] | None:
+        snapshot, failure = look(True)
+        if failure is not None:
+            return fallback
+        return snapshot
+
+    while True:
+        if now() >= deadline:
+            return _finished("timeout", steps, shot(last))
+        snapshot, failure = look(False)
+        if failure is not None:
+            return failure
+        assert snapshot is not None
+        if not snapshot["stable"]:
+            sleep(POLL_SECONDS)
+            continue
+        forward = snapshot["forward"]
+        if forward == "wait":
+            seen = snapshot["interaction"]
+            changed = False
+            while now() < deadline:
+                sleep(POLL_SECONDS)
+                nxt, failure = look(False)
+                if failure is not None:
+                    return failure
+                assert nxt is not None
+                if nxt["interaction"] != seen:
+                    changed = True
+                    break
+            if not changed:
+                return _finished("wait", steps, shot(snapshot))
+            continue
+        if forward != "dismiss":
+            framed, failure = look(True)
+            if failure is not None:
+                return failure
+            assert framed is not None
+            if framed["forward"] == "dismiss" and framed["stable"]:
+                snapshot = framed
+            else:
+                stop = framed["forward"]
+                if stop not in {"choose", "wait", "none"}:
+                    stop = "none"
+                return _finished(stop, steps, framed)
+        if snapshot["forward"] != "dismiss" or not snapshot["stable"]:
+            continue
+        if steps >= max_steps:
+            return _finished("max_steps", steps, shot(snapshot))
+        interaction = snapshot["interaction"]
+        if not isinstance(interaction, int):
+            return _finished("none", steps, shot(snapshot))
+        reply = dismiss(interaction)
+        if not isinstance(reply, Mapping) or reply.get("ok") is False:
+            error = reply.get("error") if isinstance(reply, Mapping) else None
+            if error in {"unstable", "stale", "not_dismiss"}:
+                sleep(POLL_SECONDS)
+                continue
+            return {
+                "ok": False,
+                "stop": "crash",
+                "steps": steps,
+                "observation": snapshot,
+                "error": error if isinstance(error, str) else "dismiss failed",
+            }
+        steps += 1
+        advanced = False
+        while now() < deadline:
+            sleep(POLL_SECONDS)
+            nxt, failure = look(False)
+            if failure is not None:
+                return failure
+            assert nxt is not None
+            if nxt["interaction"] != interaction:
+                advanced = True
+                break
+        if not advanced:
+            return _finished("stalled", steps, shot(snapshot))

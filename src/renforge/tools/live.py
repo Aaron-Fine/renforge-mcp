@@ -12,6 +12,7 @@ PNG from :func:`screenshot_png` into an MCP image.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import inspect
 import math
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..autopilot import autopilot as _autopilot
+from ..observe import apply_screenshot, classify, run_advance_until
 from ..bridge.client import BridgeClient, BridgeError
 from ..bridge.launcher import (
     BridgeSession,
@@ -1001,6 +1003,135 @@ def inspect_screen(project_path: str, name: str) -> dict:
 
 def advance(project_path: str) -> dict:
     return _with_client(project_path, lambda c: c.advance())
+
+
+def _observation_from_reply(reply: dict) -> dict:
+    if not isinstance(reply, dict):
+        return {"ok": False, "error": "observe reply must be an object"}
+    if reply.get("ok") is False or reply.get("error"):
+        result = dict(reply)
+        result["ok"] = False
+        return result
+    try:
+        raw, png = apply_screenshot(reply)
+    except (ValueError, TypeError) as exc:
+        return {"ok": False, "error": f"invalid screenshot: {exc}"}
+    snapshot = classify(raw)
+    snapshot["ok"] = True
+    if png is not None:
+        snapshot["_png"] = png
+    return snapshot
+
+
+def observe(project_path: str, *, screenshot: bool = True) -> dict:
+    """Read one interaction snapshot. ``stable`` false is still returned."""
+
+    def _handler(client: BridgeClient) -> dict:
+        return _observation_from_reply(client.observe(screenshot=bool(screenshot)))
+
+    return _with_client(project_path, _handler)
+
+
+def act(
+    project_path: str,
+    interaction: int,
+    control_id: str,
+    text: str | None = None,
+) -> dict:
+    """Activate one control from an observe snapshot, re-checked on the main thread."""
+    if isinstance(interaction, bool) or not isinstance(interaction, int):
+        return {"ok": False, "error": "stale"}
+    if not isinstance(control_id, str) or not control_id:
+        return {"ok": False, "error": "missing"}
+    if text is not None and not isinstance(text, str):
+        return {"ok": False, "error": "text_required"}
+
+    def _handler(client: BridgeClient) -> dict:
+        return client.act(interaction=interaction, control_id=control_id, text=text)
+
+    return _with_client(project_path, _handler)
+
+
+def advance_until(
+    project_path: str,
+    max_steps: int = 30,
+    timeout: float = 30.0,
+) -> dict:
+    """Dismiss say/soft-pause lines until the snapshot says the player must choose.
+
+    Does not click controls and does not enable skip. The returned observation's
+    ``frame_hash`` matches ``_png`` when a frame was captured.
+    """
+    try:
+        client = _client(project_path)
+    except FileNotFoundError:
+        return {
+            "ok": False,
+            "stop": "crash",
+            "steps": 0,
+            "observation": None,
+            "error": "no running game (bridge not found); call renforge_launch first",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "stop": "crash",
+            "steps": 0,
+            "observation": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    png_box: dict[str, bytes] = {}
+    wall_end = time.monotonic() + float(timeout) if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) else time.monotonic()
+
+    def fetch(screenshot: bool) -> dict:
+        remaining = wall_end - time.monotonic()
+        request_budget = min(5.0, max(0.05, remaining))
+        try:
+            reply = client.observe(
+                screenshot=bool(screenshot),
+                deadline=time.monotonic() + request_budget,
+            )
+        except BridgeError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not isinstance(reply, dict):
+            return {"ok": False, "error": "observe reply must be an object"}
+        if reply.get("ok") is False or reply.get("error"):
+            failed = dict(reply)
+            failed["ok"] = False
+            return failed
+        try:
+            raw, png = apply_screenshot(reply)
+        except (ValueError, TypeError) as exc:
+            return {"ok": False, "error": f"invalid screenshot: {exc}"}
+        if isinstance(png, bytes):
+            png_box["png"] = png
+        raw["ok"] = True
+        return raw
+
+    def dismiss(interaction: int) -> dict:
+        remaining = wall_end - time.monotonic()
+        request_budget = min(5.0, max(0.05, remaining))
+        try:
+            return client.dismiss_if(
+                interaction=interaction,
+                deadline=time.monotonic() + request_budget,
+            )
+        except BridgeError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    result = run_advance_until(
+        fetch,
+        dismiss,
+        max_steps=max_steps,
+        timeout=timeout,
+    )
+    png = png_box.get("png")
+    observation = result.get("observation") if isinstance(result, dict) else None
+    if isinstance(png, bytes) and isinstance(observation, dict):
+        if hashlib.sha256(png).hexdigest() == observation.get("frame_hash"):
+            result["_png"] = png
+    return result
 
 
 def _next_cursor(project_path: str) -> int:

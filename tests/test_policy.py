@@ -19,6 +19,21 @@ from renforge.policy import (
 from renforge.server import create_app
 
 
+def test_classify_observe_act_and_advance_until() -> None:
+    assert classify("renforge_observe", {"project_path": "/tmp/game"}) == (
+        "renforge_observe",
+        RISK_OBSERVATIONAL,
+    )
+    assert classify(
+        "renforge_act",
+        {"project_path": "/tmp/game", "interaction": 1, "id": "choice/item/0"},
+    ) == ("renforge_act", RISK_MUTATING)
+    assert classify(
+        "renforge_advance_until",
+        {"project_path": "/tmp/game", "max_steps": 5, "timeout": 10},
+    ) == ("renforge_advance_until", RISK_MUTATING)
+
+
 def test_classify_control_saves_eval_and_scenario_operations() -> None:
     assert classify("renforge_control", {"action": "advance"}) == (
         "renforge_control.advance",

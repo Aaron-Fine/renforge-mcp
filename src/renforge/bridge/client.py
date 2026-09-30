@@ -226,6 +226,35 @@ class BridgeClient:
         """Advance the current dialogue (posts a 'dismiss' event)."""
         return self._checked("advance")
 
+    def observe(self, *, screenshot: bool = False, deadline: float | None = None) -> dict:
+        """Return raw interaction records. The host classifies them."""
+        reply = self.request(
+            "observe",
+            {"screenshot": bool(screenshot)},
+            deadline=deadline,
+        )
+        return self._normalize_error_reply(reply)
+
+    def act(
+        self,
+        *,
+        interaction: int,
+        control_id: str,
+        text: str | None = None,
+        deadline: float | None = None,
+    ) -> dict:
+        """Activate one control id from the current interaction."""
+        payload: dict[str, Any] = {"interaction": interaction, "id": control_id}
+        if text is not None:
+            payload["text"] = text
+        return self._normalize_error_reply(self.request("act", payload, deadline=deadline))
+
+    def dismiss_if(self, *, interaction: int, deadline: float | None = None) -> dict:
+        """Post dismiss only when this interaction still listens for it."""
+        return self._normalize_error_reply(
+            self.request("dismiss_if", {"interaction": interaction}, deadline=deadline)
+        )
+
     def control(
         self,
         action: str,

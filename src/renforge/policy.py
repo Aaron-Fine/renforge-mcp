@@ -226,6 +226,10 @@ def classify(name: str, params: Mapping[str, Any] | None = None) -> tuple[str, s
         return _classify_scenario(payload.get("steps"))
     if name in _LAUNCH_TOOLS:
         return _classify_launch(name, payload)
+    if name == "renforge_observe":
+        return name, RISK_OBSERVATIONAL
+    if name in {"renforge_act", "renforge_advance_until"}:
+        return name, RISK_MUTATING
     return name, RISK_UNMANAGED
 
 

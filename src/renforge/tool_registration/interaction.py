@@ -6,6 +6,9 @@ from typing import Any
 
 TOOL_NAMES = (
     "renforge_advance",
+    "renforge_observe",
+    "renforge_act",
+    "renforge_advance_until",
     "renforge_control",
     "renforge_send_input",
     "renforge_saves",
@@ -26,6 +29,7 @@ TOOL_NAMES = (
 def build_wrappers(context):
     live = context.live
     _log_tool_call = context.log_tool_call
+    _png_content = context.png_content
 
     def renforge_advance(project_path: str) -> dict:
         """Advance the current dialogue."""
@@ -35,6 +39,77 @@ def build_wrappers(context):
             project_root=project_path,
             fn=live.advance,
             args=(project_path,),
+            kwargs={},
+        )
+
+    def renforge_observe(project_path: str, screenshot: bool = True):
+        """Read the current interaction snapshot, optionally with its PNG."""
+
+        def _tool() -> Any:
+            result = live.observe(project_path, screenshot=screenshot)
+            if not isinstance(result, dict):
+                return result
+            png = result.pop("_png", None)
+            if isinstance(png, bytes) and png:
+                return [result, _png_content(png)]
+            return result
+
+        return _log_tool_call(
+            name="renforge_observe",
+            params={"project_path": project_path, "screenshot": screenshot},
+            project_root=project_path,
+            fn=_tool,
+            args=(),
+            kwargs={},
+        )
+
+    def renforge_act(
+        project_path: str,
+        interaction: int,
+        id: str,
+        text: str | None = None,
+    ) -> dict:
+        """Activate one observed control id in that same interaction."""
+        return _log_tool_call(
+            name="renforge_act",
+            params={
+                "project_path": project_path,
+                "interaction": interaction,
+                "id": id,
+                "text": text,
+            },
+            project_root=project_path,
+            fn=live.act,
+            args=(project_path, interaction, id),
+            kwargs={"text": text},
+        )
+
+    def renforge_advance_until(
+        project_path: str,
+        max_steps: int = 30,
+        timeout: float = 30.0,
+    ):
+        """Dismiss dialogue until the player must choose or a budget runs out."""
+
+        def _tool() -> Any:
+            result = live.advance_until(project_path, max_steps=max_steps, timeout=timeout)
+            if not isinstance(result, dict):
+                return result
+            png = result.pop("_png", None)
+            if isinstance(png, bytes) and png:
+                return [result, _png_content(png)]
+            return result
+
+        return _log_tool_call(
+            name="renforge_advance_until",
+            params={
+                "project_path": project_path,
+                "max_steps": max_steps,
+                "timeout": timeout,
+            },
+            project_root=project_path,
+            fn=_tool,
+            args=(),
             kwargs={},
         )
 

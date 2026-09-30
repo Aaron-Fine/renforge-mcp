@@ -87,6 +87,10 @@ init python:
             self.prev_afm = None
             self.prev_history_index = None
             self.interaction_counter = 0
+            # ui.interact generation for observe/act. This is not interaction_counter,
+            # which is only a correlation id for business events.
+            self.observe_generation = 0
+            self.last_who = None
             self._skip_reason_hint = None
 
         def push_event(self, kind, data):
@@ -3097,6 +3101,597 @@ init python:
             },
         }
 
+    def _renforge_observe_role(focus, widget):
+        # Keep in sync with renforge.observe.normalize_role. Raw roles are
+        # normalized again when ids are assigned.
+        class_name = ""
+        try:
+            if widget is not None:
+                class_name = widget.__class__.__name__.casefold()
+        except Exception:
+            class_name = ""
+        if "hotspot" in class_name:
+            return "hotspot"
+        if "imagebutton" in class_name:
+            return "imagebutton"
+        if "textbutton" in class_name:
+            return "textbutton"
+        if "slider" in class_name:
+            return "slider"
+        if "viewport" in class_name:
+            return "viewport"
+        if class_name.startswith("drag"):
+            return "drag"
+        if class_name == "input" or (class_name.endswith("input") and "button" not in class_name):
+            return "input"
+        if class_name == "bar" or class_name.endswith("bar"):
+            return "bar"
+        return _renforge_focus_type(focus, widget)
+
+
+    def _renforge_observe_normalize_role(role):
+        # Mirror renforge.observe.normalize_role.
+        raw = role.strip().casefold() if isinstance(role, str) else ""
+        if raw in ("button", "imagebutton", "textbutton", "hotspot", "imagemap"):
+            return "button"
+        if "button" in raw or "hotspot" in raw:
+            return "button"
+        if raw in ("bar", "slider"):
+            return "bar"
+        if raw == "input":
+            return "input"
+        if raw in ("viewport", "drag", "draggroup") or raw.startswith("drag"):
+            return "drag" if raw.startswith("drag") else raw
+        return raw or "unknown"
+
+
+    def _renforge_observe_operations(role):
+        # Mirror renforge.observe.operations_for.
+        if role == "button":
+            return ["click"]
+        if role == "input":
+            return ["text"]
+        return []
+
+
+    def _renforge_observe_is_sequence(value):
+        # `init python` globals bind `list` to Ren'Py's RevertableList. Engine
+        # objects such as SayBehavior.dismiss and Transform.children are
+        # ordinary lists, and isinstance(..., list) misses them.
+        return isinstance(value, (builtins.list, builtins.tuple))
+
+
+    def _renforge_observe_basename(image_name):
+        # Mirror renforge.observe.image_basename.
+        if _renforge_observe_is_sequence(image_name):
+            parts = []
+            for part in image_name:
+                if isinstance(part, str) and part.strip():
+                    parts.append(part.strip())
+            image_name = "/".join(parts)
+        if not isinstance(image_name, str):
+            return None
+        name = image_name.strip().replace("\\", "/")
+        if not name or name in (".", ".."):
+            return None
+        base = name.rsplit("/", 1)[-1].strip()
+        if not base or base in (".", ".."):
+            return None
+        return base
+
+
+    def _renforge_displayable_filename(node, depth=0):
+        if node is None or depth > 6:
+            return None
+        filename = getattr(node, "filename", None)
+        if isinstance(filename, str) and filename.strip():
+            return filename.strip()
+        name = getattr(node, "name", None)
+        if isinstance(name, str) and name.strip() and name not in (
+            "image",
+            "Image",
+            "Transform",
+            "default",
+        ):
+            return name.strip()
+        if _renforge_observe_is_sequence(name):
+            parts = [part for part in name if isinstance(part, str) and part.strip()]
+            if parts:
+                return "/".join(parts)
+        child = getattr(node, "child", None)
+        if child is not None and child is not node:
+            found = _renforge_displayable_filename(child, depth + 1)
+            if found:
+                return found
+        children = getattr(node, "children", None)
+        if _renforge_observe_is_sequence(children):
+            for child in children:
+                found = _renforge_displayable_filename(child, depth + 1)
+                if found:
+                    return found
+        return None
+
+
+    def _renforge_observe_image_name(widget):
+        if widget is None:
+            return None
+        try:
+            class_name = widget.__class__.__name__.casefold()
+        except Exception:
+            return None
+        if "imagebutton" not in class_name and "hotspot" not in class_name:
+            return None
+        state = getattr(widget, "state_children", None)
+        idle = None
+        if isinstance(state, builtins.dict):
+            idle = state.get("idle_")
+            if idle is None:
+                idle = state.get("idle")
+        if idle is None:
+            return None
+        return _renforge_displayable_filename(idle)
+
+
+    def _renforge_observe_widget_id(screen_name, focus, widget, cache):
+        for owner in (widget, focus):
+            if owner is None:
+                continue
+            value = getattr(owner, "mcp_id", None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        named = _renforge_named_focus_id(screen_name, widget, cache)
+        if isinstance(named, str) and named.strip():
+            return named.strip()
+        return None
+
+
+    def _renforge_observe_action_class(widget):
+        if widget is None:
+            return None
+        for attr in ("action", "clicked"):
+            value = getattr(widget, attr, None)
+            if _renforge_observe_is_sequence(value) and len(value) == 1:
+                value = value[0]
+            if value is None:
+                continue
+            try:
+                name = value.__class__.__name__
+            except Exception:
+                continue
+            if name and name not in ("list", "tuple", "dict", "object", "NoneType"):
+                return str(name)
+        return None
+
+
+    def _renforge_observe_menu_index(screen_name, text):
+        if not screen_name or not text:
+            return None
+        try:
+            screen = renpy.get_screen(screen_name)
+            scope = getattr(screen, "scope", None) or {}
+            items = scope.get("items")
+        except Exception:
+            return None
+        if not _renforge_observe_is_sequence(items):
+            return None
+        wanted = str(text).strip()
+        actionable = 0
+        for item in items:
+            if getattr(item, "action", None) is None:
+                continue
+            caption = getattr(item, "caption", None)
+            try:
+                caption = "" if caption is None else str(caption).strip()
+            except Exception:
+                caption = ""
+            if caption == wanted:
+                return actionable
+            actionable += 1
+        return None
+
+
+    def _renforge_assign_observe_ids(records):
+        # Mirror renforge.observe.assign_control_ids. Widget id, else menu item,
+        # else idle-image basename, else screen/role/ordinal. Duplicates gain #2.
+        used = {}
+        assigned = []
+        for fallback, element in enumerate(records):
+            screen = element.get("screen")
+            if isinstance(screen, str):
+                screen = screen.strip() or None
+            else:
+                screen = None
+            role = _renforge_observe_normalize_role(element.get("role"))
+            widget_id = element.get("widget_id")
+            if isinstance(widget_id, str):
+                widget_id = widget_id.strip() or None
+            else:
+                widget_id = None
+            menu_index = element.get("menu_index")
+            if isinstance(menu_index, bool) or not isinstance(menu_index, builtins.int):
+                menu_index = None
+            image_name = _renforge_observe_basename(element.get("image_name"))
+            synthetic = False
+            if widget_id:
+                base = "%s/%s" % (screen, widget_id) if screen else widget_id
+            elif menu_index is not None:
+                base = "%s/item/%s" % (screen or "choice", menu_index)
+            elif image_name:
+                base = "%s/%s" % (screen or "screen", image_name)
+            else:
+                ordinal = element.get("ordinal")
+                if isinstance(ordinal, bool) or not isinstance(ordinal, builtins.int):
+                    ordinal = fallback
+                base = "%s/%s/%s" % (screen or "screen", role, ordinal)
+                synthetic = True
+            count = used.get(base, 0)
+            used[base] = count + 1
+            control_id = base if count == 0 else "%s#%s" % (base, count + 1)
+            copied = dict(element)
+            copied["id"] = control_id
+            copied["role"] = role
+            copied["screen"] = screen
+            copied["operations"] = _renforge_observe_operations(role)
+            copied["synthetic"] = synthetic
+            assigned.append(copied)
+        return assigned
+
+
+    def _renforge_observe_focus_pairs():
+        pairs = []
+        truncated = False
+        named_ids = {}
+        try:
+            focus_list = renpy.display.focus.focus_list
+        except Exception:
+            return pairs, truncated
+        for ordinal, focus in enumerate(focus_list):
+            if len(pairs) >= 400:
+                truncated = True
+                break
+            x = getattr(focus, "x", None)
+            y = getattr(focus, "y", None)
+            w = getattr(focus, "w", None)
+            h = getattr(focus, "h", None)
+            if x is None or y is None or w is None or h is None:
+                continue
+            try:
+                x, y, w, h = int(x), int(y), int(w), int(h)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if w <= 0 or h <= 0:
+                continue
+            widget = getattr(focus, "widget", None)
+            screen = _renforge_screen_name(focus)
+            text = _renforge_focus_text(widget) or None
+            record = {
+                "screen": screen,
+                "role": _renforge_observe_role(focus, widget),
+                "text": text,
+                "enabled": bool(_renforge_focus_enabled(focus, widget)),
+                "clickable": True,
+                "covered": False,
+                "visible": True,
+                "widget_id": _renforge_observe_widget_id(screen, focus, widget, named_ids),
+                "image_name": _renforge_observe_image_name(widget),
+                "menu_index": _renforge_observe_menu_index(screen, text),
+                "ordinal": ordinal,
+                "action": _renforge_observe_action_class(widget),
+                "bounds": {"x": x, "y": y, "width": w, "height": h},
+                "center": {"x": x + w // 2, "y": y + h // 2},
+            }
+            pairs.append((focus, record))
+        _renforge_mark_coverage(pairs)
+        return pairs, truncated
+
+
+    def _renforge_scene_roots():
+        try:
+            scene_lists = renpy.game.context().scene_lists
+        except Exception:
+            return []
+        layers = getattr(scene_lists, "layers", None) or {}
+        roots = []
+        for layer_name, layer in layers.items():
+            for entry in layer or []:
+                displayable = getattr(entry, "displayable", entry)
+                roots.append((layer_name, displayable))
+        return roots
+
+
+    def _renforge_collect_interaction():
+        screens = []
+        seen_screens = {}
+        dismiss = []
+        seen = {}
+        budget = 5000
+        truncated = False
+        for layer_name, root in _renforge_scene_roots():
+            stack = [root]
+            while stack:
+                if budget <= 0:
+                    truncated = True
+                    break
+                node = stack.pop()
+                if node is None:
+                    continue
+                ident = id(node)
+                if ident in seen:
+                    continue
+                seen[ident] = True
+                budget -= 1
+                try:
+                    class_name = node.__class__.__name__
+                except Exception:
+                    class_name = ""
+                if class_name == "SayBehavior":
+                    value = getattr(node, "dismiss", None)
+                    if isinstance(value, builtins.str):
+                        dismiss.append(value)
+                    elif value is not None and not isinstance(value, (builtins.dict, builtins.int, bool)):
+                        try:
+                            items = iter(value)
+                        except TypeError:
+                            items = ()
+                        for item in items:
+                            if isinstance(item, builtins.str):
+                                dismiss.append(item)
+                if class_name == "ScreenDisplayable" and not getattr(node, "hiding", False):
+                    _renforge_observe_record_screen(
+                        node, layer_name, screens, seen_screens
+                    )
+                try:
+                    children = getattr(node, "children", None)
+                except Exception:
+                    children = None
+                if _renforge_observe_is_sequence(children):
+                    for child in children:
+                        stack.append(child)
+                try:
+                    child = getattr(node, "child", None)
+                except Exception:
+                    child = None
+                if child is not None:
+                    stack.append(child)
+                continue
+            if truncated:
+                break
+        say_dismiss = None
+        if "dismiss" in dismiss:
+            say_dismiss = "dismiss"
+        elif "dismiss_hard_pause" in dismiss:
+            say_dismiss = "dismiss_hard_pause"
+        return screens, say_dismiss, truncated
+
+
+    def _renforge_observe_record_screen(node, layer_name, screens, seen_screens):
+        name = getattr(node, "screen_name", None)
+        if _renforge_observe_is_sequence(name):
+            name = name[0] if name else None
+        if not isinstance(name, builtins.str) or not name:
+            return
+        layer = getattr(node, "layer", None)
+        if not isinstance(layer, builtins.str):
+            layer = layer_name if isinstance(layer_name, builtins.str) else None
+        key = (name, layer)
+        if key in seen_screens:
+            return
+        seen_screens[key] = True
+        modal = getattr(node, "modal", False)
+        screens.append({
+            "name": name,
+            "layer": layer,
+            "modal": modal is True and not callable(modal),
+        })
+
+
+    def _renforge_observe_stability():
+        transition = False
+        try:
+            interface = renpy.display.interface
+            ongoing = getattr(interface, "ongoing_transition", None)
+            if isinstance(ongoing, builtins.dict):
+                transition = bool(ongoing)
+            elif ongoing:
+                transition = True
+        except Exception:
+            transition = False
+        interacting = False
+        try:
+            interacting = bool(renpy.game.context().interacting)
+        except Exception:
+            interacting = False
+        if transition:
+            return False, "transition"
+        if not interacting:
+            return False, "not_ready"
+        return True, None
+
+
+    def _renforge_observe_raw(screenshot):
+        bridge = _renforge_runtime.bridge
+        interaction = 0
+        label = None
+        dialogue = None
+        if bridge is not None:
+            interaction = int(getattr(bridge, "observe_generation", 0) or 0)
+            label = bridge.current_label if isinstance(bridge.current_label, str) else None
+            what = bridge.last_say if isinstance(bridge.last_say, str) else None
+            who = getattr(bridge, "last_who", None)
+            who = who if isinstance(who, str) else None
+            if who is not None or what is not None:
+                dialogue = {"who": who, "what": what}
+        stable, reason = _renforge_observe_stability()
+        screens, say_dismiss, walk_truncated = _renforge_collect_interaction()
+        pairs, focus_truncated = _renforge_observe_focus_pairs()
+        elements = []
+        for _focus, record in pairs:
+            copied = dict(record)
+            copied.pop("center", None)
+            copied.pop("visible", None)
+            elements.append(copied)
+        overlay = []
+        try:
+            for name in list(renpy.config.overlay_screens):
+                if isinstance(name, str) and name:
+                    overlay.append(name)
+        except Exception:
+            overlay = []
+        statement = None
+        try:
+            filename, line = renpy.get_filename_line()
+            file_name = filename if isinstance(filename, str) else None
+            line_no = line if isinstance(line, builtins.int) and not isinstance(line, bool) else None
+            if file_name is not None or line_no is not None:
+                statement = {"file": file_name, "line": line_no}
+        except Exception:
+            statement = None
+        reply = {
+            "ok": True,
+            "interaction": interaction,
+            "stable": stable,
+            "unstable_reason": reason,
+            "statement": statement,
+            "label": label,
+            "dialogue": dialogue,
+            "screens": screens,
+            "say_dismiss": say_dismiss,
+            "overlay_screens": overlay,
+            "elements": elements,
+            "omitted": {
+                "focus_truncated": bool(focus_truncated),
+                "unclassified": bool(walk_truncated),
+            },
+            "frame_hash": None,
+        }
+        if screenshot:
+            try:
+                data = renpy.screenshot_to_bytes(None)
+                reply["screenshot_base64"] = base64.b64encode(data).decode("ascii")
+                reply["sha256"] = hashlib.sha256(data).hexdigest()
+                reply["frame_hash"] = reply["sha256"]
+            except Exception:
+                reply["frame_hash"] = None
+        return reply
+
+
+    def _renforge_h_observe(payload):
+        payload = payload or {}
+        return _renforge_observe_raw(bool(payload.get("screenshot")))
+
+
+    def _renforge_h_dismiss_if(payload):
+        # Mirror renforge.observe.guard_dismiss, then queue the event.
+        # advance_until calls this instead of posting dismiss itself.
+        payload = payload or {}
+        raw = _renforge_observe_raw(False)
+        interaction = raw.get("interaction")
+        if raw.get("stable") is not True:
+            return {
+                "ok": False,
+                "error": "unstable",
+                "unstable_reason": raw.get("unstable_reason"),
+                "interaction": interaction,
+            }
+        expected = payload.get("interaction")
+        if isinstance(expected, bool) or not isinstance(expected, builtins.int) or expected != interaction:
+            return {"ok": False, "error": "stale", "interaction": interaction}
+        modal = False
+        for screen in raw.get("screens") or []:
+            if isinstance(screen, builtins.dict) and screen.get("modal") is True:
+                modal = True
+                break
+        if raw.get("say_dismiss") != "dismiss" or modal:
+            return {
+                "ok": False,
+                "error": "not_dismiss",
+                "interaction": interaction,
+                "say_dismiss": raw.get("say_dismiss"),
+            }
+        renpy.exports.queue_event("dismiss")
+        return {"ok": True, "interaction": interaction}
+
+
+    def _renforge_h_act(payload):
+        # Mirror renforge.observe.guard_act. Re-resolve the id in this interaction
+        # immediately before posting input. Chrome ids are allowed.
+        payload = payload or {}
+        raw = _renforge_observe_raw(False)
+        interaction = raw.get("interaction")
+        if raw.get("stable") is not True:
+            return {
+                "ok": False,
+                "error": "unstable",
+                "unstable_reason": raw.get("unstable_reason"),
+                "interaction": interaction,
+            }
+        expected = payload.get("interaction")
+        if isinstance(expected, bool) or not isinstance(expected, builtins.int) or expected != interaction:
+            return {"ok": False, "error": "stale", "interaction": interaction}
+        wanted = payload.get("id")
+        if not isinstance(wanted, builtins.str) or not wanted:
+            return {"ok": False, "error": "missing", "interaction": interaction}
+        pairs, _truncated = _renforge_observe_focus_pairs()
+        assigned = _renforge_assign_observe_ids([record for _focus, record in pairs])
+        match = None
+        for (focus, _record), control in zip(pairs, assigned):
+            if control.get("id") == wanted:
+                match = (focus, control)
+                break
+        if match is None:
+            return {"ok": False, "error": "missing", "interaction": interaction, "id": wanted}
+        focus, control = match
+        if not control.get("enabled", True):
+            return {"ok": False, "error": "disabled", "interaction": interaction, "id": wanted}
+        if control.get("covered") or control.get("clickable") is False:
+            return {"ok": False, "error": "covered", "interaction": interaction, "id": wanted}
+        operations = control.get("operations") or []
+        if "click" in operations:
+            result = {
+                "ok": True,
+                "operation": "click",
+                "id": wanted,
+                "interaction": interaction,
+                "screen": control.get("screen"),
+                "action": control.get("action"),
+            }
+            try:
+                x, y = _renforge_click_focus(focus)
+            except Exception as exc:
+                if not _renforge_is_end_interaction(exc):
+                    raise
+                pointer = getattr(exc, "renforge_pointer", None)
+                if pointer:
+                    result["x"], result["y"] = pointer
+                setattr(exc, "renforge_result", result)
+                raise
+            result["x"] = x
+            result["y"] = y
+            return result
+        if "text" in operations:
+            text = payload.get("text")
+            if not isinstance(text, str):
+                return {"ok": False, "error": "text_required", "interaction": interaction, "id": wanted}
+            if pygame is None:
+                return {"ok": False, "error": "pygame_sdl2 event API is unavailable"}
+            change_focus = getattr(renpy.display.focus, "change_focus", None)
+            if callable(change_focus):
+                try:
+                    change_focus(focus)
+                except Exception:
+                    pass
+            for character in text:
+                event = pygame.event.Event(pygame.TEXTINPUT, {"text": character})
+                pygame.event.post(event)
+            return {
+                "ok": True,
+                "operation": "text",
+                "id": wanted,
+                "interaction": interaction,
+                "characters": len(text),
+            }
+        return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
+
     _RENFORGE_HANDLERS = {
         "ping": _renforge_h_ping,
         "get_state": _renforge_h_get_state,
@@ -3107,6 +3702,9 @@ init python:
         "get_var": _renforge_h_get_var,
         "set_var": _renforge_h_set_var,
         "screenshot": _renforge_h_screenshot,
+        "observe": _renforge_h_observe,
+        "act": _renforge_h_act,
+        "dismiss_if": _renforge_h_dismiss_if,
         "advance": _renforge_h_advance,
         "send_input": _renforge_h_send_input,
         "control": _renforge_h_control,
@@ -4315,6 +4913,8 @@ init python:
             if event in ("begin", "show") and what and what != bridge.last_say:
                 previous_say = bridge.last_say
                 bridge.last_say = what
+                who = kwargs.get("who")
+                bridge.last_who = who if isinstance(who, str) else None
                 bridge.push_event("say", {"what": what})
                 try:
                     prefs = getattr(renpy.store, "_preferences", None)
@@ -4338,11 +4938,26 @@ init python:
                 return previous(short_msg, full_msg, traceback_fn)
             return False  # not handled: let Ren'Py show its normal error screen
 
+        def _renforge_on_start_interact():
+            # Once per ui.interact, before the redraw loop. restart_interaction
+            # stays inside that call and must not change the observe generation.
+            bridge.observe_generation = int(getattr(bridge, "observe_generation", 0)) + 1
+
         renpy.config.label_callbacks.append(_renforge_on_label)
         renpy.config.all_character_callbacks.append(_renforge_on_say)
         bridge.prev_exception_handler = renpy.config.exception_handler
         renpy.config.exception_handler = _renforge_exception_handler
         renpy.config.periodic_callbacks.append(renforge_drain_bridge)
+        start_callbacks = getattr(renpy.config, "start_interact_callbacks", None)
+        if start_callbacks is None:
+            start_callbacks = []
+            renpy.config.start_interact_callbacks = start_callbacks
+        already_observing = any(
+            getattr(callback, "__name__", "") == "_renforge_on_start_interact"
+            for callback in start_callbacks
+        )
+        if not already_observing:
+            start_callbacks.append(_renforge_on_start_interact)
 
     def renforge_start_bridge():
         existing = getattr(_renforge_runtime, "bridge", None)

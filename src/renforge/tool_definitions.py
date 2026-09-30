@@ -425,6 +425,79 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         ),
         parameters={"project_path": "Project root of the running live session."},
     ),
+    "renforge_observe": ToolDefinition(
+        description=(
+            "Read one interaction snapshot: dialogue, screens, pointer controls, and whether this interaction "
+            "listens for dismiss. Safe to call at any time, including mid-transition (`stable` false is not a "
+            "legal token for `renforge_act`). `screenshot` true (the default) attaches the PNG, and `frame_hash` "
+            "is the SHA-256 of that exact PNG. Controls come from Ren'Py `focus_list` (buttons, image buttons, "
+            "hotspots, bars, inputs). Keyboard shortcuts are not listed; `dismiss` is a capability, not a key. "
+            "Screens in `config.overlay_screens`, and injected `_renforge_` editor screens, are returned as "
+            "`chrome`. Bars, drags, and viewports are listed with empty operations and are not actuated. "
+            "Identity is this interaction, not a save-stable widget path."
+        ),
+        annotations=_ann(
+            readOnlyHint=True,
+            idempotentHint=True,
+            destructiveHint=False,
+            openWorldHint=False,
+        ),
+        parameters={
+            "project_path": "Project root of the running live session.",
+            "screenshot": "Attach the current PNG when true. The snapshot is still returned when false.",
+        },
+        parameter_schemas={"screenshot": {"type": "boolean"}},
+    ),
+    "renforge_act": ToolDefinition(
+        description=(
+            "Activate one control from an `renforge_observe` snapshot by `interaction` and `id` "
+            "(a `controls` or `chrome` id). Immediately before input, the bridge re-resolves that id in the "
+            "live focus list. It returns `stale`, `unstable`, `covered`, `disabled`, `missing`, `text_required`, "
+            "or `unsupported` and does not post input when the check fails. Buttons and hotspots are clicked. "
+            "An Input takes `text`. Bars, drags, viewports, and keyboard shortcuts are not actuated. Does not enable skip."
+        ),
+        annotations=_ann(
+            readOnlyHint=False,
+            idempotentHint=False,
+            destructiveHint=True,
+            openWorldHint=True,
+        ),
+        parameters={
+            "project_path": "Project root of the running live session.",
+            "interaction": "Interaction number from the observe snapshot that named this control.",
+            "id": "Control or chrome id from that same snapshot.",
+            "text": "Text to type when the control's operation is `text`. Omit it for a click.",
+        },
+        parameter_schemas={"interaction": {"type": "integer"}},
+    ),
+    "renforge_advance_until": ToolDefinition(
+        description=(
+            "Post Ren'Py's `dismiss` event until the player must choose, a hard-pause hub is showing, or nothing "
+            "is listening. Returns `stop` (`choose`, `wait`, `none`, `max_steps`, `timeout`, `stalled`, or `crash`), "
+            "`steps` (dismiss posts), and the last observation. Never clicks a choice, hotspot, map door, or "
+            "quick-menu button, and never enables skip. A hard pause with decision controls stops as `choose`. "
+            "A hard pause with no decision controls, such as a timed cutscene, is `wait`: this polls and does not "
+            "dismiss. A hub whose screen is in `config.overlay_screens` is chrome, so that hard pause stops as "
+            "`wait` and those buttons stay in `chrome` for `renforge_act`. Custom displayables that never enter "
+            "`focus_list` are not guessed. `max_steps` bounds dismiss posts (1 to 200). `timeout` is the wall-clock "
+            "budget in seconds (0.1 to 120)."
+        ),
+        annotations=_ann(
+            readOnlyHint=False,
+            idempotentHint=False,
+            destructiveHint=True,
+            openWorldHint=True,
+        ),
+        parameters={
+            "project_path": "Project root of the running live session.",
+            "max_steps": "Maximum dismiss events to post before stopping. Integer from 1 to 200.",
+            "timeout": "Wall-clock budget in seconds, from 0.1 to 120.",
+        },
+        parameter_schemas={
+            "max_steps": {"minimum": 1, "maximum": 200},
+            "timeout": {"minimum": 0.1, "maximum": 120},
+        },
+    ),
     "renforge_control": ToolDefinition(
         description=(
             "Run a runtime control action (`advance`, `rollback`, `toggle_skip`, `toggle_auto`, `toggle_afm`, `game_menu`, "

@@ -218,6 +218,54 @@ def test_live_bridge_ping_state_and_screenshot(sdk, demo_copy: Path) -> None:
 
 
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
+def test_live_advance_until_stops_on_village_gate_choices(sdk, demo_copy: Path) -> None:
+    """Kinetic advance crosses say lines and stops on the modal gate screen.
+
+    A stale act must not change the label. editor stays off so injected editor
+    screens are not part of the choice.
+    """
+    import hashlib
+
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.tools.live import act, advance_until
+
+    with launch_with_bridge(
+        sdk,
+        RenpyProject(demo_copy),
+        startup_timeout=90,
+        editor=False,
+    ) as session:
+        assert session.client.ping().get("pong") is True
+        result = advance_until(str(demo_copy), max_steps=8, timeout=45)
+        observation = result.get("observation") or {}
+        assert result.get("stop") == "choose", result
+        assert result.get("steps", 0) >= 1, result
+        assert observation.get("label") == "village_gate", observation
+        control_ids = {item.get("id") for item in observation.get("controls") or []}
+        assert {
+            "village_gate_choices/demo_lantern_take",
+            "village_gate_choices/demo_lantern_decline",
+            "village_gate_choices/demo_locked_expr",
+        } <= control_ids, observation
+        assert all(item.get("screen") != "quick_menu" for item in observation.get("controls") or [])
+        png = result.get("_png")
+        assert isinstance(png, bytes) and png.startswith(b"\x89PNG"), result.keys()
+        assert hashlib.sha256(png).hexdigest() == observation.get("frame_hash")
+
+        state = session.client.get_state()
+        label_before = state.get("current_label")
+        stale = act(
+            str(demo_copy),
+            int(observation["interaction"]) - 1,
+            "village_gate_choices/demo_lantern_take",
+        )
+        assert stale.get("ok") is False, stale
+        assert stale.get("error") == "stale", stale
+        assert session.client.get_state().get("current_label") == label_before
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
 def test_live_reload_script_keeps_bridge_responsive(sdk, demo_copy: Path) -> None:
     """reload_script restores renpy.config from backup, wiping the bridge's
     registered callbacks; the re-run init block must re-register them on the

@@ -793,6 +793,83 @@ def test_advance_posts_dismiss_event(running_bridge):
     assert "dismiss" in running_bridge.renpy._queued_events
 
 
+def test_observe_dismiss_guard_and_stale_act(running_bridge):
+    """The bridge snapshot and the dismiss/act guards run against a fake interact."""
+    import sys
+
+    from renforge.observe import classify
+
+    renpy = running_bridge.renpy
+
+    class SayBehavior:
+        def __init__(self):
+            self.dismiss = ["dismiss"]
+
+    class ScreenDisplayable:
+        def __init__(self):
+            self.screen_name = ("say", None)
+            self.layer = "screens"
+            self.modal = False
+            self.hiding = False
+            self.child = SayBehavior()
+            self.children = [self.child]
+
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(
+                layers={
+                    "screens": [types.SimpleNamespace(displayable=ScreenDisplayable())],
+                }
+            ),
+        )
+    )
+    renpy.display.interface.ongoing_transition = {}
+    renpy.get_filename_line = lambda: ("game/script.rpy", 16)
+    renpy.config.overlay_screens = ["quick_menu"]
+    renpy.get_screen = lambda name: None
+
+    bridge = sys.modules["_renforge_runtime"].bridge
+    bridge.current_label = "start"
+    bridge.last_say = "The gate is quiet."
+    bridge.last_who = "Elder"
+    assert renpy.config.start_interact_callbacks, "observe generation callback was not installed"
+    renpy.config.start_interact_callbacks[0]()
+
+    # Ren'Py's store binds `list` to RevertableList. SayBehavior.dismiss is a
+    # builtin list, so the collector must not use the store name.
+    class _RevertableList(list):
+        pass
+
+    previous_list = running_bridge.globs.get("list", list)
+    running_bridge.globs["list"] = _RevertableList
+    try:
+        raw = running_bridge.client.observe(screenshot=False)
+    finally:
+        running_bridge.globs["list"] = previous_list
+    assert raw.get("error") is None, raw
+    snapshot = classify(raw)
+    assert snapshot["interaction"] == 1
+    assert snapshot["stable"] is True
+    assert snapshot["forward"] == "dismiss"
+    assert snapshot["say_dismiss"] == "dismiss"
+    assert snapshot["label"] == "start"
+    assert snapshot["dialogue"] == {"who": "Elder", "what": "The gate is quiet."}
+    assert snapshot["statement"] == {"file": "game/script.rpy", "line": 16}
+
+    queued = list(renpy._queued_events)
+    stale = running_bridge.client.dismiss_if(interaction=0)
+    assert stale.get("ok") is False and stale.get("error") == "stale", stale
+    assert renpy._queued_events == queued
+
+    posted = running_bridge.client.dismiss_if(interaction=1)
+    assert posted.get("ok") is True, posted
+    assert renpy._queued_events[-1] == "dismiss"
+
+    refused = running_bridge.client.act(interaction=0, control_id="screen/button/0")
+    assert refused.get("ok") is False and refused.get("error") == "stale", refused
+
+
 def test_send_input_text_posts_textinput_per_character_and_submits(running_bridge):
     running_bridge.renpy._focused_widget = _FakeInput()
 
