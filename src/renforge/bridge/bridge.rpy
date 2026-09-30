@@ -3260,22 +3260,352 @@ init python:
         return None
 
 
+    def _renforge_observe_quote(value):
+        if isinstance(value, bool) or not isinstance(value, (builtins.str, builtins.int)):
+            return None
+        if isinstance(value, builtins.int):
+            return str(value)
+        text = value.strip()
+        if not text:
+            return None
+        text = text.replace("\\", "\\\\").replace('"', '\\"')
+        if len(text) > 80:
+            text = text[:77] + "..."
+        return '"%s"' % text
+
+
+    def _renforge_observe_format_action(value, depth=0):
+        # Class name plus the field that tells two buttons apart: ShowMenu("load")
+        # versus ShowMenu("preferences"), Start("start"), Jump("chapter_two").
+        if value is None or depth > 3:
+            return None
+        if _renforge_observe_is_sequence(value):
+            labels = []
+            for item in value:
+                label = _renforge_observe_format_action(item, depth + 1)
+                if label:
+                    labels.append(label)
+            if not labels:
+                return None
+            if len(labels) == 1:
+                return labels[0]
+            return "; ".join(labels)
+        try:
+            name = value.__class__.__name__
+        except Exception:
+            return None
+        if not name or name in (
+            "list",
+            "tuple",
+            "dict",
+            "object",
+            "NoneType",
+            "RevertableList",
+        ):
+            return None
+        parts = []
+        for key in ("screen", "label", "name", "variable", "filename", "url", "page", "slot"):
+            try:
+                field = getattr(value, key)
+            except Exception:
+                continue
+            quoted = _renforge_observe_quote(field)
+            if quoted:
+                parts.append(quoted)
+        try:
+            extra = getattr(value, "value")
+        except Exception:
+            extra = None
+        quoted = _renforge_observe_quote(extra)
+        if quoted and parts:
+            parts.append(quoted)
+        if parts:
+            return "%s(%s)" % (name, ", ".join(parts))
+        return str(name)
+
+
     def _renforge_observe_action_class(widget):
         if widget is None:
             return None
         for attr in ("action", "clicked"):
             value = getattr(widget, attr, None)
-            if _renforge_observe_is_sequence(value) and len(value) == 1:
-                value = value[0]
             if value is None:
                 continue
-            try:
-                name = value.__class__.__name__
-            except Exception:
-                continue
-            if name and name not in ("list", "tuple", "dict", "object", "NoneType"):
-                return str(name)
+            label = _renforge_observe_format_action(value)
+            if label:
+                return label
         return None
+
+
+    def _renforge_display_name(who):
+        # Character.name is the name drawn in the say window. The say callback
+        # receives the Character object, not that string.
+        if who is None:
+            return None
+        if isinstance(who, builtins.str):
+            text = who.strip()
+            return text or None
+        name = getattr(who, "name", None)
+        if isinstance(name, builtins.str):
+            text = name.strip()
+            return text or None
+        if name is not None and name is not who:
+            nested = _renforge_display_name(name)
+            if nested:
+                return nested
+        text = _renforge_focus_text(who)
+        if text and text != getattr(getattr(who, "__class__", None), "__name__", ""):
+            return text
+        return None
+
+
+    def _renforge_flatten_what(value):
+        if isinstance(value, builtins.str):
+            return value
+        if value is None or isinstance(value, (builtins.dict, builtins.int, bool)):
+            return None
+        if not _renforge_observe_is_sequence(value):
+            return None
+        parts = []
+        for part in value:
+            flat = _renforge_flatten_what(part)
+            if flat:
+                parts.append(flat)
+        if not parts:
+            return None
+        return "".join(parts)
+
+
+    def _renforge_character_display_name(who_expr):
+        # ast.Say stores the who expression ("eileen"), not the display name.
+        if who_expr is None:
+            return None
+        if not isinstance(who_expr, builtins.str):
+            return _renforge_display_name(who_expr)
+        ident = who_expr.strip()
+        if not ident or not ident.replace("_", "a").isalnum() or ident[0].isdigit():
+            return None
+        try:
+            character = getattr(renpy.store, ident, None)
+        except Exception:
+            return None
+        return _renforge_display_name(character)
+
+
+    def _renforge_observe_screen_node_name(node):
+        name = getattr(node, "screen_name", None)
+        if _renforge_observe_is_sequence(name):
+            name = name[0] if name else None
+        if isinstance(name, builtins.str) and name:
+            return name
+        return None
+
+
+    def _renforge_is_input_displayable(node):
+        try:
+            return node.__class__.__name__ == "Input"
+        except Exception:
+            return False
+
+
+    def _renforge_input_prompt(screen_node, widget):
+        scope = getattr(screen_node, "scope", None) if screen_node is not None else None
+        if isinstance(scope, builtins.dict):
+            prompt = scope.get("prompt")
+            if isinstance(prompt, builtins.str) and prompt.strip():
+                return prompt.strip()
+        return None
+
+
+    def _renforge_input_bounds():
+        rect = None
+        try:
+            rect = renpy.display.interface.text_rect
+        except Exception:
+            rect = None
+        try:
+            override = getattr(renpy.store, "_text_rect", None)
+        except Exception:
+            override = None
+        if override is not None:
+            rect = override
+        if not _renforge_observe_is_sequence(rect) or len(rect) != 4:
+            return None
+        try:
+            x, y, w, h = (int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3]))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if w <= 0 or h <= 0:
+            return None
+        return {"x": x, "y": y, "width": w, "height": h}
+
+
+    def _renforge_observe_input_records(seen_widgets):
+        # Input.render sets text_input on its Render and does not call add_focus,
+        # so renpy.input never appears in focus_list. The showing screen still
+        # holds the widget, usually under widgets["input"].
+        found = []
+        seen = set(seen_widgets)
+        for _layer_name, root in _renforge_scene_roots():
+            stack = [(root, None, None)]
+            visited = set()
+            while stack:
+                node, screen_name, screen_node = stack.pop()
+                if node is None:
+                    continue
+                ident = id(node)
+                if ident in visited:
+                    continue
+                visited.add(ident)
+                try:
+                    class_name = node.__class__.__name__
+                except Exception:
+                    class_name = ""
+                if class_name == "ScreenDisplayable" and not getattr(node, "hiding", False):
+                    screen_name = _renforge_observe_screen_node_name(node) or screen_name
+                    screen_node = node
+                    widgets = getattr(node, "widgets", None) or {}
+                    if isinstance(widgets, builtins.dict):
+                        for key, widget in widgets.items():
+                            if not _renforge_is_input_displayable(widget) or id(widget) in seen:
+                                continue
+                            seen.add(id(widget))
+                            widget_id = key.strip() if isinstance(key, builtins.str) and key.strip() else None
+                            found.append((widget, screen_name, widget_id, screen_node))
+                if (
+                    _renforge_is_input_displayable(node)
+                    and id(node) not in seen
+                    and not getattr(node, "hiding", False)
+                ):
+                    seen.add(id(node))
+                    found.append((node, screen_name, None, screen_node))
+                children = getattr(node, "children", None)
+                if _renforge_observe_is_sequence(children):
+                    for child in children:
+                        stack.append((child, screen_name, screen_node))
+                child = getattr(node, "child", None)
+                if child is not None:
+                    stack.append((child, screen_name, screen_node))
+                raw_child = getattr(node, "raw_child", None)
+                if raw_child is not None and raw_child is not child:
+                    stack.append((raw_child, screen_name, screen_node))
+        bounds = _renforge_input_bounds() if len(found) == 1 else None
+        records = []
+        for ordinal, (widget, screen_name, widget_id, screen_node) in enumerate(found):
+            editable = getattr(widget, "editable", True)
+            try:
+                enabled = bool(editable)
+            except Exception:
+                enabled = True
+            record = {
+                "screen": screen_name,
+                "role": "input",
+                "text": _renforge_input_prompt(screen_node, widget),
+                "enabled": enabled,
+                "clickable": enabled,
+                "covered": False,
+                "visible": True,
+                "widget_id": widget_id,
+                "image_name": None,
+                "menu_index": None,
+                "ordinal": ordinal,
+                "action": _renforge_observe_action_class(widget),
+            }
+            if bounds is not None:
+                record["bounds"] = bounds
+                record["center"] = {
+                    "x": bounds["x"] + bounds["width"] // 2,
+                    "y": bounds["y"] + bounds["height"] // 2,
+                }
+            records.append((widget, record))
+        return records
+
+
+    def _renforge_observe_text_waiting(elements, overlay_screens=None):
+        # Match renforge.observe.classify: an input on an overlay or editor
+        # screen is chrome, so it does not stop a dismiss.
+        chrome = set()
+        for name in overlay_screens or []:
+            if isinstance(name, builtins.str) and name:
+                chrome.add(name)
+        for element in elements or []:
+            if not isinstance(element, builtins.dict) or element.get("role") != "input":
+                continue
+            screen = element.get("screen")
+            if isinstance(screen, builtins.str) and (
+                screen in chrome or screen.startswith("_renforge_")
+            ):
+                continue
+            if element.get("enabled", True) is False:
+                continue
+            if element.get("covered") or element.get("clickable") is False:
+                continue
+            bounds = element.get("bounds")
+            if isinstance(bounds, builtins.dict):
+                width = bounds.get("width")
+                height = bounds.get("height")
+                if isinstance(width, builtins.int) and not isinstance(width, bool) and width <= 0:
+                    continue
+                if isinstance(height, builtins.int) and not isinstance(height, bool) and height <= 0:
+                    continue
+            return True
+        return False
+
+
+    def _renforge_observe_dialogue(screen_nodes, say_dismiss):
+        # last_say survives the say window. Publish it only while this
+        # interaction is still that line, or while a say screen is showing.
+        scoped_who = None
+        scoped_who_set = False
+        scoped_what = None
+        scoped_rank = None
+        for node in screen_nodes or []:
+            if getattr(node, "hiding", False):
+                continue
+            scope = getattr(node, "scope", None)
+            if not isinstance(scope, builtins.dict) or "what" not in scope:
+                continue
+            name = _renforge_observe_screen_node_name(node)
+            if "who" not in scope and name not in ("say", "nvl", "nvl_dialogue"):
+                continue
+            rank = 0 if name in ("say", "nvl", "nvl_dialogue") else 1
+            if scoped_rank is not None and rank >= scoped_rank:
+                continue
+            scoped_rank = rank
+            scoped_who_set = "who" in scope
+            scoped_who = scope.get("who") if scoped_who_set else None
+            scoped_what = _renforge_flatten_what(scope.get("what"))
+        showing = scoped_what is not None or scoped_who_set or say_dismiss in (
+            "dismiss",
+            "dismiss_hard_pause",
+        )
+        if not showing:
+            return None
+        bridge = _renforge_runtime.bridge
+
+        def speaker_from_store():
+            try:
+                store = renpy.store
+                has_who = hasattr(store, "_last_say_who")
+            except Exception:
+                return _renforge_display_name(getattr(bridge, "last_who", None)) if bridge is not None else None
+            if has_who:
+                return _renforge_character_display_name(getattr(store, "_last_say_who", None))
+            if bridge is None:
+                return None
+            return _renforge_display_name(getattr(bridge, "last_who", None))
+
+        if scoped_who_set or scoped_what is not None:
+            # A say screen that passes who=None is the narrator. Do not reuse
+            # the previous speaker. A screen with only `what` still can.
+            who = _renforge_display_name(scoped_who) if scoped_who_set else speaker_from_store()
+            what = scoped_what
+        else:
+            what = bridge.last_say if bridge is not None and isinstance(bridge.last_say, builtins.str) else None
+            who = speaker_from_store()
+        if who is None and what is None:
+            return None
+        return {"who": who, "what": what}
 
 
     def _renforge_observe_menu_index(screen_name, text):
@@ -3396,6 +3726,14 @@ init python:
                 "center": {"x": x + w // 2, "y": y + h // 2},
             }
             pairs.append((focus, record))
+        seen_widgets = set()
+        for focus, _record in pairs:
+            seen_widgets.add(id(getattr(focus, "widget", None)))
+        for widget, record in _renforge_observe_input_records(seen_widgets):
+            if len(pairs) >= 400:
+                truncated = True
+                break
+            pairs.append((types.SimpleNamespace(widget=widget), record))
         _renforge_mark_coverage(pairs)
         return pairs, truncated
 
@@ -3416,6 +3754,7 @@ init python:
 
     def _renforge_collect_interaction():
         screens = []
+        screen_nodes = []
         seen_screens = {}
         dismiss = []
         seen = {}
@@ -3450,6 +3789,7 @@ init python:
                     _renforge_observe_record_screen(
                         node, layer_name, screens, seen_screens
                     )
+                    screen_nodes.append(node)
                 try:
                     children = getattr(node, "children", None)
                 except Exception:
@@ -3463,6 +3803,9 @@ init python:
                     child = None
                 if child is not None:
                     stack.append(child)
+                raw_child = getattr(node, "raw_child", None)
+                if raw_child is not None and raw_child is not child:
+                    stack.append(raw_child)
                 continue
             if truncated:
                 break
@@ -3471,7 +3814,7 @@ init python:
             say_dismiss = "dismiss"
         elif "dismiss_hard_pause" in dismiss:
             say_dismiss = "dismiss_hard_pause"
-        return screens, say_dismiss, truncated
+        return screens, say_dismiss, truncated, screen_nodes
 
 
     def _renforge_observe_record_screen(node, layer_name, screens, seen_screens):
@@ -3522,17 +3865,12 @@ init python:
         bridge = _renforge_runtime.bridge
         interaction = 0
         label = None
-        dialogue = None
         if bridge is not None:
             interaction = int(getattr(bridge, "observe_generation", 0) or 0)
             label = bridge.current_label if isinstance(bridge.current_label, str) else None
-            what = bridge.last_say if isinstance(bridge.last_say, str) else None
-            who = getattr(bridge, "last_who", None)
-            who = who if isinstance(who, str) else None
-            if who is not None or what is not None:
-                dialogue = {"who": who, "what": what}
         stable, reason = _renforge_observe_stability()
-        screens, say_dismiss, walk_truncated = _renforge_collect_interaction()
+        screens, say_dismiss, walk_truncated, screen_nodes = _renforge_collect_interaction()
+        dialogue = _renforge_observe_dialogue(screen_nodes, say_dismiss)
         pairs, focus_truncated = _renforge_observe_focus_pairs()
         elements = []
         for _focus, record in pairs:
@@ -3611,7 +3949,11 @@ init python:
             if isinstance(screen, builtins.dict) and screen.get("modal") is True:
                 modal = True
                 break
-        if raw.get("say_dismiss") != "dismiss" or modal:
+        if (
+            raw.get("say_dismiss") != "dismiss"
+            or modal
+            or _renforge_observe_text_waiting(raw.get("elements"), raw.get("overlay_screens"))
+        ):
             return {
                 "ok": False,
                 "error": "not_dismiss",
@@ -3684,21 +4026,33 @@ init python:
                 return {"ok": False, "error": "text_required", "interaction": interaction, "id": wanted}
             if pygame is None:
                 return {"ok": False, "error": "pygame_sdl2 event API is unavailable"}
-            change_focus = getattr(renpy.display.focus, "change_focus", None)
-            if callable(change_focus):
+            widget = getattr(focus, "widget", None)
+            force_focus = getattr(renpy.display.focus, "force_focus", None)
+            if widget is not None and callable(force_focus):
                 try:
-                    change_focus(focus)
+                    force_focus(widget)
                 except Exception:
                     pass
+            else:
+                change_focus = getattr(renpy.display.focus, "change_focus", None)
+                if callable(change_focus):
+                    try:
+                        change_focus(focus)
+                    except Exception:
+                        pass
             for character in text:
                 event = pygame.event.Event(pygame.TEXTINPUT, {"text": character})
                 pygame.event.post(event)
+            # renpy.input returns when the field receives input_enter. Typing
+            # without submitting leaves the prompt up.
+            renpy.exports.queue_event("input_enter")
             return {
                 "ok": True,
                 "operation": "text",
                 "id": wanted,
                 "interaction": interaction,
                 "characters": len(text),
+                "submitted": True,
             }
         return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
 

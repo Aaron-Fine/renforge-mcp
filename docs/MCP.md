@@ -440,8 +440,9 @@ during a transition (`stable` is false, and that snapshot cannot be passed to
 
 - `dismiss` — a say, NVL, or soft pause. Overlay chrome such as the quick menu
   does not block it.
-- `choose` — a modal screen, or a hard pause that is showing a real control
-  (the usual freeroam map: non-modal image buttons held by `renpy.pause(hard=True)`).
+- `choose` — a modal screen, a text field (`renpy.input` or an Input on a
+  showing screen), or a hard pause that is showing a real control (the usual
+  freeroam map: non-modal image buttons held by `renpy.pause(hard=True)`).
 - `wait` — a hard pause with no decision controls, such as a timed cutscene.
   `renforge_advance_until` polls and does not dismiss.
 - `none` — nothing is listening and there is no pointer control.
@@ -449,7 +450,11 @@ during a transition (`stable` is false, and that snapshot cannot be passed to
 `renforge_advance_until` only posts Ren'Py's `dismiss` event. It does not click
 choices, hotspots, or quick-menu buttons, and it does not enable skip. Call
 `renforge_act` with the snapshot's `interaction` and a control `id` to take a
-choice. Play launches should use `editor=false`; injected editor screens are
+choice. Pass `text` for an `input` control; the bridge types it and submits
+with Enter. `dialogue.who` is the name on the say window, and `dialogue` is
+null when that window is not showing. A button with no label still carries
+`action`, such as `Start("start")` or `ShowMenu("load")`. Play launches should
+use `editor=false`; injected editor screens are
 classified as chrome. Bars, drags, and viewports are reported and stop kinetic
 advance, and they are not driven. Keyboard shortcuts are not inventoried.
 
@@ -479,9 +484,9 @@ advance, and they are not driven. Keyboard shortcuts are not inventoried.
 | `renforge_game_state` | Complete state, including variables. Pass `include=["metrics", "audio"]` to add compact render/cache/window metrics and registered-channel audio state. Omitting `include` preserves the default response. Optional `state_profile` filters the store. |
 | `renforge_game_state_compact` | Bounded state (`state_profile=interaction` by default); select variables by name or prefix; supports serialization limits. |
 | `renforge_advance` | Advance the current dialogue. |
-| `renforge_observe` | One interaction snapshot: dialogue, screens, `focus_list` controls, chrome, and `forward` (`dismiss`, `choose`, `wait`, or `none`). `screenshot` true attaches the PNG whose SHA-256 is `frame_hash`. Mid-transition snapshots return `stable` false and are not legal act tokens. Overlay and `_renforge_` screens are chrome. Bars, drags, and viewports are listed with empty operations. Keyboard shortcuts are omitted. |
-| `renforge_act` | Activate one `controls` or `chrome` id from an observe snapshot. The bridge re-resolves the id in that interaction immediately before input and returns `stale`, `unstable`, `covered`, `disabled`, `missing`, or `unsupported` without posting input. Buttons and hotspots click; an Input takes `text`. Does not enable skip. |
-| `renforge_advance_until` | Post `dismiss` until the player must choose, a hard-pause hub is showing, or nothing is listening. Returns `stop`, `steps`, and the last observation. Never clicks a choice, hotspot, or quick-menu button, and never enables skip. A hard pause with no decision controls stops as `wait`. |
+| `renforge_observe` | One interaction snapshot: dialogue (speaker and line, or null when the say window is hidden), screens, `focus_list` controls, text fields that are not in `focus_list`, chrome, and `forward` (`dismiss`, `choose`, `wait`, or `none`). Button `action` includes its target. `screenshot` true attaches the PNG whose SHA-256 is `frame_hash`. Mid-transition snapshots return `stable` false and are not legal act tokens. Overlay and `_renforge_` screens are chrome. Bars, drags, and viewports are listed with empty operations. Keyboard shortcuts are omitted. |
+| `renforge_act` | Activate one `controls` or `chrome` id from an observe snapshot. The bridge re-resolves the id in that interaction immediately before input and returns `stale`, `unstable`, `covered`, `disabled`, `missing`, or `unsupported` without posting input. Buttons and hotspots click. An Input takes `text` and is submitted with Enter. Does not enable skip. |
+| `renforge_advance_until` | Post `dismiss` until the player must choose, a text field is showing, a hard-pause hub is showing, or nothing is listening. Returns `stop`, `steps`, and the last observation. Never clicks a choice, hotspot, or quick-menu button, and never enables skip. A hard pause with no decision controls stops as `wait`. |
 | `renforge_control` | Run one action: `advance`, `rollback`, `toggle_skip`, `toggle_auto`, `toggle_afm`, `game_menu`, `hide_windows`, `quick_save`, `quick_load`, `reload_script`, `restart_interaction`, or `quit`. Emits correlated business events; `wait_for_effect=true` waits for the matching event. |
 | `renforge_send_input` | Send exactly one `text`, named `key`, or logical-coordinate `scroll` operation. Text posts character-by-character events to a focused Ren'Py `Input`; `submit=true` presses Enter. Supported keys include `enter`, `esc`, arrows, `pageup`, `pagedown`, `backspace`, `delete`, `home`, `end`, `space`, `tab`, and `f1`-`f12`. Scroll uses `{"x": ..., "y": ..., "direction": "up"|"down", "amount": 1}`. |
 | `renforge_saves` | Run `save`, `load`, `list`, `list_user`, or `import` for named slots. `list` reads the running session; `list_user` observes host slots without a running game; `import` copies selected host slots (`slot`, `slots`, or `regexp`) into the isolated session and refuses when the session exposes the user tree. Save/load require `slot`; save accepts optional `extra_info`; load returns `restored_label`; list/list_user accept optional `regexp` and return `name`, `extra_info`, and `mtime` without screenshots. |

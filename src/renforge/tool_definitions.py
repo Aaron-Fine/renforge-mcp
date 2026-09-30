@@ -430,11 +430,15 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "Read one interaction snapshot: dialogue, screens, pointer controls, and whether this interaction "
             "listens for dismiss. Safe to call at any time, including mid-transition (`stable` false is not a "
             "legal token for `renforge_act`). `screenshot` true (the default) attaches the PNG, and `frame_hash` "
-            "is the SHA-256 of that exact PNG. Controls come from Ren'Py `focus_list` (buttons, image buttons, "
-            "hotspots, bars, inputs). Keyboard shortcuts are not listed; `dismiss` is a capability, not a key. "
-            "Screens in `config.overlay_screens`, and injected `_renforge_` editor screens, are returned as "
-            "`chrome`. Bars, drags, and viewports are listed with empty operations and are not actuated. "
-            "Identity is this interaction, not a save-stable widget path."
+            "is the SHA-256 of that exact PNG. Pointer controls come from Ren'Py `focus_list`. A text field "
+            "does not enter that list; it is still returned as an `input` control whose `text` is the prompt. "
+            "`dialogue` is the line on the showing say window, including the speaker's display name, and is "
+            "null when that window is not showing. `action` names the control's action and target, such as "
+            "`Start(\"start\")` or `ShowMenu(\"load\")`, including when the button has no label. Keyboard "
+            "shortcuts are not listed; `dismiss` is a capability, not a key. Screens in `config.overlay_screens`, "
+            "and injected `_renforge_` editor screens, are returned as `chrome`. Bars, drags, and viewports are "
+            "listed with empty operations and are not actuated. Identity is this interaction, not a save-stable "
+            "widget path."
         ),
         annotations=_ann(
             readOnlyHint=True,
@@ -452,9 +456,11 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         description=(
             "Activate one control from an `renforge_observe` snapshot by `interaction` and `id` "
             "(a `controls` or `chrome` id). Immediately before input, the bridge re-resolves that id in the "
-            "live focus list. It returns `stale`, `unstable`, `covered`, `disabled`, `missing`, `text_required`, "
-            "or `unsupported` and does not post input when the check fails. Buttons and hotspots are clicked. "
-            "An Input takes `text`. Bars, drags, viewports, and keyboard shortcuts are not actuated. Does not enable skip."
+            "live focus list, and text fields found on a showing screen. It returns `stale`, `unstable`, "
+            "`covered`, `disabled`, `missing`, `text_required`, or `unsupported` and does not post input when "
+            "the check fails. Buttons and hotspots are clicked. An Input takes `text`, types it, and submits "
+            "with Ren'Py `input_enter` (an empty string submits the field's default). Bars, drags, viewports, "
+            "and keyboard shortcuts are not actuated. Does not enable skip."
         ),
         annotations=_ann(
             readOnlyHint=False,
@@ -475,7 +481,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "Post Ren'Py's `dismiss` event until the player must choose, a hard-pause hub is showing, or nothing "
             "is listening. Returns `stop` (`choose`, `wait`, `none`, `max_steps`, `timeout`, `stalled`, or `crash`), "
             "`steps` (dismiss posts), and the last observation. Never clicks a choice, hotspot, map door, or "
-            "quick-menu button, and never enables skip. A hard pause with decision controls stops as `choose`. "
+            "quick-menu button, and never enables skip. A text field stops as `choose`. A hard pause with "
+            "decision controls stops as `choose`. "
             "A hard pause with no decision controls, such as a timed cutscene, is `wait`: this polls and does not "
             "dismiss. A hub whose screen is in `config.overlay_screens` is chrome, so that hard pause stops as "
             "`wait` and those buttons stay in `chrome` for `renforge_act`. Custom displayables that never enter "

@@ -121,6 +121,30 @@ def test_hard_pause_imagebuttons_choose_by_idle_image_name():
     assert guard_dismiss(snapshot, 4) == "not_dismiss"
 
 
+def test_text_field_stops_dismiss_even_when_say_is_listening():
+    snapshot = classify(
+        _raw(
+            say_dismiss="dismiss",
+            elements=[
+                _element(
+                    screen="input",
+                    role="input",
+                    text="First name...",
+                    widget_id="input",
+                    action=None,
+                )
+            ],
+        )
+    )
+
+    assert snapshot["forward"] == "choose"
+    assert snapshot["controls"][0]["id"] == "input/input"
+    assert snapshot["controls"][0]["operations"] == ["text"]
+    assert guard_act(snapshot, 4, "input/input", text="Nathan") is None
+    assert guard_act(snapshot, 4, "input/input") == "text_required"
+    assert guard_dismiss(snapshot, 4) == "not_dismiss"
+
+
 def test_hard_pause_without_decisions_is_wait_and_not_dismissed():
     snapshot = classify(
         _raw(

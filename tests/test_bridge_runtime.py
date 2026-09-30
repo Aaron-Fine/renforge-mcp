@@ -923,6 +923,263 @@ def test_soft_pause_dismiss_unfocused_is_dismissable(running_bridge):
     assert snapshot["forward"] == "dismiss", snapshot
 
 
+def _showing(renpy, displayable):
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(
+                layers={"screens": [types.SimpleNamespace(displayable=displayable)]}
+            ),
+        )
+    )
+    renpy.display.interface.ongoing_transition = {}
+    renpy.display.focus.focus_list[:] = []
+
+
+def test_input_outside_focus_list_is_typed_and_submitted(running_bridge):
+    """renpy.input's Input never joins focus_list. act still types and submits it."""
+    import sys
+
+    from renforge.observe import classify
+
+    renpy = running_bridge.renpy
+
+    class Input:
+        def __init__(self):
+            self.editable = True
+            self.content = ""
+
+    class Text:
+        def __init__(self, text):
+            self._text = text
+
+        def _tts_all(self, raw=False):
+            return self._text
+
+    class ScreenDisplayable:
+        def __init__(self, widget):
+            self.screen_name = ("input", None)
+            self.layer = "screens"
+            self.modal = False
+            self.hiding = False
+            self.scope = {"prompt": "First name... (Default: Nathan)"}
+            self.widgets = {"input": widget}
+            self.child = widget
+            self.children = [Text("First name... (Default: Nathan)"), widget]
+
+    widget = Input()
+    _showing(renpy, ScreenDisplayable(widget))
+    renpy.display.interface.text_rect = (100, 200, 400, 36)
+    renpy.get_filename_line = lambda: ("game/script.rpy", 165)
+    bridge = sys.modules["_renforge_runtime"].bridge
+    bridge.current_label = "name"
+    bridge.last_say = "You forgot your name at the top."
+    bridge.last_who = "Helen"
+    renpy.config.start_interact_callbacks[0]()
+
+    raw = running_bridge.client.observe(screenshot=False)
+    snapshot = classify(raw)
+    assert snapshot["forward"] == "choose", snapshot
+    assert snapshot["dialogue"] is None
+    controls = snapshot["controls"]
+    assert len(controls) == 1, controls
+    assert controls[0]["id"] == "input/input"
+    assert controls[0]["operations"] == ["text"]
+    assert controls[0]["text"] == "First name... (Default: Nathan)"
+    assert controls[0]["bounds"] == {"x": 100, "y": 200, "width": 400, "height": 36}
+
+    reply = running_bridge.client.act(
+        interaction=snapshot["interaction"],
+        control_id="input/input",
+        text="Nathan",
+    )
+    assert reply.get("ok") is True, reply
+    assert reply["operation"] == "text"
+    assert reply["submitted"] is True
+    assert [event.text for event in renpy._pygame_events] == list("Nathan")
+    assert "input_enter" in renpy._queued_events
+
+    empty = running_bridge.client.act(
+        interaction=snapshot["interaction"],
+        control_id="input/input",
+        text="",
+    )
+    assert empty.get("ok") is True, empty
+    assert empty["characters"] == 0
+    assert renpy._queued_events.count("input_enter") == 2
+
+
+def test_overlay_input_does_not_stop_dismiss(running_bridge):
+    """A text field on an overlay screen is chrome. Dismiss still advances the say."""
+    import sys
+
+    from renforge.observe import classify
+
+    renpy = running_bridge.renpy
+
+    class Input:
+        def __init__(self):
+            self.editable = True
+
+    class SayBehavior:
+        def __init__(self):
+            self.dismiss = ["dismiss"]
+
+    class ScreenDisplayable:
+        def __init__(self, name, child=None, widgets=None):
+            self.screen_name = (name, None)
+            self.layer = "screens"
+            self.modal = False
+            self.hiding = False
+            self.scope = {}
+            self.widgets = widgets or {}
+            self.child = child
+            self.children = [child] if child is not None else []
+
+    widget = Input()
+    say = ScreenDisplayable("say", child=SayBehavior())
+    menu = ScreenDisplayable("quick_menu", widgets={"search": widget}, child=widget)
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(
+                layers={
+                    "screens": [
+                        types.SimpleNamespace(displayable=say),
+                        types.SimpleNamespace(displayable=menu),
+                    ]
+                }
+            ),
+        )
+    )
+    renpy.display.interface.ongoing_transition = {}
+    renpy.display.focus.focus_list[:] = []
+    renpy.display.interface.text_rect = (10, 10, 80, 24)
+    renpy.config.overlay_screens = ["quick_menu"]
+    bridge = sys.modules["_renforge_runtime"].bridge
+    bridge.last_say = "The gate is quiet."
+    bridge.last_who = "Elder"
+    renpy.config.start_interact_callbacks[0]()
+
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    assert snapshot["forward"] == "dismiss", snapshot
+    assert snapshot["controls"] == []
+    assert len(snapshot["chrome"]) == 1
+    assert snapshot["chrome"][0]["role"] == "input"
+    posted = running_bridge.client.dismiss_if(interaction=snapshot["interaction"])
+    assert posted.get("ok") is True, posted
+    assert renpy._queued_events[-1] == "dismiss"
+
+
+def test_dialogue_who_is_the_say_window_name_and_hides_when_the_window_does(running_bridge):
+    import sys
+
+    from renforge.observe import classify
+
+    renpy = running_bridge.renpy
+
+    class Character:
+        def __init__(self, name):
+            self.name = name
+
+    class ScreenDisplayable:
+        def __init__(self, scope):
+            self.screen_name = ("say", None)
+            self.layer = "screens"
+            self.modal = False
+            self.hiding = False
+            self.scope = scope
+            self.widgets = {}
+            self.child = None
+            self.children = []
+
+    renpy.store.hel = Character("Helen")
+    renpy.store._last_say_who = "hel"
+    _showing(renpy, ScreenDisplayable({"who": "Helen", "what": "Don't slip."}))
+    bridge = sys.modules["_renforge_runtime"].bridge
+    bridge.current_label = "name"
+    bridge.last_say = "an older line"
+    bridge.last_who = None
+    renpy.config.start_interact_callbacks[0]()
+
+    shown = classify(running_bridge.client.observe(screenshot=False))
+    assert shown["dialogue"] == {"who": "Helen", "what": "Don't slip."}
+
+    _showing(renpy, ScreenDisplayable({"who": None, "what": "The kettle clicks off."}))
+    narrated = classify(running_bridge.client.observe(screenshot=False))
+    assert narrated["dialogue"] == {"who": None, "what": "The kettle clicks off."}
+
+    class SayBehavior:
+        def __init__(self):
+            self.dismiss = []
+            self.dismiss_unfocused = ["dismiss"]
+
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(
+                layers={"transient": [types.SimpleNamespace(displayable=SayBehavior())]}
+            ),
+        )
+    )
+    bridge.last_say = "Don't slip."
+    paused = classify(running_bridge.client.observe(screenshot=False))
+    assert paused["forward"] == "dismiss"
+    assert paused["dialogue"] == {"who": "Helen", "what": "Don't slip."}
+
+    class MainMenu:
+        def __init__(self):
+            self.screen_name = ("main_menu", None)
+            self.layer = "screens"
+            self.modal = False
+            self.hiding = False
+            self.scope = {}
+            self.child = None
+            self.children = []
+
+    MainMenu.__name__ = "ScreenDisplayable"
+    _showing(renpy, MainMenu())
+    bridge.last_say = "Save before this point!"
+    bridge.last_who = "Helen"
+    menu = classify(running_bridge.client.observe(screenshot=False))
+    assert menu["dialogue"] is None
+    assert menu["forward"] == "none"
+
+
+def test_unlabeled_button_action_includes_its_target(running_bridge):
+    from renforge.observe import classify
+
+    renpy = running_bridge.renpy
+
+    class ShowMenu:
+        def __init__(self, screen):
+            self.screen = screen
+
+    class Start:
+        def __init__(self, label="start"):
+            self.label = label
+
+    load = _FakeFocus("", 10, 10, 80, 24, widget=_FakeWidget(""))
+    load.screen_name = "main_menu"
+    load.widget.clicked = ShowMenu("load")
+    start = _FakeFocus("START", 10, 40, 80, 24)
+    start.screen_name = "main_menu"
+    start.widget.clicked = Start()
+    renpy.display.focus.focus_list[:] = [load, start]
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(layers={}),
+        )
+    )
+    renpy.display.interface.ongoing_transition = {}
+
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    by_action = {item["action"]: item for item in snapshot["controls"]}
+    assert by_action['ShowMenu("load")']["text"] is None
+    assert by_action['Start("start")']["text"] == "START"
+
+
 def test_send_input_text_posts_textinput_per_character_and_submits(running_bridge):
     running_bridge.renpy._focused_widget = _FakeInput()
 

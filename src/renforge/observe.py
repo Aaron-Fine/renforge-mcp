@@ -263,7 +263,10 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
     say_dismiss = normalize_say_dismiss(raw.get("say_dismiss"))
     modal = any(screen["modal"] for screen in screens)
     decisions = [control for control in controls if _is_decision(control)]
-    if modal:
+    # A text field is not in Ren'Py's focus list and does not listen for dismiss.
+    # Dismiss must not skip past it.
+    text_waiting = any("text" in (control.get("operations") or []) for control in decisions)
+    if modal or text_waiting:
         forward = "choose"
     elif say_dismiss == "dismiss_hard_pause":
         forward = "choose" if decisions else "wait"
@@ -358,6 +361,13 @@ def guard_dismiss(snapshot: Mapping[str, Any], interaction: Any) -> str | None:
     )
     if snapshot.get("say_dismiss") != "dismiss" or modal:
         return "not_dismiss"
+    for control in snapshot.get("controls") or []:
+        if not isinstance(control, Mapping):
+            continue
+        if "text" not in (control.get("operations") or []):
+            continue
+        if _is_decision(control):
+            return "not_dismiss"
     return None
 
 
