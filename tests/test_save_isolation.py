@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
+
+import pytest
 
 from renforge.save_isolation import (
     agent_session_id,
@@ -12,6 +15,7 @@ from renforge.save_isolation import (
     classify_savedir,
     configured_isolation_mode,
     default_launch_savedir,
+    host_renpy_root,
     import_host_slots,
     isolation_report,
     launch_exposes_user_saves,
@@ -21,6 +25,29 @@ from renforge.save_isolation import (
     resolve_launch_isolation,
     resolve_save_isolation,
 )
+
+
+@pytest.fixture
+def host_save_root(tmp_path: Path, monkeypatch) -> Path:
+    """Keep native host-save discovery inside the test's synthetic home."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    appdata = home / "AppData" / "Roaming"
+    monkeypatch.setenv("APPDATA", str(appdata))
+    if sys.platform == "win32":
+        return appdata / "RenPy"
+    if sys.platform == "darwin":
+        return home / "Library" / "RenPy"
+    return home / ".renpy"
+
+
+def test_host_renpy_root_uses_native_location(
+    tmp_path: Path, host_save_root: Path
+) -> None:
+    home = tmp_path / "home"
+    assert host_renpy_root(home=home) == host_save_root
+    assert host_renpy_root() == host_save_root
 
 
 def _cleanup(isolation) -> None:
@@ -245,7 +272,7 @@ def test_isolation_report_and_session_id(tmp_path: Path) -> None:
 
 
 def test_launch_exposes_user_saves_classifies_existing_and_host_paths(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, host_save_root: Path
 ) -> None:
     monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
     assert launch_exposes_user_saves() is False
@@ -254,7 +281,7 @@ def test_launch_exposes_user_saves_classifies_existing_and_host_paths(
     assert launch_exposes_user_saves(savedir="auto", home="existing") is True
     host = tmp_path / "home"
     monkeypatch.setenv("HOME", str(host))
-    user_saves = host / ".renpy" / "renforge-demo"
+    user_saves = host_save_root / "renforge-demo"
     user_saves.mkdir(parents=True)
     assert path_exposes_user_saves(user_saves, home=host) is True
     assert launch_exposes_user_saves(savedir=str(user_saves), home="temporary") is True
@@ -263,7 +290,9 @@ def test_launch_exposes_user_saves_classifies_existing_and_host_paths(
     assert launch_exposes_user_saves(savedir=str(other), home="temporary") is False
 
 
-def test_parse_save_directory_and_list_host_slots(tmp_path: Path, monkeypatch) -> None:
+def test_parse_save_directory_and_list_host_slots(
+    tmp_path: Path, monkeypatch, host_save_root: Path
+) -> None:
     project = tmp_path / "game-root"
     game = project / "game"
     game.mkdir(parents=True)
@@ -272,7 +301,7 @@ def test_parse_save_directory_and_list_host_slots(tmp_path: Path, monkeypatch) -
         'define config.save_directory = "renforge-demo"\n', encoding="utf-8"
     )
     host = tmp_path / "home"
-    host_saves = host / ".renpy" / "renforge-demo"
+    host_saves = host_save_root / "renforge-demo"
     host_saves.mkdir(parents=True)
     (host_saves / "1-1-LT1.save").write_bytes(b"SLOT-1-1")
     (host_saves / "1-1-LT1.save.json").write_text(
@@ -298,7 +327,7 @@ def test_parse_save_directory_and_list_host_slots(tmp_path: Path, monkeypatch) -
 
 
 def test_import_copies_selected_slots_and_refuses_user_tree(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, host_save_root: Path
 ) -> None:
     project = tmp_path / "game-root"
     game = project / "game"
@@ -308,7 +337,7 @@ def test_import_copies_selected_slots_and_refuses_user_tree(
         'define config.save_directory = "renforge-demo"\n', encoding="utf-8"
     )
     host = tmp_path / "home"
-    host_saves = host / ".renpy" / "renforge-demo"
+    host_saves = host_save_root / "renforge-demo"
     host_saves.mkdir(parents=True)
     (host_saves / "1-1-LT1.save").write_bytes(b"SLOT-1-1")
     (host_saves / "1-1-LT1.save.json").write_text(
@@ -335,7 +364,9 @@ def test_import_copies_selected_slots_and_refuses_user_tree(
     assert "no matching" in missing["error"]
 
 
-def test_live_saves_list_user_and_import(tmp_path: Path, monkeypatch) -> None:
+def test_live_saves_list_user_and_import(
+    tmp_path: Path, monkeypatch, host_save_root: Path
+) -> None:
     from types import SimpleNamespace
 
     from renforge.tools import live
@@ -348,7 +379,7 @@ def test_live_saves_list_user_and_import(tmp_path: Path, monkeypatch) -> None:
         'define config.save_directory = "renforge-demo"\n', encoding="utf-8"
     )
     host = tmp_path / "home"
-    host_saves = host / ".renpy" / "renforge-demo"
+    host_saves = host_save_root / "renforge-demo"
     host_saves.mkdir(parents=True)
     (host_saves / "1-1-LT1.save").write_bytes(b"SLOT-1-1")
     dest = tmp_path / "session" / "saves"
