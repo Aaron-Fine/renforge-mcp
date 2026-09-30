@@ -1327,13 +1327,11 @@
         },
         "persistent": {
           "default": "auto",
-          "description": "Persistent mode. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default `empty` so isolated sessions start without host persistent data). `existing` preserves current persistent data; `empty` removes it in the isolated session; `copy` and `fixture` currently set an environment marker only and do not copy or load fixture data.",
+          "description": "Persistent state follows the selected save directory. Omitted, empty, or `auto` selects `empty` for a fresh temporary directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; it never deletes existing persistent files. Use save import to copy selected slots.",
           "enum": [
             "auto",
             "existing",
-            "empty",
-            "copy",
-            "fixture"
+            "empty"
           ],
           "type": "string"
         },
@@ -1344,7 +1342,7 @@
         },
         "preferences": {
           "default": "auto",
-          "description": "Preference isolation. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default `empty`). Isolated sessions start without host preference files; `existing` keeps them when the save/HOME location can see them.",
+          "description": "Preferences share Ren'Py's persistent storage. Omitted, empty, or `auto` selects `empty` for a fresh temporary save directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; preferences are isolated by storage selection, without resetting host state.",
           "enum": [
             "auto",
             "existing",
@@ -1447,13 +1445,11 @@
         },
         "persistent": {
           "default": "auto",
-          "description": "Persistent mode. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default `empty` so isolated sessions start without host persistent data). `existing` preserves current persistent data; `empty` removes it in the isolated session; `copy` and `fixture` currently set an environment marker only and do not copy or load fixture data.",
+          "description": "Persistent state follows the selected save directory. Omitted, empty, or `auto` selects `empty` for a fresh temporary directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; it never deletes existing persistent files. Use save import to copy selected slots.",
           "enum": [
             "auto",
             "existing",
-            "empty",
-            "copy",
-            "fixture"
+            "empty"
           ],
           "type": "string"
         },
@@ -1475,7 +1471,7 @@
         },
         "preferences": {
           "default": "auto",
-          "description": "Preference isolation. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default `empty`). Isolated sessions start without host preference files; `existing` keeps them when the save/HOME location can see them.",
+          "description": "Preferences share Ren'Py's persistent storage. Omitted, empty, or `auto` selects `empty` for a fresh temporary save directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; preferences are isolated by storage selection, without resetting host state.",
           "enum": [
             "auto",
             "existing",
@@ -1676,13 +1672,11 @@
         },
         "persistent": {
           "default": "auto",
-          "description": "Persistent mode. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default `empty` so isolated sessions start without host persistent data). `existing` preserves current persistent data; `empty` removes it in the isolated session; `copy` and `fixture` currently set an environment marker only and do not copy or load fixture data.",
+          "description": "Persistent state follows the selected save directory. Omitted, empty, or `auto` selects `empty` for a fresh temporary directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; it never deletes existing persistent files. Use save import to copy selected slots.",
           "enum": [
             "auto",
             "existing",
-            "empty",
-            "copy",
-            "fixture"
+            "empty"
           ],
           "type": "string"
         },
@@ -1693,7 +1687,7 @@
         },
         "preferences": {
           "default": "auto",
-          "description": "Preference isolation. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default `empty`). Isolated sessions start without host preference files; `existing` keeps them when the save/HOME location can see them.",
+          "description": "Preferences share Ren'Py's persistent storage. Omitted, empty, or `auto` selects `empty` for a fresh temporary save directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; preferences are isolated by storage selection, without resetting host state.",
           "enum": [
             "auto",
             "existing",

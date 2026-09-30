@@ -56,12 +56,12 @@ def _cleanup(isolation) -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_classify_treats_omitted_low_level_savedir_as_existing() -> None:
-    assert classify_savedir(None) == "existing"
+def test_classify_requires_explicit_existing_opt_out() -> None:
+    assert classify_savedir(None) == "temporary"
     assert classify_savedir("existing") == "existing"
     assert classify_savedir("default") == "existing"
     assert classify_savedir(" existing ") == "existing"
-    assert classify_savedir("auto") == "existing"
+    assert classify_savedir("auto") == "temporary"
 
 
 def test_classify_isolates_temporary_and_blank_tokens() -> None:
@@ -220,8 +220,8 @@ def test_isolated_env_rewrites_home_and_preserves_xauthority(
         assert os.environ["HOME"] == str(home)
         assert isolation.savedir is not None
         assert Path(env["RENFORGE_SAVEDIR"]) != home / ".renpy"
-        assert env["RENFORGE_PERSISTENT_MODE"] == "empty"
-        assert env["RENFORGE_PREFERENCES_MODE"] == "empty"
+        assert isolation.persistent_mode == "empty"
+        assert isolation.preferences_mode == "empty"
     finally:
         _cleanup(isolation)
 
@@ -238,16 +238,44 @@ def test_explicit_home_existing_keeps_host_home_with_isolated_saves() -> None:
         _cleanup(isolation)
 
 
-def test_session_init_payload_resets_persistent_and_preferences() -> None:
+def test_session_init_payload_installs_storage_before_persistent_load() -> None:
+    import textwrap
+
     from renforge.bridge.artifacts import session_init_payload
 
     text = session_init_payload().decode("utf-8")
-    assert "config.savedir = _renforge_savedir" in text
-    assert "config.extra_savedirs = []" in text
-    assert "RENFORGE_PERSISTENT_MODE" in text
-    assert "unlink('persistent')" in text
-    assert "RENFORGE_PREFERENCES_MODE" in text
-    assert "persistent._preferences = None" in text
+    assert text.startswith("python early:\n")
+    compile(textwrap.dedent(text.split("\n", 1)[1]), "session_init", "exec")
+    assert "_renforge_engine.savelocation.init = _renforge_init_save_location" in text
+    assert "unlink" not in text
+
+
+def test_low_level_defaults_match_mcp_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    isolation = resolve_launch_isolation()
+    try:
+        assert isolation.savedir_mode == "temporary"
+        assert isolation.home_mode == "temporary"
+        assert isolation.persistent_mode == "empty"
+        assert isolation.preferences_mode == "empty"
+    finally:
+        _cleanup(isolation)
+
+
+def test_existing_opt_out_keeps_all_state() -> None:
+    assert apply_launch_isolation_defaults(savedir="existing") == {
+        "savedir": "existing", "home": "existing",
+        "persistent": "existing", "preferences": "existing",
+    }
+
+
+@pytest.mark.parametrize("field", ["persistent", "preferences"])
+def test_empty_state_never_deletes_reused_persistent(tmp_path: Path, field: str) -> None:
+    persistent = tmp_path / "persistent"
+    persistent.write_bytes(b"KEEP-STATE")
+    with pytest.raises(ValueError, match="requires savedir='temporary'"):
+        resolve_launch_isolation(str(tmp_path), **{field: "empty"})
+    assert persistent.read_bytes() == b"KEEP-STATE"
 
 
 def test_isolation_report_and_session_id(tmp_path: Path) -> None:

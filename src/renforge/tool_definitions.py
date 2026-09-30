@@ -66,11 +66,10 @@ _ISOLATION_PARAMETERS = {
         "to copy selected host slots into an isolated session."
     ),
     "persistent": (
-        "Persistent mode. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` "
-        "(default `empty` so isolated sessions start without host persistent data). "
-        "`existing` preserves current persistent data; `empty` removes it in the "
-        "isolated session; `copy` and `fixture` currently set an environment marker "
-        "only and do not copy or load fixture data."
+        "Persistent state follows the selected save directory. Omitted, empty, "
+        "or `auto` selects `empty` for a fresh temporary directory and `existing` "
+        "for a reused directory. `empty` requires `savedir=temporary`; it never "
+        "deletes existing persistent files. Use save import to copy selected slots."
     ),
     "home": (
         "Process HOME for the launched game. Omitted, empty, or `auto` follows "
@@ -80,9 +79,10 @@ _ISOLATION_PARAMETERS = {
         "Any other non-empty value is an explicit HOME path."
     ),
     "preferences": (
-        "Preference isolation. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` "
-        "(default `empty`). Isolated sessions start without host preference files; "
-        "`existing` keeps them when the save/HOME location can see them."
+        "Preferences share Ren'Py's persistent storage. Omitted, empty, or `auto` "
+        "selects `empty` for a fresh temporary save directory and `existing` for "
+        "a reused directory. `empty` requires `savedir=temporary`; preferences "
+        "are isolated by storage selection, without resetting host state."
     ),
 }
 
@@ -94,7 +94,7 @@ _LAUNCH_AUTHORIZE = (
 )
 
 _ISOLATION_PARAMETER_SCHEMAS = {
-    "persistent": _enum("auto", "existing", "empty", "copy", "fixture"),
+    "persistent": _enum("auto", "existing", "empty"),
     "preferences": _enum("auto", "existing", "empty"),
 }
 

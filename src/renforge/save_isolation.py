@@ -26,7 +26,6 @@ from typing import Any, Iterable, Mapping
 
 EXISTING_TOKENS: frozenset[str] = frozenset({"existing", "default"})
 TEMPORARY_TOKENS: frozenset[str] = frozenset({"", "temporary"})
-EMPTY_TOKENS: frozenset[str] = frozenset({"empty", "temporary"})
 AUTO_TOKENS: frozenset[str] = frozenset({"auto"})
 ISOLATION_ENV: str = "RENFORGE_ISOLATION"
 SESSION_PREFIX: str = "renforge-session-"
@@ -60,11 +59,8 @@ def classify_token(value: str | None, *, omitted: str) -> str:
 
 
 def classify_savedir(savedir: str | None) -> str:
-    """Return ``existing``, ``temporary``, or ``path``.
-
-    ``None`` keeps the low-level launcher on the game's normal save location.
-    """
-    mode = classify_token(savedir, omitted="existing")
+    """Return ``existing``, ``temporary``, or ``path``; omission is isolated."""
+    mode = classify_token(savedir, omitted="temporary")
     return "temporary" if mode == "empty" else mode
 
 
@@ -126,15 +122,17 @@ def apply_launch_isolation_defaults(
             resolved_home = "existing"
         elif savedir_mode == "temporary":
             resolved_home = "temporary"
+    state_default = "empty" if classify_savedir(resolved_savedir) == "temporary" else "existing"
+
+    def state_mode(value: str | None) -> str:
+        token = "auto" if value is None else str(value).strip()
+        return state_default if token in {"", "auto"} else token
+
     return {
         "savedir": resolved_savedir,
         "home": resolved_home,
-        "persistent": default_launch_value(
-            persistent, field="persistent", environ=environ
-        ),
-        "preferences": default_launch_value(
-            preferences, field="preferences", environ=environ
-        ),
+        "persistent": state_mode(persistent),
+        "preferences": state_mode(preferences),
     }
 
 
@@ -174,10 +172,6 @@ class LaunchIsolation:
 
     def environ(self, host_env: Mapping[str, str] | None = None) -> dict[str, str]:
         env: dict[str, str] = {}
-        if self.persistent_mode != "existing":
-            env["RENFORGE_PERSISTENT_MODE"] = self.persistent_mode
-        if self.preferences_mode != "existing":
-            env["RENFORGE_PREFERENCES_MODE"] = self.preferences_mode
         if self.savedir is not None:
             path = str(self.savedir)
             env["RENFORGE_SAVEDIR"] = path
@@ -208,17 +202,19 @@ def resolve_launch_isolation(
 ) -> LaunchIsolation:
     """Create or select isolated save/home directories for one Ren'Py process.
 
-    Low-level ``savedir=None`` keeps the game's normal save location and host
-    HOME. ``savedir=temporary`` also isolates HOME unless *home* is explicit.
+    All launch paths use the same isolated defaults. ``savedir=existing``
+    opts into the game's normal locations and state; HOME follows that mode.
     """
-    _ = host_env
+    resolved = apply_launch_isolation_defaults(
+        savedir=savedir, home=home, persistent=persistent,
+        preferences=preferences, environ=host_env,
+    )
+    savedir, home = resolved["savedir"], resolved["home"]
+    persistent, preferences = resolved["persistent"], resolved["preferences"]
     savedir_mode = classify_savedir(savedir)
-    if home is None:
-        home_mode = "temporary" if savedir_mode != "existing" else "existing"
-    else:
-        home_mode = classify_token(home, omitted="existing")
-        if home_mode == "empty":
-            home_mode = "temporary"
+    home_mode = classify_token(home, omitted="temporary")
+    if home_mode == "empty":
+        home_mode = "temporary"
 
     persistent_mode = classify_token(persistent, omitted="existing")
     if persistent_mode == "temporary":
@@ -226,6 +222,15 @@ def resolve_launch_isolation(
     preferences_mode = classify_token(preferences, omitted="existing")
     if preferences_mode == "temporary":
         preferences_mode = "empty"
+
+    if not {persistent_mode, preferences_mode} <= {"existing", "empty"}:
+        raise ValueError("Persistent/preferences modes must be 'auto', 'existing', or 'empty'.")
+
+    if savedir_mode != "temporary" and "empty" in {persistent_mode, preferences_mode}:
+        raise ValueError(
+            "Empty persistent/preferences state requires savedir='temporary'; "
+            "use 'existing' state modes to reuse a save directory."
+        )
 
     needs_session = savedir_mode == "temporary" or home_mode == "temporary"
     session_root: Path | None = None
@@ -709,31 +714,33 @@ def _is_relative_to(path: Path, root: Path) -> bool:
 
 
 def _prepare_isolated_home(home: Path) -> None:
-    home.mkdir(parents=True, exist_ok=True)
-    (home / ".config").mkdir(parents=True, exist_ok=True)
-    (home / ".cache").mkdir(parents=True, exist_ok=True)
-    (home / ".local" / "share").mkdir(parents=True, exist_ok=True)
-    (home / "tmp").mkdir(parents=True, exist_ok=True)
+    for path in set(_home_paths(home).values()):
+        path.mkdir(parents=True, exist_ok=True)
+
+
+def _home_paths(home: Path) -> dict[str, Path]:
+    """One mapping drives both directory creation and child environment."""
+    paths = {
+        "HOME": home,
+        "XDG_CONFIG_HOME": home / ".config",
+        "XDG_CACHE_HOME": home / ".cache",
+        "XDG_DATA_HOME": home / ".local" / "share",
+        "TMPDIR": home / "tmp",
+        "TMP": home / "tmp",
+        "TEMP": home / "tmp",
+    }
     if os.name == "nt":
-        (home / "AppData" / "Roaming").mkdir(parents=True, exist_ok=True)
-        (home / "AppData" / "Local").mkdir(parents=True, exist_ok=True)
+        paths.update({
+            "USERPROFILE": home,
+            "APPDATA": home / "AppData" / "Roaming",
+            "LOCALAPPDATA": home / "AppData" / "Local",
+        })
+    return paths
 
 
 def _home_environ(home: Path, *, host_env: Mapping[str, str] | None) -> dict[str, str]:
-    env = {
-        "HOME": str(home),
-        "XDG_CONFIG_HOME": str(home / ".config"),
-        "XDG_CACHE_HOME": str(home / ".cache"),
-        "XDG_DATA_HOME": str(home / ".local" / "share"),
-        "TMPDIR": str(home / "tmp"),
-        "TMP": str(home / "tmp"),
-        "TEMP": str(home / "tmp"),
-    }
-    if os.name == "nt":
-        env["USERPROFILE"] = str(home)
-        env["APPDATA"] = str(home / "AppData" / "Roaming")
-        env["LOCALAPPDATA"] = str(home / "AppData" / "Local")
-    env.update(_preserve_x11_auth(host_env or os.environ))
+    env = {name: str(path) for name, path in _home_paths(home).items()}
+    env.update(_preserve_x11_auth(os.environ if host_env is None else host_env))
     return env
 
 

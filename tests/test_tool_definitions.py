@@ -83,7 +83,7 @@ def test_emitted_tool_schemas_encode_options_limits_and_required_relationships()
     launch = schemas["renforge_launch"]["properties"]
     assert launch["display"]["enum"] == ["auto", "native", "xvfb", "external", "none"]
     assert launch["audio"]["enum"] == ["auto", "native", "dummy", "none"]
-    assert launch["persistent"]["enum"] == ["auto", "existing", "empty", "copy", "fixture"]
+    assert launch["persistent"]["enum"] == ["auto", "existing", "empty"]
     assert launch["preferences"]["enum"] == ["auto", "existing", "empty"]
     assert launch["savedir"]["default"] == "auto"
     assert launch["home"]["default"] == "auto"
@@ -227,7 +227,7 @@ def test_tool_definitions_describe_real_side_effects_and_exact_options() -> None
     assert "renforge_launch_status" in parameter("renforge_launch", "timeout")
     assert all(
         mode in parameter("renforge_launch", "persistent")
-        for mode in ("existing", "empty", "copy", "fixture")
+        for mode in ("existing", "empty")
     )
 
     assert all(
@@ -397,7 +397,7 @@ def test_catalog_states_exact_runtime_and_filesystem_contracts() -> None:
     launch = definitions["renforge_launch"]
     assert "file.rpy:line" in launch.parameters["warp"]
     assert "does not resolve label names" in launch.parameters["warp"].lower()
-    assert "environment marker only" in launch.parameters["persistent"].lower()
+    assert "never deletes" in launch.parameters["persistent"].lower()
     assert "game/" in launch.description
     assert ".renforge/control" in launch.description
     assert "arbitrary save directory" in launch.parameters["savedir"].lower()

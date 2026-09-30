@@ -67,6 +67,14 @@ launch. Production `renforge_launch` isolation is application-layer
 `--savedir`, a private HOME/XDG/temp tree, and empty persistent/preferences.
 That path must stay independent of this sandbox prototype.
 
+Game-state isolation also installs a `python early` save-location adapter.
+Before persistent state is loaded, it registers only the session's save
+directory, excluding game-local and extra save directories. The real-engine
+canary test in `tests/test_integration_sdk.py` seeds valid saves, preferences,
+persistent and multipersistent state, verifies they are not inherited, and
+checks that session writes and cleanup leave the original state unchanged.
+The ordinary launcher does not call this document's Linux sandbox helper.
+
 Current evidence is deliberately narrow:
 
 - Project writes use a FUSE copy-on-write view; selected save/profile writes go

@@ -797,9 +797,9 @@ def _launch_after_project_lock(
     display: str = "auto",
     audio: str = "auto",
     savedir: str | None = None,
-    persistent: str = "existing",
+    persistent: str | None = None,
     cleanup_on_stop: bool = True,
-    preferences: str = "existing",
+    preferences: str | None = None,
     home: str | None = None,
     editor_endpoint: EditorEndpoint | None = None,
     editor_coordinator: EditorCoordinator | None = None,
@@ -813,8 +813,8 @@ def _launch_after_project_lock(
     ``savedir='temporary'`` isolates saves under a disposable session directory
     that is removed on session close when ``cleanup_on_stop`` is true. Isolated
     launches also get a private HOME so preferences and ``~/.renpy`` writes miss
-    the user's files. Omit *savedir* / *home* to keep the game's normal
-    locations; MCP/dashboard launches pass isolated values by default.
+    the user's files. All launch paths isolate by default; pass
+    savedir='existing' to opt into the game's normal locations.
     """
     started = time.monotonic()
     phases: list[dict[str, Any]] = []
@@ -851,9 +851,6 @@ def _launch_after_project_lock(
     env.update(isolation.environ(host_env=env))
     savedir_path = str(isolation.savedir) if isolation.savedir is not None else None
 
-    if persistent not in {"empty", "existing", "copy", "fixture"} and persistent:
-        env["RENFORGE_PERSISTENT_MODE"] = str(persistent)
-
     # Token may be caller-supplied; session id is allocated with the artifact
     # intent so names, ownership, and bridge.json share one identity.
     if token is not None and not _is_bridge_token(token):
@@ -879,11 +876,7 @@ def _launch_after_project_lock(
         materialized = allocate_and_materialize(
             project,
             bridge_payload=_BRIDGE_RESOURCE.read_bytes(),
-            include_session_init=(
-                bool(savedir_path)
-                or isolation.persistent_mode == "empty"
-                or isolation.preferences_mode == "empty"
-            ),
+            include_session_init=bool(savedir_path),
             editor_payload=editor_payload,
             editor_asset_files=editor_assets,
             editor_font_relative=editor_font_relative,
@@ -1135,9 +1128,9 @@ def launch_with_bridge(
     display: str = "auto",
     audio: str = "auto",
     savedir: str | None = None,
-    persistent: str = "existing",
+    persistent: str | None = None,
     cleanup_on_stop: bool = True,
-    preferences: str = "existing",
+    preferences: str | None = None,
     home: str | None = None,
     editor: bool = False,
 ) -> BridgeSession:

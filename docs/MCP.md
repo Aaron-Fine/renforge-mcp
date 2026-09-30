@@ -150,6 +150,26 @@ host slots into the isolated session; never bind-mount the user tree.
 There is no MCP-protocol isolation flag and no Roots-based save exposure.
 Isolation is tool arguments plus host enforcement (`RENFORGE_POLICY=enforce`).
 
+All bridge launch paths, including the low-level Python launcher, use the same
+isolated default. One disposable session root owns saves, multipersistent data,
+HOME, XDG directories, and temporary files. A `python early` adapter installs a
+single Ren'Py save location before persistent/preferences load and keeps it on
+subsequent storage initialization and script reload. It excludes the original
+`game/saves` and `config.extra_savedirs`; `--savedir` alone does not exclude them.
+The adapter uses Ren'Py's file storage and scan lifecycle and is tested against
+the supported 8.5.3 SDK. SDK upgrades must pass that real-engine contract.
+
+Persistent data and preferences are isolated through storage selection, not
+through deletion or a late reset. Their `auto` modes follow the save directory:
+a fresh temporary directory starts empty, while `existing` and explicit paths
+retain their state. Requesting `empty` with a reused save directory is rejected
+before files are touched. The former marker-only `copy` and `fixture` persistent
+modes are removed; import selected save slots explicitly instead.
+
+This is game-state isolation for ordinary Ren'Py operations. It adds no OS
+sandbox, namespace, mount, network restriction, or arbitrary-Python containment.
+Project source, bytecode, caches, and logs still use the project directory.
+
 ### Recipe 1 — default isolated session
 
 ```text
