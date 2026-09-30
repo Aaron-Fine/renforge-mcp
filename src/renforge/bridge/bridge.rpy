@@ -1713,7 +1713,10 @@ init python:
         if _renforge_is_end_interaction(exc):
             return True
         game = getattr(renpy, "game", None)
-        for name in ("JumpException", "CallException"):
+        # Start on the main menu raises JumpOutException, which leaves the
+        # menu context and then becomes a JumpException. Swallowing it leaves
+        # the game on the menu and reports a failed click.
+        for name in ("JumpException", "JumpOutException", "CallException"):
             signal = getattr(game, name, None)
             if isinstance(signal, type) and isinstance(exc, signal):
                 return True
@@ -3161,6 +3164,18 @@ init python:
         return isinstance(value, (builtins.list, builtins.tuple))
 
 
+    def _renforge_observe_event_names(value):
+        if isinstance(value, builtins.str):
+            return [value]
+        if value is None or isinstance(value, (builtins.dict, builtins.int, bool)):
+            return []
+        try:
+            items = iter(value)
+        except TypeError:
+            return []
+        return [item for item in items if isinstance(item, builtins.str)]
+
+
     def _renforge_observe_basename(image_name):
         # Mirror renforge.observe.image_basename.
         if _renforge_observe_is_sequence(image_name):
@@ -3425,17 +3440,12 @@ init python:
                 except Exception:
                     class_name = ""
                 if class_name == "SayBehavior":
-                    value = getattr(node, "dismiss", None)
-                    if isinstance(value, builtins.str):
-                        dismiss.append(value)
-                    elif value is not None and not isinstance(value, (builtins.dict, builtins.int, bool)):
-                        try:
-                            items = iter(value)
-                        except TypeError:
-                            items = ()
-                        for item in items:
-                            if isinstance(item, builtins.str):
-                                dismiss.append(item)
+                    # A soft pause listens for "dismiss" through dismiss_unfocused
+                    # while its focused list is empty, so a click still works when
+                    # the quick menu owns focus. The event name is what matters.
+                    for attr in ("dismiss", "dismiss_unfocused"):
+                        for item in _renforge_observe_event_names(getattr(node, attr, None)):
+                            dismiss.append(item)
                 if class_name == "ScreenDisplayable" and not getattr(node, "hiding", False):
                     _renforge_observe_record_screen(
                         node, layer_name, screens, seen_screens
@@ -3658,7 +3668,7 @@ init python:
             try:
                 x, y = _renforge_click_focus(focus)
             except Exception as exc:
-                if not _renforge_is_end_interaction(exc):
+                if not _renforge_is_script_control_flow(exc):
                     raise
                 pointer = getattr(exc, "renforge_pointer", None)
                 if pointer:

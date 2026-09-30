@@ -870,6 +870,59 @@ def test_observe_dismiss_guard_and_stale_act(running_bridge):
     assert refused.get("ok") is False and refused.get("error") == "stale", refused
 
 
+def test_soft_pause_dismiss_unfocused_is_dismissable(running_bridge):
+    """A pause SayBehavior keeps ``dismiss`` on dismiss_unfocused."""
+    import sys
+
+    from renforge.observe import classify
+
+    renpy = running_bridge.renpy
+
+    class SayBehavior:
+        def __init__(self):
+            self.dismiss = []
+            self.dismiss_unfocused = ["dismiss"]
+
+    class ScreenDisplayable:
+        def __init__(self, child):
+            self.screen_name = ("say", None)
+            self.layer = "screens"
+            self.modal = False
+            self.hiding = False
+            self.child = child
+            self.children = [child]
+
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(
+                layers={
+                    "transient": [
+                        types.SimpleNamespace(displayable=SayBehavior()),
+                    ],
+                    "screens": [
+                        types.SimpleNamespace(displayable=ScreenDisplayable(None)),
+                    ],
+                }
+            ),
+        )
+    )
+    renpy.display.interface.ongoing_transition = {}
+    renpy.get_filename_line = lambda: ("game/script.rpy", 154)
+    renpy.config.overlay_screens = ["quick_menu"]
+    renpy.get_screen = lambda name: None
+    bridge = sys.modules["_renforge_runtime"].bridge
+    bridge.current_label = "prologue"
+    bridge.last_say = None
+    bridge.last_who = None
+    renpy.config.start_interact_callbacks[0]()
+
+    raw = running_bridge.client.observe(screenshot=False)
+    snapshot = classify(raw)
+    assert snapshot["say_dismiss"] == "dismiss", raw
+    assert snapshot["forward"] == "dismiss", snapshot
+
+
 def test_send_input_text_posts_textinput_per_character_and_submits(running_bridge):
     running_bridge.renpy._focused_widget = _FakeInput()
 
