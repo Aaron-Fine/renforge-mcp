@@ -66,10 +66,12 @@ def build_wrappers(context):
     def renforge_act(
         project_path: str,
         interaction: int,
-        id: str,
+        id: str | None = None,
         text: str | None = None,
+        key: str | None = None,
+        hold: bool | None = None,
     ) -> dict:
-        """Activate one observed control id in that same interaction."""
+        """Activate one observed control, or post one physical key, in that interaction."""
         return _log_tool_call(
             name="renforge_act",
             params={
@@ -77,11 +79,13 @@ def build_wrappers(context):
                 "interaction": interaction,
                 "id": id,
                 "text": text,
+                "key": key,
+                "hold": hold,
             },
             project_root=project_path,
             fn=live.act,
-            args=(project_path, interaction, id),
-            kwargs={"text": text},
+            args=(project_path, interaction),
+            kwargs={"control_id": id, "text": text, "key": key, "hold": hold},
         )
 
     def renforge_advance_until(

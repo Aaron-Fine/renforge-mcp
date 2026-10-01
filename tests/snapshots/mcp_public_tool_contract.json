@@ -1024,7 +1024,7 @@
     }
   },
   "renforge_observe": {
-    "description": "Read one interaction snapshot: dialogue, screens, pointer controls, and whether this interaction listens for dismiss. Safe to call at any time, including mid-transition (`stable` false is not a legal token for `renforge_act`). `screenshot` true (the default) attaches the PNG, and `frame_hash` is the SHA-256 of that exact PNG. Pointer controls come from Ren'Py `focus_list`. A text field does not enter that list; it is still returned as an `input` control whose `text` is the prompt. `dialogue` is the line on the showing say window, including the speaker's display name, and is null when that window is not showing. `action` names the control's action and target, such as `Start(\"start\")` or `ShowMenu(\"load\")`, including when the button has no label. Keyboard shortcuts are not listed; `dismiss` is a capability, not a key. Screens in `config.overlay_screens`, and injected `_renforge_` editor screens, are returned as `chrome`. Bars, drags, and viewports are listed with empty operations and are not actuated. Identity is this interaction, not a save-stable widget path.",
+    "description": "Read one interaction snapshot: dialogue, screens, pointer controls, and whether this interaction listens for dismiss. Safe to call at any time, including mid-transition (`stable` false is not a legal token for `renforge_act`). `screenshot` true (the default) attaches the PNG, and `frame_hash` is the SHA-256 of that exact PNG. Pointer controls come from Ren'Py `focus_list`. A text field does not enter that list; it is still returned as an `input` control whose `text` is the prompt. `dialogue` is the line on the showing say window, including the speaker's display name, with text tags such as `{b}`, `{w}`, and `{nw}` removed, and is null when that window is not showing. `readout` is other visible text (day, time, objectives, history), not a control and not a reason to stop. `action` names the control's action and target, such as `Start(\"start\")`, `ShowMenu(\"load\")`, `SetVariable(\"show_button\", False)`, or `Function(ChangeLocation, newLocation=\"beach\")`, including when the button has no label. Keyboard shortcuts are not listed; `dismiss` is a capability, not a key. Screens in `config.overlay_screens`, and injected `_renforge_` editor screens, are returned as `chrome`. Bars, drags, and viewports are listed with empty operations and are not actuated. Identity is this interaction, not a save-stable widget path.",
     "annotations": {
       "readOnlyHint": true,
       "idempotentHint": true,
@@ -1051,7 +1051,7 @@
     }
   },
   "renforge_act": {
-    "description": "Activate one control from an `renforge_observe` snapshot by `interaction` and `id` (a `controls` or `chrome` id). Immediately before input, the bridge re-resolves that id in the live focus list, and text fields found on a showing screen. It returns `stale`, `unstable`, `covered`, `disabled`, `missing`, `text_required`, or `unsupported` and does not post input when the check fails. Buttons and hotspots are clicked. An Input takes `text`, types it, and submits with Ren'Py `input_enter` (an empty string submits the field's default). Bars, drags, viewports, and keyboard shortcuts are not actuated. Does not enable skip.",
+    "description": "Activate one control from an `renforge_observe` snapshot, or post one physical key on that same interaction. A control uses `interaction` and `id` (a `controls` or `chrome` id). A key uses `interaction` and `key` and does not take an id. Immediately before input, the bridge checks that the interaction is still current and the frame is stable. It returns `stale`, `unstable`, `covered`, `disabled`, `missing`, `text_required`, `key_or_control`, or `unsupported` and does not post input when the check fails. Buttons and hotspots are clicked. An Input takes `text`, types it, and submits with Ren'Py `input_enter` (an empty string submits the field's default). `key` posts `KEYDOWN` and `KEYUP` for a-z, the arrows, escape, return, or space. `hold` true posts key-down only; `hold` false posts key-up only; omit `hold` for a tap. An unknown key is refused with that list. Bars, drags, and viewports are not actuated. Does not enable skip.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -1066,12 +1066,20 @@
           "type": "string"
         },
         "interaction": {
-          "description": "Interaction number from the observe snapshot that named this control.",
+          "description": "Interaction number from the observe snapshot this action belongs to.",
           "type": "integer"
         },
         "id": {
-          "description": "Control or chrome id from that same snapshot.",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Control or chrome id from that same snapshot. Omit it when posting a key."
         },
         "text": {
           "anyOf": [
@@ -1083,19 +1091,42 @@
             }
           ],
           "default": null,
-          "description": "Text to type when the control's operation is `text`. Omit it for a click."
+          "description": "Text to type when the control's operation is `text`. Omit it for a click or a key."
+        },
+        "key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Physical key to post: a-z, up, down, left, right, escape, return, or space."
+        },
+        "hold": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "True posts key-down only. False posts key-up only. Omit it for a tap."
         }
       },
       "required": [
         "project_path",
-        "interaction",
-        "id"
+        "interaction"
       ],
       "type": "object"
     }
   },
   "renforge_advance_until": {
-    "description": "Post Ren'Py's `dismiss` event until the player must choose, a hard-pause hub is showing, or nothing is listening. Returns `stop` (`choose`, `wait`, `none`, `max_steps`, `timeout`, `stalled`, or `crash`), `steps` (dismiss posts), and the last observation. Never clicks a choice, hotspot, map door, or quick-menu button, and never enables skip. A text field stops as `choose`. A hard pause with decision controls stops as `choose`. A hard pause with no decision controls, such as a timed cutscene, is `wait`: this polls and does not dismiss. A hub whose screen is in `config.overlay_screens` is chrome, so that hard pause stops as `wait` and those buttons stay in `chrome` for `renforge_act`. Custom displayables that never enter `focus_list` are not guessed. `max_steps` bounds dismiss posts (1 to 200). `timeout` is the wall-clock budget in seconds (0.1 to 120).",
+    "description": "Post Ren'Py's `dismiss` event until the player must choose, a hard-pause hub is showing, or nothing is listening. Returns `stop` (`choose`, `wait`, `none`, `max_steps`, `timeout`, `stalled`, or `crash`), `steps` (dismiss posts), and the last observation. Never clicks a choice, hotspot, map door, or quick-menu button, never sends a key, and never enables skip. A text field stops as `choose`. Readout text does not stop it. A hard pause with decision controls stops as `choose`. A hard pause with no decision controls, such as a timed cutscene, is `wait`: this polls and does not dismiss. A hub whose screen is in `config.overlay_screens` is chrome, so that hard pause stops as `wait` and those buttons stay in `chrome` for `renforge_act`. Custom displayables that never enter `focus_list` are not guessed. `max_steps` bounds dismiss posts (1 to 200). `timeout` is the wall-clock budget in seconds (0.1 to 120).",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,

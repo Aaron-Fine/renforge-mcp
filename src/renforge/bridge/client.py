@@ -239,14 +239,23 @@ class BridgeClient:
         self,
         *,
         interaction: int,
-        control_id: str,
+        control_id: str | None = None,
         text: str | None = None,
+        key: str | None = None,
+        hold: bool | None = None,
         deadline: float | None = None,
     ) -> dict:
-        """Activate one control id from the current interaction."""
-        payload: dict[str, Any] = {"interaction": interaction, "id": control_id}
+        """Activate one control id, or post one physical key, on this interaction."""
+        payload: dict[str, Any] = {"interaction": interaction}
+        if control_id is not None:
+            payload["id"] = control_id
         if text is not None:
             payload["text"] = text
+        if key is not None:
+            payload["key"] = key
+        # Omitted hold is a tap. False is key-up only, so it must stay on the wire.
+        if hold is not None:
+            payload["hold"] = hold
         return self._normalize_error_reply(self.request("act", payload, deadline=deadline))
 
     def dismiss_if(self, *, interaction: int, deadline: float | None = None) -> dict:

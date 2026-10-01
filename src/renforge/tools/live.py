@@ -1035,19 +1035,35 @@ def observe(project_path: str, *, screenshot: bool = True) -> dict:
 def act(
     project_path: str,
     interaction: int,
-    control_id: str,
+    control_id: str | None = None,
     text: str | None = None,
+    key: str | None = None,
+    hold: bool | None = None,
 ) -> dict:
-    """Activate one control from an observe snapshot, re-checked on the main thread."""
+    """Activate one control, or post one physical key, re-checked on the main thread."""
     if isinstance(interaction, bool) or not isinstance(interaction, int):
         return {"ok": False, "error": "stale"}
-    if not isinstance(control_id, str) or not control_id:
+    has_id = isinstance(control_id, str) and bool(control_id)
+    has_key = key is not None
+    if has_id and has_key:
+        return {"ok": False, "error": "key_or_control"}
+    if not has_id and not has_key:
         return {"ok": False, "error": "missing"}
+    if has_key and not isinstance(key, str):
+        return {"ok": False, "error": "unknown key %r; accepted keys: a-z, up, down, left, right, escape, return, space" % (key,)}
     if text is not None and not isinstance(text, str):
         return {"ok": False, "error": "text_required"}
+    if hold is not None and not isinstance(hold, bool):
+        return {"ok": False, "error": "unsupported"}
 
     def _handler(client: BridgeClient) -> dict:
-        return client.act(interaction=interaction, control_id=control_id, text=text)
+        return client.act(
+            interaction=interaction,
+            control_id=control_id if has_id else None,
+            text=text,
+            key=key,
+            hold=hold,
+        )
 
     return _with_client(project_path, _handler)
 

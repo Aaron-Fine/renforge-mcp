@@ -1180,6 +1180,205 @@ def test_unlabeled_button_action_includes_its_target(running_bridge):
     assert by_action['Start("start")']["text"] == "START"
 
 
+def test_action_strings_name_setvariable_function_and_camper(running_bridge):
+    format_action = running_bridge.globs["_renforge_observe_format_action"]
+
+    class SetVariable:
+        def __init__(self):
+            self.field = "show_button"
+            self.value = False
+
+    assert format_action(SetVariable()) == 'SetVariable("show_button", False)'
+
+    def ChangeLocation():
+        pass
+
+    class Function:
+        def __init__(self, callable, args=(), kwargs=None):
+            self.callable = callable
+            self.args = args
+            self.kwargs = {} if kwargs is None else kwargs
+
+    assert format_action(Function(ChangeLocation, kwargs={"newLocation": "beach"})) == (
+        'Function(ChangeLocation, newLocation="beach")'
+    )
+    assert format_action(Function(ChangeLocation, kwargs={"hard": False})) == (
+        "Function(ChangeLocation, hard=False)"
+    )
+
+    class Camper:
+        def __init__(self):
+            self.name = "Courtney"
+            self.fileName = "courtney"
+
+    def StartFreeroamInteraction(camper):
+        pass
+
+    assert format_action(Function(StartFreeroamInteraction, args=(Camper(),))) == (
+        'Function(StartFreeroamInteraction, "courtney")'
+    )
+
+    class IfAction:
+        def __init__(self, true):
+            self.true = true
+
+    IfAction.__name__ = "If"
+    assert format_action(IfAction(Function(ChangeLocation, kwargs={"newLocation": "beach"}))) == (
+        'Function(ChangeLocation, newLocation="beach")'
+    )
+
+    long_url = "https://example.test/" + ("a" * 220)
+
+    class OpenURL:
+        def __init__(self, url):
+            self.url = url
+
+    quoted = format_action(OpenURL(long_url))
+    assert quoted.startswith('OpenURL("https://example.test/')
+    assert quoted.endswith('...")')
+    assert len(quoted) == len('OpenURL("")') + 200
+
+
+def test_readout_skips_focus_control_text(running_bridge):
+    from renforge.observe import classify
+
+    renpy = running_bridge.renpy
+
+    class Text:
+        def __init__(self, text, x=None, y=None, w=None, h=None):
+            self.text = text
+            if x is not None:
+                self.x, self.y, self.w, self.h = x, y, w, h
+
+    class Button:
+        def __init__(self, label):
+            self.child = Text(label)
+            self.children = [self.child]
+            self.action = None
+
+    class SayBehavior:
+        def __init__(self):
+            self.dismiss = ["dismiss"]
+
+    class ScreenDisplayable:
+        def __init__(self, name, children):
+            self.screen_name = (name, None)
+            self.layer = "screens"
+            self.modal = False
+            self.hiding = False
+            self.scope = {}
+            self.widgets = {}
+            self.children = children
+            self.child = children[0] if children else None
+
+    day = Text("Day 1", 12, 8, 40, 16)
+    button = Button("Skip")
+    say = SayBehavior()
+    screen = ScreenDisplayable("sandbox", [day, button, say])
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(
+                layers={"screens": [types.SimpleNamespace(displayable=screen)]}
+            ),
+        )
+    )
+    renpy.display.interface.ongoing_transition = {}
+    focus = _FakeFocus("Skip", 10, 40, 80, 24, widget=button)
+    focus.screen_name = "sandbox"
+    renpy.display.focus.focus_list[:] = [focus]
+    renpy.get_filename_line = lambda: ("game/script.rpy", 4)
+    renpy.config.overlay_screens = []
+
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    assert snapshot["forward"] == "dismiss", snapshot
+    assert [item["text"] for item in snapshot["readout"]] == ["Day 1"]
+    assert snapshot["readout"][0]["bounds"] == {"x": 12, "y": 8, "width": 40, "height": 16}
+    assert snapshot["readout"][0]["screen"] == "sandbox"
+    assert snapshot["controls"]
+    assert all(item["text"] != "Skip" for item in snapshot["readout"])
+
+
+def test_say_tags_are_removed_before_the_snapshot(running_bridge):
+    from renforge.observe import classify
+
+    renpy = running_bridge.renpy
+
+    class ScreenDisplayable:
+        def __init__(self, scope):
+            self.screen_name = ("say", None)
+            self.layer = "screens"
+            self.modal = False
+            self.hiding = False
+            self.scope = scope
+            self.widgets = {}
+            self.child = None
+            self.children = []
+
+    _showing(renpy, ScreenDisplayable({"who": "JACKIE", "what": "{i}Hello{/i}{w=2.0}{nw}"}))
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    assert snapshot["dialogue"] == {"who": "JACKIE", "what": "Hello"}
+
+
+def _arm_stable_interaction(running_bridge, generation=1):
+    import sys
+
+    renpy = running_bridge.renpy
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(layers={}),
+        )
+    )
+    renpy.display.interface.ongoing_transition = {}
+    renpy.display.focus.focus_list[:] = []
+    bridge = sys.modules["_renforge_runtime"].bridge
+    bridge.observe_generation = generation
+    return bridge
+
+
+def test_act_key_is_physical_and_refused_when_the_interaction_changed(running_bridge):
+    import sys
+
+    pygame = sys.modules["pygame_sdl2"]
+    pygame.K_a = 97
+    pygame.K_LEFT = 276
+    pygame.K_SPACE = 32
+    _arm_stable_interaction(running_bridge, generation=3)
+
+    stale = running_bridge.client.act(interaction=2, key="a")
+    assert stale.get("ok") is False and stale.get("error") == "stale", stale
+    assert running_bridge.renpy._pygame_events == []
+
+    tap = running_bridge.client.act(interaction=3, key="a")
+    assert tap.get("ok") is True, tap
+    assert tap["operation"] == "key"
+    assert tap["events"] == ["keydown", "keyup"]
+    assert tap["hold"] is None
+    assert [event.type for event in running_bridge.renpy._pygame_events] == [pygame.KEYDOWN, pygame.KEYUP]
+    assert [event.key for event in running_bridge.renpy._pygame_events] == [97, 97]
+    assert running_bridge.renpy._queued_events == []
+
+    running_bridge.renpy._pygame_events.clear()
+    held = running_bridge.client.act(interaction=3, key="left", hold=True)
+    assert held.get("ok") is True, held
+    assert held["hold"] is True
+    assert held["events"] == ["keydown"]
+    assert running_bridge.renpy._pygame_events[0].key == 276
+    assert running_bridge.renpy._pygame_events[0].type == pygame.KEYDOWN
+
+    running_bridge.renpy._pygame_events.clear()
+    released = running_bridge.client.act(interaction=3, key="left", hold=False)
+    assert released.get("ok") is True, released
+    assert released["events"] == ["keyup"]
+    assert running_bridge.renpy._pygame_events[0].type == pygame.KEYUP
+
+    unknown = running_bridge.client.act(interaction=3, key="tab")
+    assert unknown.get("ok") is False, unknown
+    assert "accepted keys: a-z, up, down, left, right, escape, return, space" in unknown["error"]
+    assert running_bridge.renpy._queued_events == []
+
+
 def test_send_input_text_posts_textinput_per_character_and_submits(running_bridge):
     running_bridge.renpy._focused_widget = _FakeInput()
 

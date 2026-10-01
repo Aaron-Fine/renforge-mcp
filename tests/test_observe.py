@@ -58,6 +58,60 @@ def _ids(snapshot, bucket="controls"):
     return [item["id"] for item in snapshot[bucket]]
 
 
+def test_dialogue_what_drops_text_tags():
+    shown = classify(
+        _raw(dialogue={"who": "JACKIE", "what": "{alpha=0.5}{i}Hello{/i}{w=2.0}{nw}"})
+    )
+    assert shown["dialogue"] == {"who": "JACKIE", "what": "Hello"}
+
+    paragraph = classify(_raw(dialogue={"who": None, "what": "One{p}Two"}))
+    assert paragraph["dialogue"]["what"] == "One\nTwo"
+
+    tags_only = classify(_raw(dialogue={"who": None, "what": "{w}{nw}"}))
+    assert tags_only["dialogue"] is None
+
+    literal = classify(_raw(dialogue={"who": None, "what": "Use {{b}} here"}))
+    assert literal["dialogue"]["what"] == "Use {b} here"
+
+
+def test_readout_does_not_change_forward_or_become_a_control():
+    snapshot = classify(
+        _raw(
+            say_dismiss="dismiss",
+            readout=[
+                {
+                    "screen": "sandbox",
+                    "text": "Day 1",
+                    "bounds": {"x": 1, "y": 2, "width": 80, "height": 20},
+                },
+                {"screen": "sandbox", "text": "{b}Evening{/b}"},
+                {"screen": "sandbox", "text": "   "},
+                {"screen": "quick_menu", "text": "Skip"},
+            ],
+            elements=[
+                _element(screen="quick_menu", text="Skip", action="Skip", ordinal=1),
+            ],
+        )
+    )
+
+    assert snapshot["forward"] == "dismiss"
+    assert snapshot["controls"] == []
+    assert snapshot["readout"] == [
+        {
+            "screen": "sandbox",
+            "text": "Day 1",
+            "bounds": {"x": 1, "y": 2, "width": 80, "height": 20},
+        },
+        {"screen": "sandbox", "text": "Evening"},
+        {"screen": "quick_menu", "text": "Skip"},
+    ]
+    assert guard_dismiss(snapshot, 4) is None
+
+    capped = classify(_raw(readout=[{"screen": "notes", "text": "line %s" % index} for index in range(80)]))
+    assert len(capped["readout"]) == 64
+    assert capped["forward"] == "dismiss"
+
+
 def test_say_with_quick_menu_is_dismiss_and_chrome():
     snapshot = classify(
         _raw(

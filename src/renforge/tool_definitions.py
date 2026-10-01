@@ -432,13 +432,16 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "legal token for `renforge_act`). `screenshot` true (the default) attaches the PNG, and `frame_hash` "
             "is the SHA-256 of that exact PNG. Pointer controls come from Ren'Py `focus_list`. A text field "
             "does not enter that list; it is still returned as an `input` control whose `text` is the prompt. "
-            "`dialogue` is the line on the showing say window, including the speaker's display name, and is "
-            "null when that window is not showing. `action` names the control's action and target, such as "
-            "`Start(\"start\")` or `ShowMenu(\"load\")`, including when the button has no label. Keyboard "
-            "shortcuts are not listed; `dismiss` is a capability, not a key. Screens in `config.overlay_screens`, "
-            "and injected `_renforge_` editor screens, are returned as `chrome`. Bars, drags, and viewports are "
-            "listed with empty operations and are not actuated. Identity is this interaction, not a save-stable "
-            "widget path."
+            "`dialogue` is the line on the showing say window, including the speaker's display name, with "
+            "text tags such as `{b}`, `{w}`, and `{nw}` removed, and is null when that window is not showing. "
+            "`readout` is other visible text (day, time, objectives, history), not a control and not a reason "
+            "to stop. `action` names the control's action and target, such as `Start(\"start\")`, "
+            "`ShowMenu(\"load\")`, `SetVariable(\"show_button\", False)`, or "
+            "`Function(ChangeLocation, newLocation=\"beach\")`, including when the button has no label. "
+            "Keyboard shortcuts are not listed; `dismiss` is a capability, not a key. Screens in "
+            "`config.overlay_screens`, and injected `_renforge_` editor screens, are returned as `chrome`. "
+            "Bars, drags, and viewports are listed with empty operations and are not actuated. Identity is "
+            "this interaction, not a save-stable widget path."
         ),
         annotations=_ann(
             readOnlyHint=True,
@@ -454,13 +457,16 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "renforge_act": ToolDefinition(
         description=(
-            "Activate one control from an `renforge_observe` snapshot by `interaction` and `id` "
-            "(a `controls` or `chrome` id). Immediately before input, the bridge re-resolves that id in the "
-            "live focus list, and text fields found on a showing screen. It returns `stale`, `unstable`, "
-            "`covered`, `disabled`, `missing`, `text_required`, or `unsupported` and does not post input when "
-            "the check fails. Buttons and hotspots are clicked. An Input takes `text`, types it, and submits "
-            "with Ren'Py `input_enter` (an empty string submits the field's default). Bars, drags, viewports, "
-            "and keyboard shortcuts are not actuated. Does not enable skip."
+            "Activate one control from an `renforge_observe` snapshot, or post one physical key on that same "
+            "interaction. A control uses `interaction` and `id` (a `controls` or `chrome` id). A key uses "
+            "`interaction` and `key` and does not take an id. Immediately before input, the bridge checks that "
+            "the interaction is still current and the frame is stable. It returns `stale`, `unstable`, "
+            "`covered`, `disabled`, `missing`, `text_required`, `key_or_control`, or `unsupported` and does "
+            "not post input when the check fails. Buttons and hotspots are clicked. An Input takes `text`, "
+            "types it, and submits with Ren'Py `input_enter` (an empty string submits the field's default). "
+            "`key` posts `KEYDOWN` and `KEYUP` for a-z, the arrows, escape, return, or space. `hold` true "
+            "posts key-down only; `hold` false posts key-up only; omit `hold` for a tap. An unknown key is "
+            "refused with that list. Bars, drags, and viewports are not actuated. Does not enable skip."
         ),
         annotations=_ann(
             readOnlyHint=False,
@@ -470,9 +476,11 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         ),
         parameters={
             "project_path": "Project root of the running live session.",
-            "interaction": "Interaction number from the observe snapshot that named this control.",
-            "id": "Control or chrome id from that same snapshot.",
-            "text": "Text to type when the control's operation is `text`. Omit it for a click.",
+            "interaction": "Interaction number from the observe snapshot this action belongs to.",
+            "id": "Control or chrome id from that same snapshot. Omit it when posting a key.",
+            "text": "Text to type when the control's operation is `text`. Omit it for a click or a key.",
+            "key": "Physical key to post: a-z, up, down, left, right, escape, return, or space.",
+            "hold": "True posts key-down only. False posts key-up only. Omit it for a tap.",
         },
         parameter_schemas={"interaction": {"type": "integer"}},
     ),
@@ -481,7 +489,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "Post Ren'Py's `dismiss` event until the player must choose, a hard-pause hub is showing, or nothing "
             "is listening. Returns `stop` (`choose`, `wait`, `none`, `max_steps`, `timeout`, `stalled`, or `crash`), "
             "`steps` (dismiss posts), and the last observation. Never clicks a choice, hotspot, map door, or "
-            "quick-menu button, and never enables skip. A text field stops as `choose`. A hard pause with "
+            "quick-menu button, never sends a key, and never enables skip. A text field stops as `choose`. "
+            "Readout text does not stop it. A hard pause with "
             "decision controls stops as `choose`. "
             "A hard pause with no decision controls, such as a timed cutscene, is `wait`: this polls and does not "
             "dismiss. A hub whose screen is in `config.overlay_screens` is chrome, so that hard pause stops as "

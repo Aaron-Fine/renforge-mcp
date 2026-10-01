@@ -13,6 +13,9 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
+READOUT_LIMIT = 64
+READOUT_TEXT_LIMIT = 400
+
 POLL_SECONDS = 0.05
 
 _BUTTON_ROLES = {"button", "imagebutton", "textbutton", "hotspot", "imagemap"}
@@ -219,15 +222,93 @@ def _screens(raw: Mapping[str, Any], overlay_screens: set[str]) -> list[dict[str
     return screens
 
 
+def strip_text_tags(value: str) -> str:
+    """Remove Ren'Py say tags, leaving the words the player would read.
+
+    ``{p}`` becomes a newline. ``{{`` and ``}}`` stay as literal braces.
+    The bridge applies the same rules, using ``renpy.text.extras.filter_text_tags``
+    when that function is available.
+    """
+    if not isinstance(value, str) or not value:
+        return ""
+    protected = value.replace("{{", "\ue000").replace("}}", "\ue001")
+    out: list[str] = []
+    index = 0
+    length = len(protected)
+    while index < length:
+        start = protected.find("{", index)
+        if start < 0:
+            out.append(protected[index:])
+            break
+        out.append(protected[index:start])
+        end = protected.find("}", start + 1)
+        if end < 0:
+            out.append(protected[start:])
+            break
+        body = protected[start + 1 : end]
+        kind = body[1:] if body.startswith("/") else body
+        if kind.startswith("="):
+            kind = ""
+        else:
+            kind = kind.split("=", 1)[0].split(":", 1)[0]
+        tag = False
+        if body.startswith("="):
+            tag = True
+        elif kind:
+            probe = kind[1:] if kind.startswith("#") else kind
+            tag = bool(probe) and probe.replace("_", "a").isalnum() and not probe[0].isdigit()
+        if not tag:
+            out.append(protected[start : end + 1])
+        elif body == "p":
+            out.append("\n")
+        index = end + 1
+    return "".join(out).replace("\ue000", "{").replace("\ue001", "}").strip()
+
+
 def _dialogue(raw: Mapping[str, Any]) -> dict[str, Any] | None:
     dialogue = raw.get("dialogue")
     if not isinstance(dialogue, Mapping):
         return None
     who = dialogue.get("who") if isinstance(dialogue.get("who"), str) else None
     what = dialogue.get("what") if isinstance(dialogue.get("what"), str) else None
+    if isinstance(what, str):
+        what = strip_text_tags(what) or None
     if who is None and what is None:
         return None
     return {"who": who, "what": what}
+
+
+def _readout(raw: Mapping[str, Any]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for item in raw.get("readout") or []:
+        if len(records) >= READOUT_LIMIT:
+            break
+        if not isinstance(item, Mapping):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str):
+            continue
+        text = strip_text_tags(text)
+        if not text:
+            continue
+        if len(text) > READOUT_TEXT_LIMIT:
+            text = text[: READOUT_TEXT_LIMIT - 3] + "..."
+        screen = item.get("screen") if isinstance(item.get("screen"), str) and item.get("screen") else None
+        record: dict[str, Any] = {"screen": screen, "text": text}
+        bounds = item.get("bounds")
+        if isinstance(bounds, Mapping):
+            cleaned: dict[str, int] = {}
+            valid = True
+            for key in ("x", "y", "width", "height"):
+                value = bounds.get(key)
+                if isinstance(value, bool) or not isinstance(value, int):
+                    valid = False
+                    break
+                cleaned[key] = value
+            if valid:
+                record["bounds"] = cleaned
+        records.append(record)
+    return records
 
 
 def _statement(raw: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -301,6 +382,7 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
         "forward": forward,
         "controls": controls,
         "chrome": chrome,
+        "readout": _readout(raw),
         "frame_hash": frame_hash or None,
         "omitted": {
             "focus_truncated": bool(omitted.get("focus_truncated")),

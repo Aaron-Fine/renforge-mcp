@@ -606,6 +606,27 @@ init python:
         "f12": "K_F12",
     }
 
+    def _renforge_act_key_attrs():
+        # Physical keys for renforge_act. Semantic keymap names are the wrong
+        # events here: "left" would move focus, and "space" would dismiss.
+        attrs = {
+            "up": "K_UP",
+            "down": "K_DOWN",
+            "left": "K_LEFT",
+            "right": "K_RIGHT",
+            "escape": "K_ESCAPE",
+            "esc": "K_ESCAPE",
+            "return": "K_RETURN",
+            "enter": "K_RETURN",
+            "space": "K_SPACE",
+        }
+        for letter in "abcdefghijklmnopqrstuvwxyz":
+            attrs[letter] = "K_" + letter
+        return attrs
+
+    _RENFORGE_ACT_KEY_ATTRS = _renforge_act_key_attrs()
+    _RENFORGE_ACT_KEY_LIST = "a-z, up, down, left, right, escape, return, space"
+
     def _renforge_focused_input():
         """Return the focused Ren'Py Input, or an explicit diagnostic."""
         display = getattr(renpy, "display", None)
@@ -3260,24 +3281,112 @@ init python:
         return None
 
 
-    def _renforge_observe_quote(value):
-        if isinstance(value, bool) or not isinstance(value, (builtins.str, builtins.int)):
-            return None
+    # Depth 3 still formats a list of If whose true branch is a list of actions.
+    # 200 characters keeps a URL or location that differs at the end.
+    _RENFORGE_OBSERVE_DEPTH = 3
+    _RENFORGE_OBSERVE_QUOTE_LIMIT = 200
+    _RENFORGE_READOUT_LIMIT = 64
+    _RENFORGE_READOUT_TEXT_LIMIT = 400
+
+
+    def _renforge_observe_quote(value, allow_bool=False):
+        if isinstance(value, bool):
+            if not allow_bool:
+                return None
+            return "True" if value else "False"
         if isinstance(value, builtins.int):
             return str(value)
+        if not isinstance(value, builtins.str):
+            return None
         text = value.strip()
         if not text:
             return None
         text = text.replace("\\", "\\\\").replace('"', '\\"')
-        if len(text) > 80:
-            text = text[:77] + "..."
+        if len(text) > _RENFORGE_OBSERVE_QUOTE_LIMIT:
+            text = text[: _RENFORGE_OBSERVE_QUOTE_LIMIT - 3] + "..."
         return '"%s"' % text
+
+
+    def _renforge_observe_callable_name(callable_value):
+        if callable_value is None:
+            return None
+        name = getattr(callable_value, "__name__", None)
+        if isinstance(name, builtins.str):
+            cleaned = name.strip()
+            if cleaned and cleaned.replace("_", "a").isalnum() and not cleaned[0].isdigit():
+                return cleaned
+        try:
+            class_name = callable_value.__class__.__name__
+        except Exception:
+            return None
+        if isinstance(class_name, builtins.str) and class_name and class_name not in (
+            "type",
+            "builtin_function_or_method",
+            "function",
+            "method",
+        ):
+            return class_name
+        return None
+
+
+    def _renforge_observe_object_token(value):
+        # A camper is an object. fileName is the badge stem; name is the fallback.
+        for attr in ("fileName", "name"):
+            try:
+                field = getattr(value, attr)
+            except Exception:
+                continue
+            quoted = _renforge_observe_quote(field)
+            if quoted:
+                return quoted
+        return None
+
+
+    def _renforge_observe_format_function(value, depth):
+        parts = []
+        callable_name = _renforge_observe_callable_name(getattr(value, "callable", None))
+        if callable_name:
+            parts.append(callable_name)
+        args = getattr(value, "args", ())
+        if _renforge_observe_is_sequence(args):
+            for arg in args:
+                if isinstance(arg, bool):
+                    parts.append("True" if arg else "False")
+                    continue
+                quoted = _renforge_observe_quote(arg)
+                if quoted:
+                    parts.append(quoted)
+                    continue
+                token = _renforge_observe_object_token(arg)
+                if token:
+                    parts.append(token)
+        kwargs = getattr(value, "kwargs", None)
+        if isinstance(kwargs, builtins.dict):
+            names = []
+            for key in kwargs:
+                if isinstance(key, builtins.str):
+                    names.append(key)
+            for key in sorted(names):
+                item = kwargs[key]
+                if isinstance(item, bool):
+                    parts.append("%s=%s" % (key, "True" if item else "False"))
+                    continue
+                quoted = _renforge_observe_quote(item)
+                if quoted:
+                    parts.append("%s=%s" % (key, quoted))
+                    continue
+                token = _renforge_observe_object_token(item)
+                if token:
+                    parts.append("%s=%s" % (key, token))
+        if not parts:
+            return "Function"
+        return "Function(%s)" % ", ".join(parts)
 
 
     def _renforge_observe_format_action(value, depth=0):
         # Class name plus the field that tells two buttons apart: ShowMenu("load")
         # versus ShowMenu("preferences"), Start("start"), Jump("chapter_two").
-        if value is None or depth > 3:
+        if value is None or depth > _RENFORGE_OBSERVE_DEPTH:
             return None
         if _renforge_observe_is_sequence(value):
             labels = []
@@ -3303,8 +3412,19 @@ init python:
             "RevertableList",
         ):
             return None
+        # Ren'Py's If() returns the chosen action immediately. An object that
+        # still holds both branches contributes the true one.
+        if name == "If":
+            true_action = getattr(value, "true", None)
+            if true_action is None:
+                true_action = getattr(value, "expression", None)
+            label = _renforge_observe_format_action(true_action, depth + 1)
+            if label:
+                return label
+        if name == "Function":
+            return _renforge_observe_format_function(value, depth)
         parts = []
-        for key in ("screen", "label", "name", "variable", "filename", "url", "page", "slot"):
+        for key in ("screen", "label", "name", "variable", "field", "filename", "url", "page", "slot"):
             try:
                 field = getattr(value, key)
             except Exception:
@@ -3316,7 +3436,7 @@ init python:
             extra = getattr(value, "value")
         except Exception:
             extra = None
-        quoted = _renforge_observe_quote(extra)
+        quoted = _renforge_observe_quote(extra, allow_bool=True)
         if quoted and parts:
             parts.append(quoted)
         if parts:
@@ -3552,6 +3672,57 @@ init python:
         return False
 
 
+    def _renforge_strip_say_tags_pattern(value):
+        # Same removal as renforge.observe.strip_text_tags. {p} is a paragraph
+        # break. Other {tag} forms, including {w=2.0} and {nw}, are not words.
+        protected = value.replace("{{", "\ue000").replace("}}", "\ue001")
+        out = []
+        index = 0
+        length = len(protected)
+        while index < length:
+            start = protected.find("{", index)
+            if start < 0:
+                out.append(protected[index:])
+                break
+            out.append(protected[index:start])
+            end = protected.find("}", start + 1)
+            if end < 0:
+                out.append(protected[start:])
+                break
+            body = protected[start + 1 : end]
+            kind = body[1:] if body.startswith("/") else body
+            if kind.startswith("="):
+                kind = ""
+            else:
+                kind = kind.split("=", 1)[0].split(":", 1)[0]
+            tag = False
+            if body.startswith("="):
+                tag = True
+            elif kind:
+                probe = kind[1:] if kind.startswith("#") else kind
+                tag = bool(probe) and probe.replace("_", "a").isalnum() and not probe[0].isdigit()
+            if not tag:
+                out.append(protected[start : end + 1])
+            elif body == "p":
+                out.append("\n")
+            index = end + 1
+        restored = "".join(out).replace("\ue000", "{").replace("\ue001", "}")
+        return restored.strip()
+
+
+    def _renforge_strip_say_tags(value):
+        if not isinstance(value, builtins.str) or not value:
+            return ""
+        filtered = None
+        try:
+            filtered = renpy.text.extras.filter_text_tags(value, allow=set())
+        except Exception:
+            filtered = None
+        if isinstance(filtered, builtins.str):
+            return filtered.replace("{{", "{").replace("}}", "}").strip()
+        return _renforge_strip_say_tags_pattern(value)
+
+
     def _renforge_observe_dialogue(screen_nodes, say_dismiss):
         # last_say survives the say window. Publish it only while this
         # interaction is still that line, or while a say screen is showing.
@@ -3603,6 +3774,8 @@ init python:
         else:
             what = bridge.last_say if bridge is not None and isinstance(bridge.last_say, builtins.str) else None
             who = speaker_from_store()
+        if isinstance(what, builtins.str):
+            what = _renforge_strip_say_tags(what) or None
         if who is None and what is None:
             return None
         return {"who": who, "what": what}
@@ -3838,6 +4011,112 @@ init python:
         })
 
 
+    def _renforge_observe_text_string(node):
+        raw = None
+        tts = getattr(node, "_tts_all", None)
+        if callable(tts):
+            try:
+                raw = tts(False)
+            except TypeError:
+                try:
+                    raw = tts()
+                except Exception:
+                    raw = None
+            except Exception:
+                raw = None
+        if not raw:
+            raw = getattr(node, "text", None)
+        if _renforge_observe_is_sequence(raw):
+            parts = []
+            for part in raw:
+                if isinstance(part, builtins.str):
+                    parts.append(part)
+            raw = "".join(parts)
+        if not isinstance(raw, builtins.str):
+            return None
+        text = _renforge_strip_say_tags(raw)
+        if not text:
+            return None
+        if len(text) > _RENFORGE_READOUT_TEXT_LIMIT:
+            text = text[: _RENFORGE_READOUT_TEXT_LIMIT - 3] + "..."
+        return text
+
+
+    def _renforge_observe_node_bounds(node):
+        values = []
+        for attr in ("x", "y", "w", "h"):
+            value = getattr(node, attr, None)
+            if isinstance(value, bool) or not isinstance(value, builtins.int):
+                return None
+            values.append(value)
+        return {"x": values[0], "y": values[1], "width": values[2], "height": values[3]}
+
+
+    def _renforge_observe_readout(blocked):
+        # Visible Text that is not the label of a focus-list control. Button
+        # captions stay on the control. This list does not change forward.
+        records = []
+        for _layer_name, root in _renforge_scene_roots():
+            stack = [(root, None, False)]
+            visited = set()
+            while stack and len(records) < _RENFORGE_READOUT_LIMIT:
+                node, screen_name, inside_focus = stack.pop()
+                if node is None:
+                    continue
+                ident = id(node)
+                if ident in visited:
+                    continue
+                visited.add(ident)
+                if getattr(node, "hiding", False):
+                    continue
+                try:
+                    class_name = node.__class__.__name__
+                except Exception:
+                    class_name = ""
+                if class_name == "ScreenDisplayable":
+                    screen_name = _renforge_observe_screen_node_name(node) or screen_name
+                inside = inside_focus or ident in blocked
+                if class_name == "Text" and not inside:
+                    text = _renforge_observe_text_string(node)
+                    if text:
+                        record = {"screen": screen_name, "text": text}
+                        bounds = _renforge_observe_node_bounds(node)
+                        if bounds is not None:
+                            record["bounds"] = bounds
+                        records.append(record)
+                        if len(records) >= _RENFORGE_READOUT_LIMIT:
+                            break
+                children = []
+                if class_name == "ScreenDisplayable":
+                    widgets = getattr(node, "widgets", None)
+                    if isinstance(widgets, builtins.dict):
+                        for widget in widgets.values():
+                            children.append(widget)
+                sequence = getattr(node, "children", None)
+                if _renforge_observe_is_sequence(sequence):
+                    for child in sequence:
+                        children.append(child)
+                child = getattr(node, "child", None)
+                if child is not None:
+                    children.append(child)
+                raw_child = getattr(node, "raw_child", None)
+                if raw_child is not None and raw_child is not child:
+                    children.append(raw_child)
+                pending = []
+                seen_child = set()
+                for child in children:
+                    if child is None:
+                        continue
+                    child_id = id(child)
+                    if child_id in seen_child:
+                        continue
+                    seen_child.add(child_id)
+                    pending.append(child)
+                for child in reversed(pending):
+                    stack.append((child, screen_name, inside))
+        return records
+
+
     def _renforge_observe_stability():
         transition = False
         try:
@@ -3873,11 +4152,16 @@ init python:
         dialogue = _renforge_observe_dialogue(screen_nodes, say_dismiss)
         pairs, focus_truncated = _renforge_observe_focus_pairs()
         elements = []
-        for _focus, record in pairs:
+        blocked = set()
+        for focus, record in pairs:
             copied = dict(record)
             copied.pop("center", None)
             copied.pop("visible", None)
             elements.append(copied)
+            widget = getattr(focus, "widget", None)
+            if widget is not None:
+                blocked.add(id(widget))
+        readout = _renforge_observe_readout(blocked)
         overlay = []
         try:
             for name in list(renpy.config.overlay_screens):
@@ -3906,6 +4190,7 @@ init python:
             "say_dismiss": say_dismiss,
             "overlay_screens": overlay,
             "elements": elements,
+            "readout": readout,
             "omitted": {
                 "focus_truncated": bool(focus_truncated),
                 "unclassified": bool(walk_truncated),
@@ -3980,6 +4265,57 @@ init python:
         expected = payload.get("interaction")
         if isinstance(expected, bool) or not isinstance(expected, builtins.int) or expected != interaction:
             return {"ok": False, "error": "stale", "interaction": interaction}
+        key_value = payload.get("key") if "key" in payload else None
+        if key_value is not None:
+            wanted = payload.get("id")
+            if (isinstance(wanted, builtins.str) and wanted) or payload.get("text") is not None:
+                return {"ok": False, "error": "key_or_control", "interaction": interaction}
+            if not isinstance(key_value, builtins.str) or not key_value.strip():
+                return {
+                    "ok": False,
+                    "error": "unknown key %r; accepted keys: %s" % (key_value, _RENFORGE_ACT_KEY_LIST),
+                    "interaction": interaction,
+                }
+            folded = key_value.strip().casefold()
+            attr_name = _RENFORGE_ACT_KEY_ATTRS.get(folded)
+            keycode = (
+                getattr(pygame, attr_name, None)
+                if pygame is not None and attr_name is not None
+                else None
+            )
+            if attr_name is None or isinstance(keycode, bool) or not isinstance(keycode, builtins.int):
+                if attr_name is not None and pygame is None:
+                    return {"ok": False, "error": "pygame_sdl2 event API is unavailable"}
+                return {
+                    "ok": False,
+                    "error": "unknown key %r; accepted keys: %s" % (folded, _RENFORGE_ACT_KEY_LIST),
+                    "interaction": interaction,
+                }
+            if "hold" in payload:
+                hold = payload.get("hold")
+                if not isinstance(hold, bool):
+                    return {"ok": False, "error": "unsupported", "interaction": interaction}
+                phases = (pygame.KEYDOWN,) if hold else (pygame.KEYUP,)
+            else:
+                hold = None
+                phases = (pygame.KEYDOWN, pygame.KEYUP)
+            mod = getattr(pygame, "KMOD_NONE", 0)
+            event_names = []
+            for event_type in phases:
+                event = pygame.event.Event(
+                    event_type,
+                    {"key": keycode, "mod": mod, "unicode": "", "repeat": 0},
+                )
+                pygame.event.post(event)
+                event_names.append("keydown" if event_type == pygame.KEYDOWN else "keyup")
+            return {
+                "ok": True,
+                "operation": "key",
+                "key": folded,
+                "interaction": interaction,
+                "hold": hold,
+                "events": event_names,
+            }
         wanted = payload.get("id")
         if not isinstance(wanted, builtins.str) or not wanted:
             return {"ok": False, "error": "missing", "interaction": interaction}
