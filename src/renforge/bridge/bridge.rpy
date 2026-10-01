@@ -32,7 +32,9 @@ init python:
     import struct
     import sys
     import threading
-    import time
+    # `time` is a store field. Games use that name for their own clock, which
+    # replaces the module before a label callback runs.
+    import time as _renforge_time
     import types
 
     try:
@@ -98,7 +100,7 @@ init python:
             record = {
                 "seq": self.event_seq,
                 "type": kind,
-                "timestamp": time.time(),
+                "timestamp": _renforge_time.time(),
             }
             if self.current_correlation_id is not None:
                 record["correlation_id"] = self.current_correlation_id
@@ -3772,7 +3774,17 @@ init python:
             who = _renforge_display_name(scoped_who) if scoped_who_set else speaker_from_store()
             what = scoped_what
         else:
+            # Character callbacks on 8.3+ receive ``what``. 8.0–8.2 call the
+            # same hook without it, while the statement still stores the line
+            # on ``_last_say_what``. Prefer the callback copy when it exists.
             what = bridge.last_say if bridge is not None and isinstance(bridge.last_say, builtins.str) else None
+            if not isinstance(what, builtins.str) or not what:
+                try:
+                    stored = getattr(renpy.store, "_last_say_what", None)
+                except Exception:
+                    stored = None
+                if isinstance(stored, builtins.str) and stored:
+                    what = stored
             who = speaker_from_store()
         if isinstance(what, builtins.str):
             what = _renforge_strip_say_tags(what) or None
@@ -5643,7 +5655,21 @@ init python:
             # stays inside that call and must not change the observe generation.
             bridge.observe_generation = int(getattr(bridge, "observe_generation", 0)) + 1
 
-        renpy.config.label_callbacks.append(_renforge_on_label)
+        # 8.1+ runs the list. 8.0 runs the single ``label_callback`` and has
+        # no list; assigning one would not be called.
+        label_callbacks = getattr(renpy.config, "label_callbacks", None)
+        # `list` in init python is RevertableList, so a config list fails that check.
+        if isinstance(label_callbacks, builtins.list):
+            label_callbacks.append(_renforge_on_label)
+        elif hasattr(renpy.config, "label_callback"):
+            previous_label = renpy.config.label_callback
+
+            def _renforge_on_label_compat(name, abnormal=False):
+                _renforge_on_label(name, abnormal)
+                if callable(previous_label):
+                    return previous_label(name, abnormal)
+
+            renpy.config.label_callback = _renforge_on_label_compat
         renpy.config.all_character_callbacks.append(_renforge_on_say)
         bridge.prev_exception_handler = renpy.config.exception_handler
         renpy.config.exception_handler = _renforge_exception_handler

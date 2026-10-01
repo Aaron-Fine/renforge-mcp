@@ -256,7 +256,13 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         parameters={
             "project_path": "Project root passed to the launcher and runtime bridge.",
             "warp": "Optional Ren'Py `file.rpy:line` startup target; this launch tool does not resolve label names.",
-            "version": "Launcher version selector, either `stable` or an explicit semantic version (for example `8.5.3`).",
+            "version": (
+                "Launcher version selector. `stable` uses the engine recorded in the project's "
+                "`renpy/vc_version.py` when that file exists, otherwise the configured stable SDK "
+                "(`8.5.3`). An explicit version such as `8.1.2` is downloaded when no cached SDK "
+                "shares that major.minor. A cached SDK is reused only when the major and minor match "
+                "and its patch is the same or newer."
+            ),
             "editor": "Enable/disable live editor injection; default True for interactive work.",
             "display": (
                 "Display strategy: `auto`, `native`, `xvfb`, or `external`. The accepted token `none` returns an error because "

@@ -157,27 +157,75 @@ def _version_tuple(version: str) -> tuple[int, int, int] | None:
 
 
 def _sdk_internal_version(root: Path) -> str | None:
+    """Report the engine triple from an SDK or a distributed game.
+
+    Releases from 8.1 onward write ``version = '8.1.2.23090503'`` in
+    ``renpy/vc_version.py``. Ren'Py 8.0 writes only a numeric ``vc_version``
+    there and keeps the triple in ``renpy/__init__.py``, once for the Python 2
+    line and once for Python 3. The Python 3 triple is the one this bridge runs.
+    """
     version_file = root / "renpy" / "vc_version.py"
     try:
         text = version_file.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
-        return None
+        text = ""
     match = re.search(
         r"(?m)^\s*version\s*=\s*(['\"])(?P<version>\d+\.\d+\.\d+[^'\"]*)\1",
         text,
     )
-    return match.group("version") if match else None
+    if match is not None:
+        return match.group("version")
+    init_file = root / "renpy" / "__init__.py"
+    try:
+        init_text = init_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    tuples: list[tuple[tuple[int, int, int], str | None]] = []
+    for found in re.finditer(
+        r"version_tuple\s*=\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*(\d+))?",
+        init_text,
+    ):
+        triple = tuple(int(found.group(index)) for index in range(1, 4))
+        tuples.append((triple, found.group(4)))
+    if not tuples:
+        return None
+    triple, build = max(tuples, key=lambda item: item[0])
+    version = ".".join(str(part) for part in triple)
+    if build is not None:
+        version = f"{version}.{build}"
+    return version
 
 
 def _compatible_sdk_version(installed: str, required: str) -> bool:
+    """Same major.minor, and an installed patch that is the same or newer.
+
+    Ren'Py rejects scripts across a minor boundary (an 8.1 game does not parse
+    on 8.5). A later patch of the same minor still loads those scripts. The
+    build suffix after the triple is ignored.
+    """
     installed_tuple = _version_tuple(installed)
     required_tuple = _version_tuple(required)
     if installed_tuple is None or required_tuple is None:
         return False
     return (
         installed_tuple[0] == required_tuple[0]
-        and installed_tuple >= required_tuple
+        and installed_tuple[1] == required_tuple[1]
+        and installed_tuple[2] >= required_tuple[2]
     )
+
+
+def bundled_engine_version(project_root: Path) -> str | None:
+    """Return ``X.Y.Z`` from a distributed game's ``renpy/vc_version.py``.
+
+    The file records the engine the game shipped with (``8.1.2.23090503``
+    becomes ``8.1.2``). A source project with no ``renpy/`` directory returns
+    None and keeps the stable SDK.
+    """
+    reported = _sdk_internal_version(Path(project_root))
+    triple = _version_tuple(reported or "")
+    if triple is None:
+        return None
+    return f"{triple[0]}.{triple[1]}.{triple[2]}"
 
 
 def _validated_sdk_version(root: Path, required_version: str) -> str | None:
@@ -424,7 +472,12 @@ def get_or_install_sdk(
     injects an isolated dump adapter into the ``compile --json-dump``
     subprocess instead of patching ``renpy/dump.py``.
     """
-    resolved_version = _validate_version_identifier(_resolve_version(version))
+    requested = version
+    if (not version or version == "stable") and project_root is not None:
+        bundled = bundled_engine_version(project_root)
+        if bundled is not None:
+            requested = bundled
+    resolved_version = _validate_version_identifier(_resolve_version(requested))
     if project_root is not None:
         local_root = _first_valid_sdk(
             _project_candidate_roots(project_root, resolved_version),

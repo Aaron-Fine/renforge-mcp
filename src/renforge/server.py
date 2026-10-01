@@ -58,6 +58,8 @@ def create_app() -> Any:
         "renforge_observe, then renforge_act on a control id or a physical key "
         "from that same interaction, and renforge_advance_until while forward "
         "is dismiss or wait. Pass editor=false for a play session. "
+        "version=stable follows renpy/vc_version.py when the game ships an engine, "
+        "and a cached SDK is reused only for that same major.minor with the same or a newer patch. "
         "renforge_launch returns status=starting after 20 seconds "
         "instead of exceeding common MCP timeouts; poll renforge_launch_status "
         "until ready or failed. It uses display/audio=auto and isolates saves "

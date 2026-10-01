@@ -155,6 +155,123 @@ def test_get_or_install_sdk_has_no_sdk_source_patch_flag() -> None:
     assert not hasattr(sdk, "_patch_sdk_json_dump")
 
 
+def test_renpy_8_0_version_tuple_identifies_the_python3_line(tmp_path: Path) -> None:
+    root = tmp_path / "sdk"
+    (root / "renpy").mkdir(parents=True)
+    (root / "renpy" / "vc_version.py").write_text("vc_version = 22090809\n")
+    (root / "renpy" / "__init__.py").write_text(
+        "if PY2:\n"
+        "    version_tuple = (7, 5, 3, vc_version)\n"
+        "else:\n"
+        "    version_tuple = (8, 0, 3, vc_version)\n",
+        encoding="utf-8",
+    )
+    (root / "renpy.py").write_text("print('renpy')\n")
+
+    assert sdk._sdk_internal_version(root) == "8.0.3"
+    assert sdk._validated_sdk_version(root, "8.0.3") == "8.0.3"
+    assert sdk._validated_sdk_version(root, "8.1.0") is None
+    assert sdk.bundled_engine_version(root) == "8.0.3"
+
+
+def test_newer_same_minor_patch_satisfies_older_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cache_sdk = _write_fake_sdk(tmp_path / "cache" / "8.1.2", "8.1.2.23090503")
+    _write_fake_sdk(tmp_path / "cache" / "8.5.3", "8.5.3.26010101")
+    monkeypatch.setenv(sdk.RENPY_SDK_CACHE_ENV, str(cache_sdk.parent))
+    monkeypatch.delenv(sdk.RENPY_SDK_ENV, raising=False)
+    monkeypatch.setattr(
+        sdk,
+        "_download_archive",
+        lambda *_args, **_kwargs: pytest.fail("download must not be attempted"),
+    )
+
+    discovered = sdk.get_or_install_sdk("8.1.0")
+
+    assert discovered.root == cache_sdk
+
+
+def test_older_same_minor_patch_does_not_satisfy_newer_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    _write_fake_sdk(cache_dir / "8.1.0", "8.1.0.22010101")
+    archive_path = _write_fake_sdk_archive(tmp_path, "8.1.2")
+    monkeypatch.setenv(sdk.RENPY_SDK_CACHE_ENV, str(cache_dir))
+    monkeypatch.setenv(sdk.RENPY_SDK_ARCHIVE_URL_ENV, archive_path.as_uri())
+    monkeypatch.delenv(sdk.RENPY_SDK_ENV, raising=False)
+
+    discovered = sdk.get_or_install_sdk("8.1.2")
+
+    assert discovered.root == cache_dir / "8.1.2"
+    assert (discovered.root / "renpy" / "vc_version.py").read_text() == "version = '8.1.2'\n"
+
+
+def test_different_minor_cache_does_not_satisfy_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    newer_minor = _write_fake_sdk(cache_dir / "8.5.3", "8.5.3.26051504")
+    archive_path = _write_fake_sdk_archive(tmp_path, "8.1.2")
+    monkeypatch.setenv(sdk.RENPY_SDK_CACHE_ENV, str(cache_dir))
+    monkeypatch.setenv(sdk.RENPY_SDK_ARCHIVE_URL_ENV, archive_path.as_uri())
+    monkeypatch.delenv(sdk.RENPY_SDK_ENV, raising=False)
+
+    discovered = sdk.get_or_install_sdk("8.1.2")
+
+    assert discovered.root == cache_dir / "8.1.2"
+    assert newer_minor.exists()
+
+
+def test_stable_follows_bundled_engine_within_its_minor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    (project / "renpy").mkdir(parents=True)
+    (project / "renpy" / "vc_version.py").write_text("version = '8.1.2.23090503'\n")
+    (project / "game").mkdir()
+    cache_sdk = _write_fake_sdk(tmp_path / "cache" / "8.1.3", "8.1.3.23091801")
+    _write_fake_sdk(tmp_path / "cache" / "8.5.3", "8.5.3.26051504")
+    monkeypatch.setenv(sdk.RENPY_SDK_CACHE_ENV, str(cache_sdk.parent))
+    monkeypatch.setenv(sdk.RENPY_SDK_STABLE_ENV, "8.5.3")
+    monkeypatch.delenv(sdk.RENPY_SDK_ENV, raising=False)
+    monkeypatch.setattr(
+        sdk,
+        "_download_archive",
+        lambda *_args, **_kwargs: pytest.fail("download must not be attempted"),
+    )
+
+    discovered = sdk.get_or_install_sdk("stable", project_root=project)
+
+    assert discovered.root == cache_sdk
+    assert sdk.bundled_engine_version(project) == "8.1.2"
+
+
+def test_stable_without_bundled_engine_stays_on_configured_stable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    cache_sdk = _write_fake_sdk(tmp_path / "cache" / "8.5.3", "8.5.3.26051504")
+    monkeypatch.setenv(sdk.RENPY_SDK_CACHE_ENV, str(cache_sdk.parent))
+    monkeypatch.delenv(sdk.RENPY_SDK_ENV, raising=False)
+    monkeypatch.setattr(
+        sdk,
+        "_download_archive",
+        lambda *_args, **_kwargs: pytest.fail("download must not be attempted"),
+    )
+
+    discovered = sdk.get_or_install_sdk("stable", project_root=project)
+
+    assert discovered.root == cache_sdk
+
+
 def test_incompatible_project_sdk_falls_back_to_compatible_cache(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
