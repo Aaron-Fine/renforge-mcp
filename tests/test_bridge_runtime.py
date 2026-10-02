@@ -793,6 +793,37 @@ def test_advance_posts_dismiss_event(running_bridge):
     assert "dismiss" in running_bridge.renpy._queued_events
 
 
+def test_finished_layer_transition_does_not_lock_the_interaction(running_bridge):
+    """A dict ``with`` leaves the layer transition registered until the say ends."""
+    renpy = running_bridge.renpy
+
+    class _Dissolve:
+        delay = 0.5
+
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(layers={}),
+        )
+    )
+    renpy.display.interface.ongoing_transition = {"master": lambda **_kwargs: None}
+    renpy.display.interface.instantiated_transition = {"master": _Dissolve()}
+    renpy.display.interface.transition_time = {"master": 10.0}
+    renpy.display.interface.frame_time = 10.6
+    renpy.get_filename_line = lambda: ("game/script.rpy", 1)
+    renpy.config.overlay_screens = []
+    renpy.get_screen = lambda name: None
+
+    finished = running_bridge.client.observe(screenshot=False)
+    assert finished.get("stable") is True
+    assert finished.get("unstable_reason") is None
+
+    renpy.display.interface.frame_time = 10.2
+    playing = running_bridge.client.observe(screenshot=False)
+    assert playing.get("stable") is False
+    assert playing.get("unstable_reason") == "transition"
+
+
 def test_observe_dismiss_guard_and_stale_act(running_bridge):
     """The bridge snapshot and the dismiss/act guards run against a fake interact."""
     import sys

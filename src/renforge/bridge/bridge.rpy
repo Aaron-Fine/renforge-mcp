@@ -4129,17 +4129,43 @@ init python:
         return records
 
 
-    def _renforge_observe_stability():
-        transition = False
+    def _renforge_transition_pending():
+        # Ren'Py keeps ongoing_transition until the interaction ends, including
+        # for a dict `with` that only schedules a layer dissolve onto the next
+        # say. The line is past the fade once the shown instance has played
+        # for its delay. An unstarted or endless transition stays pending.
         try:
             interface = renpy.display.interface
             ongoing = getattr(interface, "ongoing_transition", None)
-            if isinstance(ongoing, builtins.dict):
-                transition = bool(ongoing)
-            elif ongoing:
-                transition = True
         except Exception:
-            transition = False
+            return False
+        if not ongoing:
+            return False
+        if not isinstance(ongoing, builtins.dict):
+            return True
+        try:
+            now = getattr(interface, "frame_time", None)
+            started = getattr(interface, "transition_time", None) or {}
+            shown = getattr(interface, "instantiated_transition", None) or {}
+        except Exception:
+            return True
+        for layer in ongoing:
+            start = started.get(layer) if isinstance(started, builtins.dict) else None
+            inst = shown.get(layer) if isinstance(shown, builtins.dict) else None
+            if start is None or inst is None or now is None:
+                return True
+            delay = getattr(inst, "delay", None)
+            if not isinstance(delay, (builtins.int, builtins.float)) or isinstance(delay, bool):
+                return True
+            try:
+                if (now - start) < delay:
+                    return True
+            except Exception:
+                return True
+        return False
+
+    def _renforge_observe_stability():
+        transition = _renforge_transition_pending()
         interacting = False
         try:
             interacting = bool(renpy.game.context().interacting)
