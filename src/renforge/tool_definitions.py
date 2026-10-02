@@ -469,7 +469,9 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "the interaction is still current and the frame is stable. It returns `stale`, `unstable`, "
             "`covered`, `disabled`, `missing`, `text_required`, `key_or_control`, or `unsupported` and does "
             "not post input when the check fails. Buttons and hotspots are clicked. An Input takes `text`, "
-            "types it, and submits with Ren'Py `input_enter` (an empty string submits the field's default). "
+            "replaces the current value (a prefilled name is not kept), and submits with Ren'Py `input_enter`. "
+            "The field's allow, exclude, and length still apply. A value the field rejects returns "
+            "`text_rejected` and is not submitted. An empty string clears the field and submits that. "
             "`key` posts `KEYDOWN` and `KEYUP` for a-z, the arrows, escape, return, or space. `hold` true "
             "posts key-down only; `hold` false posts key-up only; omit `hold` for a tap. An unknown key is "
             "refused with that list. Bars, drags, and viewports are not actuated. Does not enable skip."
@@ -484,7 +486,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "project_path": "Project root of the running live session.",
             "interaction": "Interaction number from the observe snapshot this action belongs to.",
             "id": "Control or chrome id from that same snapshot. Omit it when posting a key.",
-            "text": "Text to type when the control's operation is `text`. Omit it for a click or a key.",
+            "text": "Full replacement for an input control. Omit it for a click or a key.",
             "key": "Physical key to post: a-z, up, down, left, right, escape, return, or space.",
             "hold": "True posts key-down only. False posts key-up only. Omit it for a tap.",
         },

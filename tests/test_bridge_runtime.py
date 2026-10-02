@@ -1040,6 +1040,122 @@ def test_input_outside_focus_list_is_typed_and_submitted(running_bridge):
     assert renpy._queued_events.count("input_enter") == 2
 
 
+def test_act_text_replaces_a_prefilled_input(running_bridge):
+    """VariableInputValue starts with a default. text replaces it instead of appending."""
+    import sys
+
+    from renforge.observe import classify
+
+    renpy = running_bridge.renpy
+
+    class Input:
+        def __init__(self):
+            self.editable = True
+            self.content = "Zack"
+            self.caret_pos = 4
+            self.length = 8
+            self.allow = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            self.exclude = None
+
+        def update_text(self, new_content, editable, check_size=False):
+            self.content = new_content
+            self.editable = editable
+            self.check_size = check_size
+
+    class Text:
+        def __init__(self, text):
+            self._text = text
+
+        def _tts_all(self, raw=False):
+            return self._text
+
+    class ScreenDisplayable:
+        def __init__(self, widget):
+            self.screen_name = ("input_name", None)
+            self.layer = "screens"
+            self.modal = True
+            self.hiding = False
+            self.scope = {}
+            self.widgets = {"input": widget}
+            self.child = widget
+            self.children = [Text("Name"), widget]
+
+    widget = Input()
+    _showing(renpy, ScreenDisplayable(widget))
+    renpy.display.interface.text_rect = (100, 200, 400, 36)
+    renpy.get_filename_line = lambda: ("game/script.rpy", 60)
+    bridge = sys.modules["_renforge_runtime"].bridge
+    bridge.current_label = "week1_contestants_arrive"
+    bridge.last_say = ""
+    bridge.last_who = ""
+    renpy.config.start_interact_callbacks[0]()
+
+    raw = running_bridge.client.observe(screenshot=False)
+    snapshot = classify(raw)
+    reply = running_bridge.client.act(
+        interaction=snapshot["interaction"],
+        control_id=snapshot["controls"][0]["id"],
+        text="Alex!",
+    )
+    assert reply.get("ok") is True, reply
+    assert reply["replaced"] is True
+    assert reply["characters"] == 4
+    assert widget.content == "Alex"
+    assert renpy._pygame_events == []
+    assert renpy._queued_events == ["input_enter"]
+
+    renpy._queued_events.clear()
+    limited = running_bridge.client.act(
+        interaction=snapshot["interaction"],
+        control_id=snapshot["controls"][0]["id"],
+        text="Alexander",
+    )
+    assert limited.get("ok") is True, limited
+    assert widget.content == "Alexande"
+    assert limited["characters"] == 8
+
+    renpy._queued_events.clear()
+    rejected = running_bridge.client.act(
+        interaction=snapshot["interaction"],
+        control_id=snapshot["controls"][0]["id"],
+        text="!!!",
+    )
+    assert rejected.get("ok") is False, rejected
+    assert rejected["error"] == "text_rejected"
+    assert widget.content == "Alexande"
+    assert renpy._queued_events == []
+
+    cleared = running_bridge.client.act(
+        interaction=snapshot["interaction"],
+        control_id=snapshot["controls"][0]["id"],
+        text="",
+    )
+    assert cleared.get("ok") is True, cleared
+    assert widget.content == ""
+    assert cleared["characters"] == 0
+
+
+def test_send_input_replaces_through_the_input_value(running_bridge):
+    class Input:
+        def __init__(self):
+            self.content = "Zack"
+            self.caret_pos = 4
+            self.value = self
+
+        def set_text(self, text):
+            self.content = text
+
+    running_bridge.renpy._focused_widget = Input()
+    reply = running_bridge.client.send_input(text="Alex", submit=True)
+
+    assert reply["ok"] is True, reply
+    assert reply["replaced"] is True
+    assert reply["characters"] == 4
+    assert running_bridge.renpy._focused_widget.content == "Alex"
+    assert running_bridge.renpy._pygame_events == []
+    assert "input_enter" in running_bridge.renpy._queued_events
+
+
 def test_overlay_input_does_not_stop_dismiss(running_bridge):
     """A text field on an overlay screen is chrome. Dismiss still advances the say."""
     import sys

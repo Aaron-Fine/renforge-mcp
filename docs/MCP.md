@@ -454,7 +454,8 @@ choice, or with `key` and no id to post one physical key on that same
 interaction. Omit `hold` for a tap (`KEYDOWN` then `KEYUP`). `hold` true is
 key-down only, and `hold` false is key-up only. Accepted keys are a-z, the
 arrows, escape, return, and space. Pass `text` for an `input` control; the
-bridge types it and submits with Enter. `dialogue.who` is the name on the say
+bridge replaces the current value and submits with Enter. The field's allow,
+exclude, and length still apply. `dialogue.who` is the name on the say
 window, `dialogue.what` is that line with text tags removed, and `dialogue` is
 null when that window is not showing. `readout` lists other visible text, such
 as a day, a clock, or a history line. It is not a control, and it does not

@@ -164,8 +164,9 @@ def build_wrappers(context):
     ) -> dict:
         """Send exactly one input mode: text, named key, or scroll object.
 
-        ``text`` posts character-by-character TEXTINPUT events to a focused
-        Ren'Py Input; ``submit`` optionally presses Enter after the text.
+        ``text`` replaces the contents of a focused Ren'Py Input, then
+        optionally presses Enter. A widget with no input value still receives
+        one TEXTINPUT event per character. ``submit`` is only valid with text.
         ``key`` accepts readable names such as enter, esc, arrows, pageup,
         pagedown, backspace, delete, home, end, space, tab, and function keys.
         ``scroll`` is ``{"x": ..., "y": ..., "direction": "up"|"down"}``

@@ -1051,7 +1051,7 @@
     }
   },
   "renforge_act": {
-    "description": "Activate one control from an `renforge_observe` snapshot, or post one physical key on that same interaction. A control uses `interaction` and `id` (a `controls` or `chrome` id). A key uses `interaction` and `key` and does not take an id. Immediately before input, the bridge checks that the interaction is still current and the frame is stable. It returns `stale`, `unstable`, `covered`, `disabled`, `missing`, `text_required`, `key_or_control`, or `unsupported` and does not post input when the check fails. Buttons and hotspots are clicked. An Input takes `text`, types it, and submits with Ren'Py `input_enter` (an empty string submits the field's default). `key` posts `KEYDOWN` and `KEYUP` for a-z, the arrows, escape, return, or space. `hold` true posts key-down only; `hold` false posts key-up only; omit `hold` for a tap. An unknown key is refused with that list. Bars, drags, and viewports are not actuated. Does not enable skip.",
+    "description": "Activate one control from an `renforge_observe` snapshot, or post one physical key on that same interaction. A control uses `interaction` and `id` (a `controls` or `chrome` id). A key uses `interaction` and `key` and does not take an id. Immediately before input, the bridge checks that the interaction is still current and the frame is stable. It returns `stale`, `unstable`, `covered`, `disabled`, `missing`, `text_required`, `key_or_control`, or `unsupported` and does not post input when the check fails. Buttons and hotspots are clicked. An Input takes `text`, replaces the current value (a prefilled name is not kept), and submits with Ren'Py `input_enter`. The field's allow, exclude, and length still apply. A value the field rejects returns `text_rejected` and is not submitted. An empty string clears the field and submits that. `key` posts `KEYDOWN` and `KEYUP` for a-z, the arrows, escape, return, or space. `hold` true posts key-down only; `hold` false posts key-up only; omit `hold` for a tap. An unknown key is refused with that list. Bars, drags, and viewports are not actuated. Does not enable skip.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -1091,7 +1091,7 @@
             }
           ],
           "default": null,
-          "description": "Text to type when the control's operation is `text`. Omit it for a click or a key."
+          "description": "Full replacement for an input control. Omit it for a click or a key."
         },
         "key": {
           "anyOf": [

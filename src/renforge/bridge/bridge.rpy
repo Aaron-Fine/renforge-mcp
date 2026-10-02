@@ -693,6 +693,89 @@ init python:
             getattr(getattr(widget, "__class__", None), "__name__", "unknown"),
         )
 
+    def _renforge_input_char_allowed(widget, character):
+        allow = getattr(widget, "allow", None)
+        exclude = getattr(widget, "exclude", None)
+        if allow:
+            search = getattr(allow, "search", None)
+            if callable(search):
+                if search(character) is None:
+                    return False
+            elif character not in allow:
+                return False
+        if exclude:
+            search = getattr(exclude, "search", None)
+            if callable(search):
+                if search(character) is not None:
+                    return False
+            elif character in exclude:
+                return False
+        return True
+
+    def _renforge_input_filtered(widget, text):
+        # Same limits Input.event applies while typing: allow, exclude, length.
+        length = getattr(widget, "length", None)
+        if isinstance(length, bool) or not isinstance(length, builtins.int) or length < 0:
+            length = None
+        accepted = ""
+        for character in text:
+            if not _renforge_input_char_allowed(widget, character):
+                continue
+            accepted += character
+            if length is not None and len(accepted) >= length:
+                break
+        return accepted
+
+    def _renforge_replace_input_text(widget, text):
+        """Put `text` in the field, dropping whatever was already there.
+
+        Returns the stored string, False when the field rejects it, or None
+        when this widget has no Ren'Py input value to replace.
+        """
+        filtered = _renforge_input_filtered(widget, text)
+        if text and not filtered:
+            return False
+        update = getattr(widget, "update_text", None)
+        if callable(update):
+            try:
+                widget.caret_pos = len(filtered)
+            except Exception:
+                pass
+            wrote = False
+            try:
+                update(filtered, True, True)
+                wrote = True
+            except TypeError:
+                pass
+            except Exception:
+                pass
+            if not wrote:
+                try:
+                    update(filtered, True)
+                except Exception:
+                    return False
+            current = getattr(widget, "content", None)
+            if current != filtered:
+                return False
+            return filtered
+        value = getattr(widget, "value", None)
+        set_text = getattr(value, "set_text", None) if value is not None else None
+        if not callable(set_text):
+            return None
+        try:
+            set_text(filtered)
+        except Exception:
+            return False
+        try:
+            widget.content = filtered
+        except Exception:
+            pass
+        try:
+            widget.caret_pos = len(filtered)
+        except Exception:
+            pass
+        return filtered
+
     def _renforge_h_send_input(payload):
         payload = payload or {}
         supplied = [
@@ -718,20 +801,30 @@ init python:
                 return {"ok": False, "error": "text must be a string"}
             if pygame is None:
                 return {"ok": False, "error": "pygame_sdl2 event API is unavailable"}
-            _focused, focus_error = _renforge_focused_input()
+            focused, focus_error = _renforge_focused_input()
             if focus_error is not None:
                 return {"ok": False, "error": focus_error}
-            for character in text:
-                event = pygame.event.Event(pygame.TEXTINPUT, {"text": character})
-                pygame.event.post(event)
+            replaced = _renforge_replace_input_text(focused, text)
+            if replaced is False:
+                return {"ok": False, "error": "text_rejected", "mode": "text"}
+            if replaced is None:
+                for character in text:
+                    event = pygame.event.Event(pygame.TEXTINPUT, {"text": character})
+                    pygame.event.post(event)
+                stored = text
+            else:
+                stored = replaced
             if submit:
                 renpy.exports.queue_event("input_enter")
-            return {
+            result = {
                 "ok": True,
                 "mode": "text",
-                "characters": len(text),
+                "characters": len(stored),
                 "submitted": submit,
             }
+            if replaced is not None:
+                result["replaced"] = True
+            return result
 
         if supplied[0] == "key":
             key = payload.get("key")
@@ -4414,20 +4507,36 @@ init python:
                         change_focus(focus)
                     except Exception:
                         pass
-            for character in text:
-                event = pygame.event.Event(pygame.TEXTINPUT, {"text": character})
-                pygame.event.post(event)
+            replaced = _renforge_replace_input_text(widget, text)
+            if replaced is False:
+                return {
+                    "ok": False,
+                    "error": "text_rejected",
+                    "operation": "text",
+                    "id": wanted,
+                    "interaction": interaction,
+                }
+            if replaced is None:
+                for character in text:
+                    event = pygame.event.Event(pygame.TEXTINPUT, {"text": character})
+                    pygame.event.post(event)
+                stored = text
+            else:
+                stored = replaced
             # renpy.input returns when the field receives input_enter. Typing
             # without submitting leaves the prompt up.
             renpy.exports.queue_event("input_enter")
-            return {
+            result = {
                 "ok": True,
                 "operation": "text",
                 "id": wanted,
                 "interaction": interaction,
-                "characters": len(text),
+                "characters": len(stored),
                 "submitted": True,
             }
+            if replaced is not None:
+                result["replaced"] = True
+            return result
         return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
 
     _RENFORGE_HANDLERS = {
