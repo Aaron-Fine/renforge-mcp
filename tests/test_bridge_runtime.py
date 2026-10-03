@@ -1973,9 +1973,28 @@ def test_poll_events_captures_labels_and_say_lines(running_bridge):
     assert ("label", "chapter1") in kinds
     assert ("say", "Hello there.") in kinds
     assert sum(1 for e in reply["events"] if e["type"] == "say") == 1
+    hello = next(e for e in reply["events"] if e["type"] == "say")
+    assert hello["who"] is None
+
+    class Character:
+        def __init__(self, name):
+            self.name = name
+
+    running_bridge.renpy.store.chef = Character("Chef")
+    running_bridge.renpy.store._last_say_who = "chef"
+    running_bridge.renpy.store._last_say_what = "{b}Listen up!{/b}"
+    for cb in config.all_character_callbacks:
+        cb("begin")
+        cb("show")
+
+    later = running_bridge.client.poll_events(since=reply["cursor"])
+    says = [e for e in later["events"] if e["type"] == "say"]
+    assert len(says) == 1
+    assert says[0]["who"] == "Chef"
+    assert says[0]["what"] == "{b}Listen up!{/b}"
 
     # `since=cursor` returns only newer events.
-    assert running_bridge.client.poll_events(since=reply["cursor"])["events"] == []
+    assert running_bridge.client.poll_events(since=later["cursor"])["events"] == []
 
 
 

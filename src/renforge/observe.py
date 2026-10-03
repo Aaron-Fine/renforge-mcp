@@ -339,6 +339,75 @@ def strip_text_tags(value: str) -> str:
     return "".join(out).replace("\ue000", "{").replace("\ue001", "}").strip()
 
 
+def crossed_transcript(events: list[Any], frames: list[Any]) -> list[dict[str, Any]]:
+    """Label changes and say lines, in the order the player reached them.
+
+    ``events`` are bridge label and say records with ``seq``. ``frames`` are
+    the stable snapshots ``advance_until`` already read, each stamped with
+    ``event_seq``. A say event and a frame that show the same line are one
+    entry. The label is recorded only when it changes. Text tags are removed.
+    """
+    ordered = [
+        event
+        for event in events
+        if isinstance(event, Mapping) and event.get("type") in {"label", "say"}
+    ]
+    ordered.sort(key=lambda event: event.get("seq") if isinstance(event.get("seq"), int) and not isinstance(event.get("seq"), bool) else 0)
+    notes: list[dict[str, Any]] = []
+    last_label: str | None = None
+    last_say: tuple[str | None, str] | None = None
+    index = 0
+
+    def emit_label(name: Any) -> None:
+        nonlocal last_label
+        # Ren'Py's own labels (_start, _main_menu, _gl_test) are not sections
+        # the player entered. A game label may still be named main_menu.
+        if not isinstance(name, str) or not name or name.startswith("_") or name == last_label:
+            return
+        last_label = name
+        notes.append({"type": "label", "label": name})
+
+    def emit_say(who: Any, what: Any) -> None:
+        nonlocal last_say
+        if not isinstance(what, str):
+            return
+        text = strip_text_tags(what)
+        if not text:
+            return
+        speaker = who.strip() if isinstance(who, str) and who.strip() else None
+        key = (speaker, text)
+        if key == last_say:
+            return
+        last_say = key
+        notes.append({"type": "say", "who": speaker, "what": text})
+
+    def drain(through: int) -> None:
+        nonlocal index
+        while index < len(ordered):
+            event = ordered[index]
+            seq = event.get("seq")
+            if isinstance(seq, bool) or not isinstance(seq, int) or seq > through:
+                break
+            index += 1
+            if event.get("type") == "label":
+                emit_label(event.get("label"))
+            else:
+                emit_say(event.get("who"), event.get("what"))
+
+    for frame in frames:
+        if not isinstance(frame, Mapping):
+            continue
+        seq = frame.get("event_seq")
+        if isinstance(seq, int) and not isinstance(seq, bool):
+            drain(seq)
+        emit_label(frame.get("label"))
+        dialogue = frame.get("dialogue")
+        if isinstance(dialogue, Mapping):
+            emit_say(dialogue.get("who"), dialogue.get("what"))
+    drain(2**31 - 1)
+    return notes
+
+
 def _dialogue(raw: Mapping[str, Any]) -> dict[str, Any] | None:
     dialogue = raw.get("dialogue")
     if not isinstance(dialogue, Mapping):

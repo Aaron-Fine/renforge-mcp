@@ -10,6 +10,7 @@ import pytest
 from renforge.observe import (
     apply_screenshot,
     classify,
+    crossed_transcript,
     guard_act,
     guard_dismiss,
     run_advance_until,
@@ -650,6 +651,114 @@ def test_advance_until_stops_at_max_steps_without_another_dismiss():
     assert result["stop"] == "max_steps"
     assert dismisses == [1]
     assert result["observation"]["interaction"] == 2
+
+
+def test_crossed_transcript_keeps_labels_queued_before_the_first_frame():
+    events = [
+        {"seq": 0, "type": "label", "label": "_start"},
+        {"seq": 1, "type": "label", "label": "advance_time"},
+        {"seq": 2, "type": "label", "label": "week1_challenge1_cliff"},
+        {"seq": 3, "type": "say", "who": "Chef", "what": "{b}Listen up!{/b}"},
+        {"seq": 4, "type": "business", "name": "ignored"},
+        {"seq": 6, "type": "label", "label": "week1_challenge1_hottub"},
+        {"seq": 7, "type": "say", "who": None, "what": "Chris suddenly appears on the beach with you."},
+    ]
+    frames = [
+        {
+            "event_seq": 5,
+            "label": "week1_challenge1_cliff",
+            "dialogue": {"who": "Chef", "what": "{b}Listen up!{/b}"},
+        },
+        {
+            "event_seq": 8,
+            "label": "week1_challenge1_hottub",
+            "dialogue": {"who": None, "what": "Chris suddenly appears on the beach with you."},
+        },
+    ]
+
+    assert crossed_transcript(events, frames) == [
+        {"type": "label", "label": "advance_time"},
+        {"type": "label", "label": "week1_challenge1_cliff"},
+        {"type": "say", "who": "Chef", "what": "Listen up!"},
+        {"type": "label", "label": "week1_challenge1_hottub"},
+        {"type": "say", "who": None, "what": "Chris suddenly appears on the beach with you."},
+    ]
+
+
+def test_crossed_transcript_records_a_line_the_callback_missed():
+    frames = [
+        {"event_seq": 4, "label": "start", "dialogue": {"who": None, "what": "One{p}Two"}},
+        {"event_seq": 5, "label": "start", "dialogue": {"who": "Wisp", "what": "You're awake!"}},
+    ]
+
+    assert crossed_transcript([], frames) == [
+        {"type": "label", "label": "start"},
+        {"type": "say", "who": None, "what": "One\nTwo"},
+        {"type": "say", "who": "Wisp", "what": "You're awake!"},
+    ]
+
+
+def test_advance_until_returns_lines_queued_before_its_first_look(monkeypatch):
+    from renforge.tools import live
+
+    frames = [
+        _raw(
+            interaction=1,
+            label="week1_challenge1_cliff",
+            dialogue={"who": "Chef", "what": "Listen up!"},
+            event_seq=5,
+            say_dismiss="dismiss",
+        ),
+        _raw(
+            interaction=2,
+            label="week1_challenge1_hottub",
+            dialogue=None,
+            event_seq=8,
+            say_dismiss=None,
+            screens=[{"name": "minigame_hottub", "layer": "master", "modal": True}],
+            elements=[_element(screen="minigame_hottub", text="Skip")],
+        ),
+    ]
+    index = {"i": 0}
+
+    class Client:
+        def __init__(self):
+            self._config = type("Cfg", (), {"host": "127.0.0.1", "port": 9, "token": "tok"})()
+
+        def observe(self, screenshot=False, deadline=None):
+            return frames[min(index["i"], len(frames) - 1)]
+
+        def dismiss_if(self, interaction, deadline=None):
+            index["i"] += 1
+            return {"ok": True}
+
+        def poll_events(self, since=0):
+            events = [
+                {"seq": 1, "type": "label", "label": "freeroam_cabins"},
+                {"seq": 3, "type": "label", "label": "advance_time"},
+                {"seq": 4, "type": "label", "label": "week1_challenge1_cliff"},
+                {"seq": 6, "type": "label", "label": "week1_challenge1_hottub"},
+            ]
+            return {"events": [event for event in events if event["seq"] > since], "cursor": 8}
+
+    client = Client()
+    monkeypatch.setattr(live, "_client", lambda _path: client)
+    live._crossed_after["/tmp/renforge-crossed"] = (("127.0.0.1", 9, "tok"), 2)
+
+    result = live.advance_until("/tmp/renforge-crossed", max_steps=5, timeout=2)
+
+    assert result["stop"] == "choose"
+    assert result["steps"] == 1
+    assert result["crossed"] == [
+        {"type": "label", "label": "advance_time"},
+        {"type": "label", "label": "week1_challenge1_cliff"},
+        {"type": "say", "who": "Chef", "what": "Listen up!"},
+        {"type": "label", "label": "week1_challenge1_hottub"},
+    ]
+    assert live._crossed_after["/tmp/renforge-crossed"][1] == 8
+
+    again = live.advance_until("/tmp/renforge-crossed", max_steps=1, timeout=2)
+    assert again["crossed"] == []
 
 
 def test_advance_until_rejects_bad_budgets():

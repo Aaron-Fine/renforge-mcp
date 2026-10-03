@@ -4552,6 +4552,7 @@ init python:
                 "unclassified": bool(walk_truncated),
             },
             "frame_hash": None,
+            "event_seq": int(getattr(bridge, "event_seq", 0) or 0) if bridge is not None else 0,
         }
         if screenshot:
             try:
@@ -6348,14 +6349,28 @@ init python:
 
         def _renforge_on_say(event, **kwargs):
             # Callbacks fire several times per line ("begin"/"show"/"end"); record
-            # the text once, on the first event that carries it.
+            # the text once, on the first event that carries it. 8.3+ passes
+            # what. 8.0–8.2 do not, and the statement has already stored it.
             what = kwargs.get("what")
+            if not isinstance(what, builtins.str) or not what:
+                try:
+                    stored = getattr(renpy.store, "_last_say_what", None)
+                except Exception:
+                    stored = None
+                what = stored if isinstance(stored, builtins.str) else None
             if event in ("begin", "show") and what and what != bridge.last_say:
                 previous_say = bridge.last_say
                 bridge.last_say = what
-                who = kwargs.get("who")
-                bridge.last_who = who if isinstance(who, str) else None
-                bridge.push_event("say", {"what": what})
+                who_expr = None
+                try:
+                    who_expr = getattr(renpy.store, "_last_say_who", None)
+                except Exception:
+                    who_expr = None
+                who = _renforge_character_display_name(who_expr)
+                if not isinstance(who, builtins.str):
+                    who = None
+                bridge.last_who = who
+                bridge.push_event("say", {"what": what, "who": who})
                 try:
                     prefs = getattr(renpy.store, "_preferences", None)
                     afm = bool(getattr(prefs, "afm_enable", False)) if prefs is not None else False

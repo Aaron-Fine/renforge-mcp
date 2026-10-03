@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..autopilot import autopilot as _autopilot
-from ..observe import apply_screenshot, classify, run_advance_until
+from ..observe import apply_screenshot, classify, crossed_transcript, run_advance_until
 from ..bridge.client import BridgeClient, BridgeError
 from ..bridge.launcher import (
     BridgeSession,
@@ -1005,6 +1005,30 @@ def advance(project_path: str) -> dict:
     return _with_client(project_path, lambda c: c.advance())
 
 
+# Say and label events already queued when advance_until starts belong to that
+# call. The cursor is the event_seq of the last observe or advance_until for
+# this bridge process. A new launch starts again at zero.
+_crossed_after: dict[str, tuple[tuple[str, int, str], int]] = {}
+
+
+def _bridge_session(client: BridgeClient) -> tuple[str, int, str]:
+    config = client._config
+    return (config.host, int(config.port), config.token)
+
+
+def _crossed_since(project_path: str, client: BridgeClient) -> int:
+    slot = _crossed_after.get(project_path)
+    if slot is None or slot[0] != _bridge_session(client):
+        return 0
+    return slot[1]
+
+
+def _mark_crossed(project_path: str, client: BridgeClient, seq: Any) -> None:
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+        return
+    _crossed_after[project_path] = (_bridge_session(client), seq)
+
+
 def _observation_from_reply(reply: dict) -> dict:
     if not isinstance(reply, dict):
         return {"ok": False, "error": "observe reply must be an object"}
@@ -1027,7 +1051,11 @@ def observe(project_path: str, *, screenshot: bool = True) -> dict:
     """Read one interaction snapshot. ``stable`` false is still returned."""
 
     def _handler(client: BridgeClient) -> dict:
-        return _observation_from_reply(client.observe(screenshot=bool(screenshot)))
+        reply = client.observe(screenshot=bool(screenshot))
+        snapshot = _observation_from_reply(reply if isinstance(reply, dict) else {})
+        if isinstance(reply, dict) and snapshot.get("ok") is not False:
+            _mark_crossed(project_path, client, reply.get("event_seq"))
+        return snapshot
 
     return _with_client(project_path, _handler)
 
@@ -1121,6 +1149,8 @@ def advance_until(
         }
 
     png_box: dict[str, bytes] = {}
+    frames: list[dict[str, Any]] = []
+    since = _crossed_since(project_path, client)
     wall_end = time.monotonic() + float(timeout) if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) else time.monotonic()
 
     def fetch(screenshot: bool) -> dict:
@@ -1146,6 +1176,18 @@ def advance_until(
         if isinstance(png, bytes):
             png_box["png"] = png
         raw["ok"] = True
+        seq = raw.get("event_seq")
+        # A frame at or before the watermark was already returned. Lines queued
+        # after that watermark still arrive through poll_events.
+        already = isinstance(seq, int) and not isinstance(seq, bool) and seq <= since
+        if raw.get("stable") is True and not already:
+            frames.append(
+                {
+                    "label": raw.get("label"),
+                    "dialogue": raw.get("dialogue"),
+                    "event_seq": seq,
+                }
+            )
         return raw
 
     def dismiss(interaction: int) -> dict:
@@ -1170,6 +1212,18 @@ def advance_until(
     if isinstance(png, bytes) and isinstance(observation, dict):
         if hashlib.sha256(png).hexdigest() == observation.get("frame_hash"):
             result["_png"] = png
+    if isinstance(result, dict):
+        try:
+            polled = client.poll_events(since)
+        except BridgeError:
+            polled = {"events": [], "cursor": since}
+        events = polled.get("events") if isinstance(polled, dict) else None
+        result["crossed"] = crossed_transcript(events if isinstance(events, list) else [], frames)
+        cursor = polled.get("cursor") if isinstance(polled, dict) else None
+        if isinstance(cursor, int) and not isinstance(cursor, bool):
+            _mark_crossed(project_path, client, cursor)
+        else:
+            _mark_crossed(project_path, client, since)
     return result
 
 

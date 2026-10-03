@@ -242,6 +242,32 @@ def test_live_advance_until_stops_on_village_gate_choices(sdk, demo_copy: Path) 
         assert result.get("stop") == "choose", result
         assert result.get("steps", 0) >= 1, result
         assert observation.get("label") == "village_gate", observation
+        crossed = result.get("crossed")
+        assert isinstance(crossed, list) and crossed, result
+        assert any(
+            item.get("type") == "say"
+            and item.get("what") == "The village of Emberfall sleeps under a bruised dawn sky."
+            and item.get("who") is None
+            for item in crossed
+        ), crossed
+        assert any(
+            item.get("type") == "say" and item.get("who") == "Wisp" for item in crossed
+        ), crossed
+        assert any(
+            item.get("type") == "label" and item.get("label") == "village_gate" for item in crossed
+        ), crossed
+        village = next(i for i, item in enumerate(crossed) if item.get("label") == "village_gate")
+        ember = next(
+            i
+            for i, item in enumerate(crossed)
+            if item.get("what") == "The village of Emberfall sleeps under a bruised dawn sky."
+        )
+        assert ember < village, crossed
+        assert all(
+            not str(item.get("label", "")).startswith("_")
+            for item in crossed
+            if item.get("type") == "label"
+        ), crossed
         control_ids = {item.get("id") for item in observation.get("controls") or []}
         assert {
             "village_gate_choices/demo_lantern_take",

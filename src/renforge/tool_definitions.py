@@ -521,7 +521,9 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "dismiss. A hub whose screen is in `config.overlay_screens` is chrome, so that hard pause stops as "
             "`wait` and those buttons stay in `chrome` for `renforge_act`. Custom displayables that never enter "
             "`focus_list` are not guessed. `max_steps` bounds dismiss posts (1 to 200). `timeout` is the wall-clock "
-            "budget in seconds (0.1 to 120)."
+            "budget in seconds (0.1 to 120). `crossed` lists label changes and say lines since the previous "
+            "observe or advance_until, including lines already queued when this call starts. A say entry has "
+            "`who` and `what` with text tags removed. `crossed` does not change where the call stops."
         ),
         annotations=_ann(
             readOnlyHint=False,
