@@ -169,7 +169,8 @@ def test_hard_pause_imagebuttons_choose_by_idle_image_name():
 
     assert snapshot["forward"] == "choose"
     assert snapshot["screens"][0]["modal"] is False
-    assert _ids(snapshot) == ["freeroam_cabins/button_cabin_door_1.png"]
+    assert _ids(snapshot) == ["freeroam_cabins/Function"]
+    assert snapshot["controls"][0]["image"] == "button_cabin_door_1.png"
     assert snapshot["controls"][0]["synthetic"] is False
     assert snapshot["controls"][0]["action"] == "Function"
     assert guard_dismiss(snapshot, 4) == "not_dismiss"
@@ -232,6 +233,7 @@ def test_modal_call_screen_chooses_without_say_behavior():
 
     assert snapshot["forward"] == "choose"
     assert _ids(snapshot) == ["codex/codex_close"]
+    assert snapshot["controls"][0]["image"] == "close.png"
 
 
 def test_imagebutton_and_hotspot_are_clickable_buttons():
@@ -316,19 +318,80 @@ def test_disabled_hard_pause_control_does_not_force_choose():
     assert guard_act(snapshot, 4, "map/door") == "disabled"
 
 
-def test_duplicate_image_names_gain_a_suffix():
+def test_action_names_the_control_and_image_only_splits_siblings():
     snapshot = classify(
         _raw(
             say_dismiss="dismiss_hard_pause",
-            screens=[{"name": "map", "layer": "master", "modal": False}],
+            screens=[{"name": "sandbox", "layer": "screens", "modal": False}],
             elements=[
-                _element(screen="map", role="imagebutton", image_name="door.png", ordinal=0),
-                _element(screen="map", role="imagebutton", image_name="images/door.png", ordinal=1),
+                _element(
+                    screen="sandbox",
+                    role="imagebutton",
+                    text=None,
+                    image_name="images/button_time.png",
+                    action="Function(AdvanceTime)",
+                    ordinal=0,
+                ),
+                _element(
+                    screen="sandbox",
+                    role="imagebutton",
+                    text=None,
+                    image_name="images/button_map.png",
+                    action="Function(ShowMap)",
+                    ordinal=1,
+                ),
+                _element(
+                    screen="map",
+                    role="imagebutton",
+                    text=None,
+                    image_name="ok.png",
+                    action="Return",
+                    ordinal=0,
+                ),
+                _element(
+                    screen="map",
+                    role="imagebutton",
+                    text=None,
+                    image_name="cancel.png",
+                    action="Return",
+                    ordinal=1,
+                ),
+                _element(
+                    screen="map",
+                    role="imagebutton",
+                    text=None,
+                    image_name="door.png",
+                    action="Return",
+                    ordinal=2,
+                ),
+                _element(
+                    screen="map",
+                    role="imagebutton",
+                    text=None,
+                    image_name="images/door.png",
+                    action="Return",
+                    ordinal=3,
+                ),
             ],
         )
     )
 
-    assert _ids(snapshot) == ["map/door.png", "map/door.png#2"]
+    assert _ids(snapshot) == [
+        "sandbox/Function(AdvanceTime)",
+        "sandbox/Function(ShowMap)",
+        "map/Return/ok.png",
+        "map/Return/cancel.png",
+        "map/Return/door.png",
+        "map/Return/door.png#2",
+    ]
+    assert [item["image"] for item in snapshot["controls"]] == [
+        "button_time.png",
+        "button_map.png",
+        "ok.png",
+        "cancel.png",
+        "door.png",
+        "door.png",
+    ]
 
 
 def test_modal_say_stops_kinetic_advance():
@@ -481,7 +544,8 @@ def test_advance_until_does_not_dismiss_a_hard_pause_hub():
     assert result["stop"] == "choose"
     assert result["steps"] == 0
     assert dismisses == []
-    assert result["observation"]["controls"][0]["id"] == "map/door.png"
+    assert result["observation"]["controls"][0]["id"] == "map/Return"
+    assert result["observation"]["controls"][0]["image"] == "door.png"
 
 
 def test_advance_until_reports_stalled_when_dismiss_does_not_advance():

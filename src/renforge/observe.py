@@ -83,33 +83,59 @@ def _widget_id(value: Any) -> str | None:
     return text or None
 
 
+def _action_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
 def assign_control_ids(elements: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Assign canonical ids. The bridge copies this order.
 
-    Widget id, else menu item index, else idle-image basename, else
-    ``screen/role/ordinal`` with ``synthetic`` set. Duplicates gain ``#2``.
+    Widget id, else menu item index, else the action string, else the
+    idle-image basename, else ``screen/role/ordinal`` with ``synthetic``
+    set. An action shared by siblings gains that image basename. Further
+    duplicates gain ``#2``. ``image`` is always the basename, or null.
     """
-    used: dict[str, int] = {}
-    assigned: list[dict[str, Any]] = []
+    drafts: list[tuple[str, str, str | None, str | None, str, bool, Mapping[str, Any]]] = []
+    action_counts: dict[str, int] = {}
     for fallback, element in enumerate(elements):
         screen = _screen_name(element.get("screen"))
         role = normalize_role(element.get("role"))
         widget_id = _widget_id(element.get("widget_id"))
         menu_index = _menu_index(element.get("menu_index"))
-        image_name = image_basename(element.get("image_name"))
+        image = image_basename(element.get("image_name"))
+        action = _action_text(element.get("action"))
         synthetic = False
         if widget_id:
             base = f"{screen}/{widget_id}" if screen else widget_id
+            source = "widget"
         elif menu_index is not None:
             base = f"{screen or 'choice'}/item/{menu_index}"
-        elif image_name:
-            base = f"{screen or 'screen'}/{image_name}"
+            source = "menu"
+        elif action:
+            base = f"{screen or 'screen'}/{action}"
+            source = "action"
+        elif image:
+            base = f"{screen or 'screen'}/{image}"
+            source = "image"
         else:
             ordinal = _menu_index(element.get("ordinal"))
             if ordinal is None:
                 ordinal = fallback
             base = f"{screen or 'screen'}/{role}/{ordinal}"
+            source = "synthetic"
             synthetic = True
+        if source == "action":
+            action_counts[base] = action_counts.get(base, 0) + 1
+        drafts.append((base, source, image, screen, role, synthetic, element))
+
+    used: dict[str, int] = {}
+    assigned: list[dict[str, Any]] = []
+    for base, source, image, screen, role, synthetic, element in drafts:
+        if source == "action" and action_counts.get(base, 0) > 1 and image:
+            base = f"{base}/{image}"
         count = used.get(base, 0)
         used[base] = count + 1
         control_id = base if count == 0 else f"{base}#{count + 1}"
@@ -117,6 +143,7 @@ def assign_control_ids(elements: list[Mapping[str, Any]]) -> list[dict[str, Any]
         record["id"] = control_id
         record["role"] = role
         record["screen"] = screen
+        record["image"] = image
         record["operations"] = operations_for(role)
         record["synthetic"] = synthetic
         assigned.append(record)
@@ -164,12 +191,14 @@ def _public_control(control: Mapping[str, Any]) -> dict[str, Any]:
     bounds = control.get("bounds") if isinstance(control.get("bounds"), dict) else None
     action = control.get("action") if isinstance(control.get("action"), str) else None
     text = control.get("text") if isinstance(control.get("text"), str) else None
+    image = control.get("image") if isinstance(control.get("image"), str) else None
     return {
         "id": control.get("id"),
         "role": control.get("role"),
         "text": text or None,
         "screen": control.get("screen"),
         "action": action,
+        "image": image or None,
         "operations": list(control.get("operations") or []),
         "enabled": enabled,
         "clickable": clickable,

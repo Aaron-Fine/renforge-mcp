@@ -1976,6 +1976,45 @@ init python:
         finally:
             _renforge_reset_testmouse_state()
 
+    def _renforge_focus_action_value(focus):
+        # Button.per_interact copies a sensitive action onto clicked, and
+        # Button.event runs clicked. Prefer that, then the declared action.
+        widget = getattr(focus, "widget", None)
+        for owner in (widget, focus):
+            if owner is None:
+                continue
+            clicked = getattr(owner, "clicked", None)
+            if clicked is not None:
+                return clicked
+            action = getattr(owner, "action", None)
+            if action is not None:
+                return action
+        return None
+
+    def _renforge_invoke_focus_action(focus):
+        """Run the focus action the way Button.handle_click does.
+
+        Returns True when an action object was run. Returns False when there
+        is nothing to run, so the caller can click the rectangle instead.
+        A returned value ends the interaction. Jump and EndInteraction
+        propagate.
+        """
+        action = _renforge_focus_action_value(focus)
+        if action is None:
+            return False
+        behavior = getattr(getattr(renpy, "display", None), "behavior", None)
+        run = getattr(behavior, "run", None)
+        if not callable(run):
+            run = getattr(renpy, "run", None)
+        if not callable(run):
+            return False
+        rv = run(action)
+        if rv is not None:
+            end_interaction = getattr(renpy, "end_interaction", None)
+            if callable(end_interaction):
+                end_interaction(rv)
+        return True
+
     def _renforge_click_focus(focus):
         """Click a focus center through shared synthetic input path."""
         fx = getattr(focus, "x", None)
@@ -3915,9 +3954,11 @@ init python:
 
     def _renforge_assign_observe_ids(records):
         # Mirror renforge.observe.assign_control_ids. Widget id, else menu item,
-        # else idle-image basename, else screen/role/ordinal. Duplicates gain #2.
-        used = {}
-        assigned = []
+        # else the action string, else idle-image basename, else
+        # screen/role/ordinal. A shared action gains the image basename.
+        # Duplicates gain #2. image is always the basename, or null.
+        drafts = []
+        action_counts = {}
         for fallback, element in enumerate(records):
             screen = element.get("screen")
             if isinstance(screen, str):
@@ -3934,26 +3975,47 @@ init python:
             if isinstance(menu_index, bool) or not isinstance(menu_index, builtins.int):
                 menu_index = None
             image_name = _renforge_observe_basename(element.get("image_name"))
+            action = element.get("action")
+            if isinstance(action, str):
+                action = action.strip() or None
+            else:
+                action = None
             synthetic = False
             if widget_id:
-                base = "%s/%s" % (screen, widget_id) if screen else widget_id
+                base = (screen + "/" + widget_id) if screen else widget_id
+                source = "widget"
             elif menu_index is not None:
-                base = "%s/item/%s" % (screen or "choice", menu_index)
+                base = (screen or "choice") + "/item/" + str(menu_index)
+                source = "menu"
+            elif action:
+                base = (screen or "screen") + "/" + action
+                source = "action"
             elif image_name:
-                base = "%s/%s" % (screen or "screen", image_name)
+                base = (screen or "screen") + "/" + image_name
+                source = "image"
             else:
                 ordinal = element.get("ordinal")
                 if isinstance(ordinal, bool) or not isinstance(ordinal, builtins.int):
                     ordinal = fallback
-                base = "%s/%s/%s" % (screen or "screen", role, ordinal)
+                base = (screen or "screen") + "/" + role + "/" + str(ordinal)
+                source = "synthetic"
                 synthetic = True
+            if source == "action":
+                action_counts[base] = action_counts.get(base, 0) + 1
+            drafts.append((base, source, image_name, screen, role, synthetic, element))
+        used = {}
+        assigned = []
+        for base, source, image_name, screen, role, synthetic, element in drafts:
+            if source == "action" and action_counts.get(base, 0) > 1 and image_name:
+                base = base + "/" + image_name
             count = used.get(base, 0)
             used[base] = count + 1
-            control_id = base if count == 0 else "%s#%s" % (base, count + 1)
+            control_id = base if count == 0 else base + "#" + str(count + 1)
             copied = dict(element)
             copied["id"] = control_id
             copied["role"] = role
             copied["screen"] = screen
+            copied["image"] = image_name
             copied["operations"] = _renforge_observe_operations(role)
             copied["synthetic"] = synthetic
             assigned.append(copied)
@@ -4474,6 +4536,17 @@ init python:
                 "screen": control.get("screen"),
                 "action": control.get("action"),
             }
+            try:
+                if _renforge_invoke_focus_action(focus):
+                    result["via"] = "action"
+                    return result
+            except Exception as exc:
+                if not _renforge_is_script_control_flow(exc):
+                    raise
+                result["via"] = "action"
+                setattr(exc, "renforge_result", result)
+                raise
+            result["via"] = "pointer"
             try:
                 x, y = _renforge_click_focus(focus)
             except Exception as exc:

@@ -1484,6 +1484,131 @@ def _arm_stable_interaction(running_bridge, generation=1):
     return bridge
 
 
+def test_act_runs_the_button_action_and_image_only_splits_siblings(running_bridge):
+    """An image button is named by its action and activated by running it."""
+    from renforge.observe import classify
+
+    renpy = running_bridge.renpy
+
+    def AdvanceTime():
+        return None
+
+    class Function:
+        def __init__(self):
+            self.callable = AdvanceTime
+            self.args = ()
+            self.kwargs = {}
+            self.calls = 0
+
+        def __call__(self):
+            self.calls += 1
+            jump = getattr(self, "jump", None)
+            if jump is not None:
+                raise jump("beach")
+            return "advanced"
+
+    class Return:
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self):
+            self.calls += 1
+            return None
+
+    class Idle:
+        def __init__(self, filename):
+            self.filename = filename
+
+    class ImageButton:
+        def __init__(self, filename, action=None):
+            self.state_children = {"idle_": Idle(filename)}
+            self.clicked = action
+            self.action = action
+
+    def _focus(widget, x):
+        focus = _FakeFocus("", x, 0, 40, 40, widget=widget)
+        focus.screen_name = "sandbox"
+        return focus
+
+    advance = Function()
+    okay = Return()
+    cancel = Return()
+    hourglass = _focus(ImageButton("images/button_time.png", advance), 0)
+    ok = _focus(ImageButton("images/ok.png", okay), 50)
+    dismissed = _focus(ImageButton("images/cancel.png", cancel), 100)
+    plain_widget = ImageButton("images/button_plain.png")
+    plain = _focus(plain_widget, 150)
+    _arm_stable_interaction(running_bridge, generation=5)
+    renpy.display.focus.focus_list[:] = [hourglass, ok, dismissed, plain]
+
+    ended = []
+
+    def _run(action):
+        if action is None:
+            return None
+        if isinstance(action, (list, tuple)):
+            rv = None
+            for item in action:
+                new_rv = _run(item)
+                if new_rv is not None:
+                    rv = new_rv
+            return rv
+        return action()
+
+    renpy.display.behavior.run = _run
+    renpy.end_interaction = lambda value: ended.append(value)
+
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    by_id = {item["id"]: item for item in snapshot["controls"]}
+    assert set(by_id) == {
+        "sandbox/Function(AdvanceTime)",
+        "sandbox/Return/ok.png",
+        "sandbox/Return/cancel.png",
+        "sandbox/button_plain.png",
+    }
+    assert by_id["sandbox/Function(AdvanceTime)"]["image"] == "button_time.png"
+    assert by_id["sandbox/Return/ok.png"]["image"] == "ok.png"
+
+    reply = running_bridge.client.act(
+        interaction=5,
+        control_id="sandbox/Function(AdvanceTime)",
+    )
+    assert reply.get("ok") is True, reply
+    assert reply["via"] == "action"
+    assert "x" not in reply
+    assert advance.calls == 1
+    assert ended == ["advanced"]
+    assert renpy._clicks == []
+    assert renpy._pygame_events == []
+
+    ok.widget.enabled = False
+    disabled = running_bridge.client.act(interaction=5, control_id="sandbox/Return/ok.png")
+    assert disabled.get("ok") is False and disabled.get("error") == "disabled", disabled
+    assert okay.calls == 0
+    assert renpy._clicks == []
+
+    pointed = running_bridge.client.act(interaction=5, control_id="sandbox/button_plain.png")
+    assert pointed.get("ok") is True, pointed
+    assert pointed["via"] == "pointer"
+    assert (pointed["x"], pointed["y"]) == (170, 20)
+    assert renpy._clicks == [(1, 170, 20)]
+    assert advance.calls == 1
+
+    class JumpOut(Exception):
+        pass
+
+    renpy.game.JumpOutException = JumpOut
+    advance.jump = JumpOut
+    with pytest.raises(JumpOut) as raised:
+        running_bridge.globs["_renforge_h_act"](
+            {"interaction": 5, "id": "sandbox/Function(AdvanceTime)"}
+        )
+    preserved = getattr(raised.value, "renforge_result", None)
+    assert preserved["via"] == "action"
+    assert preserved["ok"] is True
+    assert renpy._clicks == [(1, 170, 20)]
+
+
 def test_act_key_is_physical_and_refused_when_the_interaction_changed(running_bridge):
     import sys
 
