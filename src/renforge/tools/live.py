@@ -1032,6 +1032,10 @@ def observe(project_path: str, *, screenshot: bool = True) -> dict:
     return _with_client(project_path, _handler)
 
 
+def _act_number(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float))
+
+
 def act(
     project_path: str,
     interaction: int,
@@ -1039,13 +1043,20 @@ def act(
     text: str | None = None,
     key: str | None = None,
     hold: bool | None = None,
+    value: int | float | None = None,
+    x: int | float | None = None,
+    y: int | float | None = None,
+    drop: str | None = None,
 ) -> dict:
     """Activate one control, or post one physical key, re-checked on the main thread."""
     if isinstance(interaction, bool) or not isinstance(interaction, int):
         return {"ok": False, "error": "stale"}
     has_id = isinstance(control_id, str) and bool(control_id)
     has_key = key is not None
+    has_number = value is not None or x is not None or y is not None or drop is not None
     if has_id and has_key:
+        return {"ok": False, "error": "key_or_control"}
+    if has_key and has_number:
         return {"ok": False, "error": "key_or_control"}
     if not has_id and not has_key:
         return {"ok": False, "error": "missing"}
@@ -1053,6 +1064,14 @@ def act(
         return {"ok": False, "error": "unknown key %r; accepted keys: a-z, up, down, left, right, escape, return, space" % (key,)}
     if text is not None and not isinstance(text, str):
         return {"ok": False, "error": "text_required"}
+    if value is not None and not _act_number(value):
+        return {"ok": False, "error": "value_required"}
+    if x is not None and not _act_number(x):
+        return {"ok": False, "error": "value_required"}
+    if y is not None and not _act_number(y):
+        return {"ok": False, "error": "value_required"}
+    if drop is not None and not isinstance(drop, str):
+        return {"ok": False, "error": "unsupported"}
     if hold is not None and not isinstance(hold, bool):
         return {"ok": False, "error": "unsupported"}
 
@@ -1063,6 +1082,10 @@ def act(
             text=text,
             key=key,
             hold=hold,
+            value=value,
+            x=x,
+            y=y,
+            drop=drop,
         )
 
     return _with_client(project_path, _handler)

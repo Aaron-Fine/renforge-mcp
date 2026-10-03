@@ -1374,6 +1374,29 @@ def test_action_strings_name_setvariable_function_and_camper(running_bridge):
         'Function(ChangeLocation, newLocation="beach")'
     )
 
+    class SetDict:
+        def __init__(self):
+            self.dict = {}
+            self.key = "flag"
+            self.value = True
+
+    assert format_action(SetDict()) == 'SetDict("flag", True)'
+
+    class ToggleDict:
+        def __init__(self):
+            self.dict = {}
+            self.key = "flag"
+            self.true_value = True
+            self.false_value = False
+
+    assert format_action(ToggleDict()) == 'ToggleDict("flag", True, False)'
+
+    class SensitiveIf:
+        def __init__(self, expression):
+            self.expression = expression
+
+    assert format_action(SensitiveIf(SetVariable())) == 'SetVariable("show_button", False)'
+
     long_url = "https://example.test/" + ("a" * 220)
 
     class OpenURL:
@@ -1607,6 +1630,150 @@ def test_act_runs_the_button_action_and_image_only_splits_siblings(running_bridg
     assert preserved["via"] == "action"
     assert preserved["ok"] is True
     assert renpy._clicks == [(1, 170, 20)]
+
+
+def test_act_sets_adjustments_and_drops_a_named_drag(running_bridge):
+    """Bars, viewports, and drags are driven through the objects Ren'Py already calls."""
+    from renforge.observe import classify
+
+    renpy = running_bridge.renpy
+
+    class Adjustment:
+        def __init__(self, value, span):
+            self.value = value
+            self.range = span
+            self.step = 1
+            self.page = 10
+
+        def change(self, value):
+            if value < 0:
+                value = 0
+            if value > self.range:
+                value = self.range
+            self.value = value
+            return None
+
+    class Preference:
+        def get_selected(self):
+            return True
+
+    class Bar:
+        def __init__(self, adjustment):
+            self.adjustment = adjustment
+            self.action = Preference()
+            self.mcp_id = "volume"
+
+    class Viewport:
+        def __init__(self, horizontal, vertical):
+            self.xadjustment = horizontal
+            self.yadjustment = vertical
+
+    class Drag:
+        def __init__(self, name, filename, x):
+            self.drag_name = name
+            self.draggable = name != "slot"
+            self.droppable = True
+            self.child = types.SimpleNamespace(filename=filename)
+            self.x, self.y, self.w, self.h = x, 0, 40, 40
+            self.clicked = None
+            self.dragged = None
+            self.dropped = None
+
+    class ScreenDisplayable:
+        def __init__(self, widgets, children):
+            self.screen_name = ("puzzle", None)
+            self.layer = "screens"
+            self.modal = False
+            self.hiding = False
+            self.widgets = widgets
+            self.children = children
+            self.child = children[0]
+
+    volume = Adjustment(2, 10)
+    horizontal = Adjustment(0, 100)
+    vertical = Adjustment(5, 80)
+    bar = Bar(volume)
+    page = Viewport(horizontal, vertical)
+    towel = Drag("towel", "images/towel.png", 0)
+    slot = Drag("slot", "images/slot.png", 50)
+    calls = []
+
+    def clicked():
+        calls.append("clicked")
+        return None
+
+    def dragged(joined, drop):
+        calls.append(("dragged", None if drop is None else drop.drag_name, joined[0] is towel))
+        return None
+
+    def dropped(target, joined):
+        calls.append(("dropped", target.drag_name))
+        return None
+
+    towel.clicked = clicked
+    towel.dragged = dragged
+    slot.dropped = dropped
+    screen = ScreenDisplayable({"page": page}, [page, towel, slot])
+    _arm_stable_interaction(running_bridge, generation=6)
+    renpy.game.context = lambda: types.SimpleNamespace(
+        interacting=True,
+        scene_lists=types.SimpleNamespace(
+            layers={"screens": [types.SimpleNamespace(displayable=screen)]}
+        ),
+    )
+    renpy.display.interface.ongoing_transition = {}
+    focus = _FakeFocus("", 200, 200, 80, 16, widget=bar)
+    focus.screen_name = "puzzle"
+    renpy.display.focus.focus_list[:] = [focus]
+
+    def _run(action, *args):
+        return action(*args)
+
+    renpy.display.behavior.run = _run
+
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    by_id = {item["id"]: item for item in snapshot["controls"]}
+    assert set(by_id) == {"puzzle/volume", "puzzle/page", "puzzle/towel", "puzzle/slot"}
+    assert by_id["puzzle/volume"]["operations"] == ["value"]
+    assert by_id["puzzle/volume"]["adjustment"] == {"value": 2, "range": 10, "step": 1, "page": 10}
+    assert by_id["puzzle/volume"]["selected"] is True
+    assert by_id["puzzle/page"]["adjustment"]["x"]["range"] == 100
+    assert by_id["puzzle/page"]["adjustment"]["y"]["value"] == 5
+    assert by_id["puzzle/towel"]["image"] == "towel.png"
+    assert by_id["puzzle/towel"]["operations"] == ["drop"]
+
+    valued = running_bridge.client.act(interaction=6, control_id="puzzle/volume", value=11)
+    assert valued.get("ok") is True, valued
+    assert valued["via"] == "action"
+    assert valued["value"] == 10
+    assert volume.value == 10
+
+    shifted = running_bridge.client.act(interaction=6, control_id="puzzle/page", x=3, y=4)
+    assert shifted.get("ok") is True, shifted
+    assert shifted["x"] == 3
+    assert shifted["y"] == 4
+    assert horizontal.value == 3
+    assert vertical.value == 4
+
+    clicked_reply = running_bridge.client.act(interaction=6, control_id="puzzle/towel")
+    assert clicked_reply.get("ok") is True, clicked_reply
+    assert clicked_reply["operation"] == "click"
+    assert calls == ["clicked"]
+
+    dropped_reply = running_bridge.client.act(
+        interaction=6, control_id="puzzle/towel", drop="puzzle/slot"
+    )
+    assert dropped_reply.get("ok") is True, dropped_reply
+    assert dropped_reply["operation"] == "drop"
+    assert dropped_reply["drop"] == "puzzle/slot"
+    assert calls == ["clicked", ("dragged", "slot", True), ("dropped", "slot")]
+
+    released = running_bridge.client.act(interaction=6, control_id="puzzle/towel", drop="")
+    assert released.get("ok") is True, released
+    assert released["drop"] is None
+    assert calls[-1] == ("dragged", None, True)
+    missing = running_bridge.client.act(interaction=6, control_id="puzzle/towel", drop="puzzle/missing")
+    assert missing.get("ok") is False and missing.get("error") == "missing", missing
 
 
 def test_act_key_is_physical_and_refused_when_the_interaction_changed(running_bridge):

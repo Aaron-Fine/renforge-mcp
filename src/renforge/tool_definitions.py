@@ -446,10 +446,12 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "`Function(ChangeLocation, newLocation=\"beach\")`, including when the button has no label. "
             "A control id is its widget id or menu index when Ren'Py has one, otherwise that action. "
             "`image` is the idle picture's file name and joins the id only when siblings share an action. "
+            "A drag's id is its `drag_name` when it has one. `selected` is the action's selected state. "
+            "`alternate` and `hovered` are those actions when the control has them. `adjustment` is a bar's "
+            "value, range, step, and page, or a viewport's x and y adjustments. "
             "Keyboard shortcuts are not listed; `dismiss` is a capability, not a key. Screens in "
             "`config.overlay_screens`, and injected `_renforge_` editor screens, are returned as `chrome`. "
-            "Bars, drags, and viewports are listed with empty operations and are not actuated. Identity is "
-            "this interaction, not a save-stable widget path."
+            "Identity is this interaction, not a save-stable widget path."
         ),
         annotations=_ann(
             readOnlyHint=True,
@@ -471,7 +473,10 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "the interaction is still current and the frame is stable. It returns `stale`, `unstable`, "
             "`covered`, `disabled`, `missing`, `text_required`, `key_or_control`, or `unsupported` and does "
             "not post input when the check fails. A button or hotspot runs its action. One with no action "
-            "is clicked at the center of its focus rectangle. An Input takes `text`, "
+            "is clicked at the center of its focus rectangle. A bar takes `value` and sets its adjustment. "
+            "A viewport takes `x`, `y`, or both. A drag takes `drop` (another control id) and runs its "
+            "dragged callback; omit `drop` to click it, or pass an empty `drop` to release it on nothing. "
+            "An Input takes `text`, "
             "replaces the current value (a prefilled name is not kept), and submits with Ren'Py `input_enter`. "
             "The field's allow, exclude, and length still apply. A value the field rejects returns "
             "`text_rejected` and is not submitted. An empty string clears the field and submits that. "
@@ -492,8 +497,17 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "text": "Full replacement for an input control. Omit it for a click or a key.",
             "key": "Physical key to post: a-z, up, down, left, right, escape, return, or space.",
             "hold": "True posts key-down only. False posts key-up only. Omit it for a tap.",
+            "value": "New value for a bar or slider adjustment.",
+            "x": "New horizontal offset for a viewport adjustment.",
+            "y": "New vertical offset for a viewport adjustment.",
+            "drop": "Control id to drop a drag onto. An empty string releases it on nothing.",
         },
-        parameter_schemas={"interaction": {"type": "integer"}},
+        parameter_schemas={
+            "interaction": {"type": "integer"},
+            "value": {"type": "number"},
+            "x": {"type": "number"},
+            "y": {"type": "number"},
+        },
     ),
     "renforge_advance_until": ToolDefinition(
         description=(

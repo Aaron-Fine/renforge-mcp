@@ -254,21 +254,55 @@ def test_imagebutton_and_hotspot_are_clickable_buttons():
     ]
 
 
-def test_bar_or_drag_on_a_hub_chooses_with_empty_operations():
+def test_bar_viewport_and_drag_use_their_renpy_operations():
     snapshot = classify(
         _raw(
             say_dismiss="dismiss_hard_pause",
             screens=[{"name": "puzzle", "layer": "master", "modal": False}],
             elements=[
-                _element(screen="puzzle", role="bar", widget_id="volume", action="Preference"),
-                _element(screen="puzzle", role="drag", widget_id="token", action="Drag", ordinal=1),
+                _element(
+                    screen="puzzle",
+                    role="bar",
+                    widget_id="volume",
+                    action="Preference",
+                    adjustment={"value": 2, "range": 10, "step": 1, "page": 2},
+                    selected=True,
+                ),
+                _element(
+                    screen="puzzle",
+                    role="viewport",
+                    widget_id="log",
+                    action=None,
+                    adjustment={"x": {"value": 0, "range": 80, "step": 8, "page": 40}, "y": {"value": 12, "range": 90, "step": 9, "page": 45}},
+                    ordinal=1,
+                ),
+                _element(
+                    screen="puzzle",
+                    role="drag",
+                    widget_id="token",
+                    action="Drag",
+                    alternate='ShowMenu("load")',
+                    hovered="Function(ShowHint)",
+                    ordinal=2,
+                ),
             ],
         )
     )
 
     assert snapshot["forward"] == "choose"
-    assert [item["operations"] for item in snapshot["controls"]] == [[], []]
-    assert guard_act(snapshot, 4, "puzzle/volume") == "unsupported"
+    assert [item["operations"] for item in snapshot["controls"]] == [["value"], ["value"], ["drop"]]
+    assert snapshot["controls"][0]["adjustment"]["value"] == 2
+    assert snapshot["controls"][0]["selected"] is True
+    assert snapshot["controls"][1]["adjustment"]["y"]["value"] == 12
+    assert snapshot["controls"][2]["alternate"] == 'ShowMenu("load")'
+    assert snapshot["controls"][2]["hovered"] == "Function(ShowHint)"
+    assert guard_act(snapshot, 4, "puzzle/volume") == "value_required"
+    assert guard_act(snapshot, 4, "puzzle/volume", value=4) is None
+    assert guard_act(snapshot, 4, "puzzle/volume", value=True) == "value_required"
+    assert guard_act(snapshot, 4, "puzzle/log") == "value_required"
+    assert guard_act(snapshot, 4, "puzzle/log", y=0) is None
+    assert guard_act(snapshot, 4, "puzzle/token") is None
+    assert guard_act(snapshot, 4, "puzzle/token", drop="puzzle/volume") is None
 
 
 def test_unstable_snapshot_is_not_an_act_token():
@@ -392,6 +426,47 @@ def test_action_names_the_control_and_image_only_splits_siblings():
         "door.png",
         "door.png",
     ]
+
+
+def test_drag_name_is_the_id_and_image_only_splits_siblings():
+    snapshot = classify(
+        _raw(
+            say_dismiss="dismiss_hard_pause",
+            screens=[{"name": "minigame", "layer": "screens", "modal": False}],
+            elements=[
+                _element(
+                    screen="minigame",
+                    role="drag",
+                    text=None,
+                    action="Function(Place)",
+                    drag_name="towel",
+                    image_name="images/towel.png",
+                    ordinal=0,
+                ),
+                _element(
+                    screen="minigame",
+                    role="drag",
+                    text=None,
+                    action="Function(Place)",
+                    drag_name="cup",
+                    image_name="images/cup.png",
+                    ordinal=1,
+                ),
+                _element(
+                    screen="minigame",
+                    role="drag",
+                    text=None,
+                    action="Function(Place)",
+                    drag_name="cup",
+                    image_name="images/cup_b.png",
+                    ordinal=2,
+                ),
+            ],
+        )
+    )
+
+    assert _ids(snapshot) == ["minigame/towel", "minigame/cup/cup.png", "minigame/cup/cup_b.png"]
+    assert [item["image"] for item in snapshot["controls"]] == ["towel.png", "cup.png", "cup_b.png"]
 
 
 def test_modal_say_stops_kinetic_advance():

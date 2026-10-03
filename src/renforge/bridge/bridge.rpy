@@ -3309,6 +3309,10 @@ init python:
             return ["click"]
         if role == "input":
             return ["text"]
+        if role == "bar" or role == "viewport":
+            return ["value"]
+        if role == "drag":
+            return ["drop"]
         return []
 
 
@@ -3548,17 +3552,20 @@ init python:
             return None
         # Ren'Py's If() returns the chosen action immediately. An object that
         # still holds both branches contributes the true one.
-        if name == "If":
+        if name in ("If", "SensitiveIf", "SelectedIf"):
             true_action = getattr(value, "true", None)
             if true_action is None:
                 true_action = getattr(value, "expression", None)
-            label = _renforge_observe_format_action(true_action, depth + 1)
-            if label:
-                return label
+            if true_action is not None and not isinstance(
+                true_action, (bool, builtins.int, builtins.float, builtins.str)
+            ):
+                label = _renforge_observe_format_action(true_action, depth + 1)
+                if label:
+                    return label
         if name == "Function":
             return _renforge_observe_format_function(value, depth)
         parts = []
-        for key in ("screen", "label", "name", "variable", "field", "filename", "url", "page", "slot"):
+        for key in ("screen", "label", "name", "variable", "field", "filename", "url", "page", "slot", "key"):
             try:
                 field = getattr(value, key)
             except Exception:
@@ -3566,13 +3573,14 @@ init python:
             quoted = _renforge_observe_quote(field)
             if quoted:
                 parts.append(quoted)
-        try:
-            extra = getattr(value, "value")
-        except Exception:
-            extra = None
-        quoted = _renforge_observe_quote(extra, allow_bool=True)
-        if quoted and parts:
-            parts.append(quoted)
+        for extra_name in ("value", "true_value", "false_value"):
+            try:
+                extra = getattr(value, extra_name)
+            except Exception:
+                continue
+            quoted = _renforge_observe_quote(extra, allow_bool=True)
+            if quoted:
+                parts.append(quoted)
         if parts:
             return "%s(%s)" % (name, ", ".join(parts))
         return str(name)
@@ -3581,7 +3589,13 @@ init python:
     def _renforge_observe_action_class(widget):
         if widget is None:
             return None
-        for attr in ("action", "clicked"):
+        attrs = ("action", "clicked")
+        try:
+            if widget.__class__.__name__ == "Drag":
+                attrs = ("dragged", "clicked", "action")
+        except Exception:
+            attrs = ("action", "clicked")
+        for attr in attrs:
             value = getattr(widget, attr, None)
             if value is None:
                 continue
@@ -3589,6 +3603,141 @@ init python:
             if label:
                 return label
         return None
+
+
+    def _renforge_observe_action_attr(widget, attr):
+        if widget is None:
+            return None
+        value = getattr(widget, attr, None)
+        if value is None:
+            return None
+        return _renforge_observe_format_action(value)
+
+
+    def _renforge_observe_action_selected(action, depth):
+        if action is None or depth > _RENFORGE_OBSERVE_DEPTH:
+            return None
+        if _renforge_observe_is_sequence(action):
+            for item in action:
+                try:
+                    item_name = item.__class__.__name__
+                except Exception:
+                    item_name = ""
+                if item_name == "SelectedIf":
+                    return _renforge_observe_action_selected(
+                        getattr(item, "expression", None), depth + 1
+                    )
+            found = None
+            for item in action:
+                selected = _renforge_observe_action_selected(item, depth + 1)
+                if selected is True:
+                    return True
+                if selected is False and found is None:
+                    found = False
+            return found
+        try:
+            name = action.__class__.__name__
+        except Exception:
+            return None
+        if name == "SelectedIf":
+            return _renforge_observe_action_selected(getattr(action, "expression", None), depth + 1)
+        getter = getattr(action, "get_selected", None)
+        if not callable(getter):
+            return None
+        try:
+            result = getter()
+        except Exception:
+            return None
+        if isinstance(result, bool):
+            return result
+        return None
+
+
+    def _renforge_observe_selected(widget):
+        if widget is None:
+            return None
+        chosen = getattr(widget, "selected", None)
+        if isinstance(chosen, bool):
+            return chosen
+        action = None
+        for attr in ("action", "clicked"):
+            value = getattr(widget, attr, None)
+            if value is not None:
+                action = value
+                break
+        return _renforge_observe_action_selected(action, 0)
+
+
+    def _renforge_observe_number(value):
+        if isinstance(value, bool) or not isinstance(value, (builtins.int, builtins.float)):
+            return None
+        return value
+
+
+    def _renforge_observe_axis(adjustment):
+        if adjustment is None:
+            return None
+        value = _renforge_observe_number(getattr(adjustment, "value", None))
+        span = _renforge_observe_number(getattr(adjustment, "range", None))
+        step = _renforge_observe_number(getattr(adjustment, "step", None))
+        page = _renforge_observe_number(getattr(adjustment, "page", None))
+        if value is None and span is None and step is None and page is None:
+            return None
+        return {"value": value, "range": span, "step": step, "page": page}
+
+
+    def _renforge_observe_adjustment(widget):
+        if widget is None:
+            return None
+        try:
+            name = widget.__class__.__name__
+        except Exception:
+            name = ""
+        if name == "Viewport":
+            axes = {}
+            horizontal = _renforge_observe_axis(getattr(widget, "xadjustment", None))
+            vertical = _renforge_observe_axis(getattr(widget, "yadjustment", None))
+            if horizontal is not None:
+                axes["x"] = horizontal
+            if vertical is not None:
+                axes["y"] = vertical
+            return axes or None
+        return _renforge_observe_axis(getattr(widget, "adjustment", None))
+
+
+    def _renforge_observe_drag_name(widget):
+        if widget is None:
+            return None
+        try:
+            if widget.__class__.__name__ != "Drag":
+                return None
+        except Exception:
+            return None
+        name = getattr(widget, "drag_name", None)
+        if isinstance(name, builtins.str) and name.strip():
+            return name.strip()
+        return None
+
+
+    def _renforge_observe_drag_image(widget):
+        if widget is None:
+            return None
+        try:
+            if widget.__class__.__name__ != "Drag":
+                return None
+        except Exception:
+            return None
+        return _renforge_displayable_filename(getattr(widget, "child", None))
+
+
+    def _renforge_observe_control_facts(widget):
+        return {
+            "drag_name": _renforge_observe_drag_name(widget),
+            "alternate": _renforge_observe_action_attr(widget, "alternate"),
+            "hovered": _renforge_observe_action_attr(widget, "hovered"),
+            "selected": _renforge_observe_selected(widget),
+            "adjustment": _renforge_observe_adjustment(widget),
+        }
 
 
     def _renforge_display_name(who):
@@ -3954,11 +4103,11 @@ init python:
 
     def _renforge_assign_observe_ids(records):
         # Mirror renforge.observe.assign_control_ids. Widget id, else menu item,
-        # else the action string, else idle-image basename, else
-        # screen/role/ordinal. A shared action gains the image basename.
-        # Duplicates gain #2. image is always the basename, or null.
+        # else drag_name, else the action string, else idle-image basename,
+        # else screen/role/ordinal. A shared drag name or action gains the
+        # image basename. Duplicates gain #2. image is the basename, or null.
         drafts = []
-        action_counts = {}
+        split_counts = {}
         for fallback, element in enumerate(records):
             screen = element.get("screen")
             if isinstance(screen, str):
@@ -3975,6 +4124,11 @@ init python:
             if isinstance(menu_index, bool) or not isinstance(menu_index, builtins.int):
                 menu_index = None
             image_name = _renforge_observe_basename(element.get("image_name"))
+            drag_name = element.get("drag_name")
+            if isinstance(drag_name, str):
+                drag_name = drag_name.strip() or None
+            else:
+                drag_name = None
             action = element.get("action")
             if isinstance(action, str):
                 action = action.strip() or None
@@ -3987,6 +4141,9 @@ init python:
             elif menu_index is not None:
                 base = (screen or "choice") + "/item/" + str(menu_index)
                 source = "menu"
+            elif drag_name:
+                base = (screen or "screen") + "/" + drag_name
+                source = "drag"
             elif action:
                 base = (screen or "screen") + "/" + action
                 source = "action"
@@ -4000,13 +4157,13 @@ init python:
                 base = (screen or "screen") + "/" + role + "/" + str(ordinal)
                 source = "synthetic"
                 synthetic = True
-            if source == "action":
-                action_counts[base] = action_counts.get(base, 0) + 1
+            if source == "action" or source == "drag":
+                split_counts[base] = split_counts.get(base, 0) + 1
             drafts.append((base, source, image_name, screen, role, synthetic, element))
         used = {}
         assigned = []
         for base, source, image_name, screen, role, synthetic, element in drafts:
-            if source == "action" and action_counts.get(base, 0) > 1 and image_name:
+            if (source == "action" or source == "drag") and split_counts.get(base, 0) > 1 and image_name:
                 base = base + "/" + image_name
             count = used.get(base, 0)
             used[base] = count + 1
@@ -4058,13 +4215,14 @@ init python:
                 "covered": False,
                 "visible": True,
                 "widget_id": _renforge_observe_widget_id(screen, focus, widget, named_ids),
-                "image_name": _renforge_observe_image_name(widget),
+                "image_name": _renforge_observe_image_name(widget) or _renforge_observe_drag_image(widget),
                 "menu_index": _renforge_observe_menu_index(screen, text),
                 "ordinal": ordinal,
                 "action": _renforge_observe_action_class(widget),
                 "bounds": {"x": x, "y": y, "width": w, "height": h},
                 "center": {"x": x + w // 2, "y": y + h // 2},
             }
+            _renforge_observe_apply_facts(record, widget)
             pairs.append((focus, record))
         seen_widgets = set()
         for focus, _record in pairs:
@@ -4074,6 +4232,11 @@ init python:
                 truncated = True
                 break
             pairs.append((types.SimpleNamespace(widget=widget), record))
+        for focus, record in _renforge_observe_kinetic_records(seen_widgets):
+            if len(pairs) >= 400:
+                truncated = True
+                break
+            pairs.append((focus, record))
         _renforge_mark_coverage(pairs)
         return pairs, truncated
 
@@ -4442,6 +4605,323 @@ init python:
         return {"ok": True, "interaction": interaction}
 
 
+    def _renforge_observe_apply_facts(record, widget):
+        facts = _renforge_observe_control_facts(widget)
+        record["drag_name"] = facts.get("drag_name")
+        record["alternate"] = facts.get("alternate")
+        record["hovered"] = facts.get("hovered")
+        record["selected"] = facts.get("selected")
+        record["adjustment"] = facts.get("adjustment")
+        return record
+
+
+    def _renforge_observe_widget_bounds(widget):
+        if widget is None:
+            return None
+        x = getattr(widget, "x", None)
+        y = getattr(widget, "y", None)
+        w = getattr(widget, "w", None)
+        h = getattr(widget, "h", None)
+        if x is None or y is None or w is None or h is None:
+            return None
+        try:
+            x, y, w, h = int(x), int(y), int(w), int(h)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if w <= 0 or h <= 0:
+            return None
+        return {"x": x, "y": y, "width": w, "height": h}
+
+
+    def _renforge_kinetic_kind(node):
+        if node is None:
+            return None
+        try:
+            name = node.__class__.__name__
+        except Exception:
+            return None
+        if name == "Bar":
+            return "bar"
+        if name == "Viewport":
+            return "viewport"
+        if name == "Drag":
+            return "drag"
+        return None
+
+
+    def _renforge_kinetic_enabled(widget, kind):
+        if kind == "bar":
+            adjustment = getattr(widget, "adjustment", None)
+            adjustable = getattr(adjustment, "adjustable", True) if adjustment is not None else True
+            return adjustable is not False
+        if kind == "drag":
+            if getattr(widget, "draggable", False) or getattr(widget, "droppable", False):
+                return True
+            if getattr(widget, "clicked", None) is not None or getattr(widget, "dragged", None) is not None:
+                return True
+            return False
+        return True
+
+
+    def _renforge_observe_kinetic_records(seen_widgets):
+        # Bars, viewports, and drags that never joined focus_list. A viewport
+        # is focusable only when it is draggable, and a bar can sit on a screen
+        # without taking focus until it is grabbed.
+        found = []
+        seen = set(seen_widgets)
+        for _layer_name, root in _renforge_scene_roots():
+            stack = [(root, None)]
+            visited = set()
+            while stack:
+                node, screen_name = stack.pop()
+                if node is None:
+                    continue
+                ident = id(node)
+                if ident in visited:
+                    continue
+                visited.add(ident)
+                try:
+                    class_name = node.__class__.__name__
+                except Exception:
+                    class_name = ""
+                if class_name == "ScreenDisplayable" and not getattr(node, "hiding", False):
+                    screen_name = _renforge_observe_screen_node_name(node) or screen_name
+                    widgets = getattr(node, "widgets", None) or {}
+                    if isinstance(widgets, builtins.dict):
+                        for key, widget in widgets.items():
+                            kind = _renforge_kinetic_kind(widget)
+                            if kind is None or id(widget) in seen:
+                                continue
+                            seen.add(id(widget))
+                            widget_id = key.strip() if isinstance(key, builtins.str) and key.strip() else None
+                            found.append((widget, screen_name, widget_id, kind))
+                kind = _renforge_kinetic_kind(node)
+                if kind is not None and id(node) not in seen and not getattr(node, "hiding", False):
+                    seen.add(id(node))
+                    found.append((node, screen_name, None, kind))
+                children = getattr(node, "children", None)
+                if _renforge_observe_is_sequence(children):
+                    for child in children:
+                        stack.append((child, screen_name))
+                child = getattr(node, "child", None)
+                if child is not None:
+                    stack.append((child, screen_name))
+                raw_child = getattr(node, "raw_child", None)
+                if raw_child is not None and raw_child is not child:
+                    stack.append((raw_child, screen_name))
+        records = []
+        for ordinal, (widget, screen_name, widget_id, kind) in enumerate(found):
+            enabled = _renforge_kinetic_enabled(widget, kind)
+            image_name = _renforge_observe_image_name(widget) or _renforge_observe_drag_image(widget)
+            record = {
+                "screen": screen_name,
+                "role": kind,
+                "text": _renforge_focus_text(widget) or None,
+                "enabled": enabled,
+                "clickable": enabled,
+                "covered": False,
+                "visible": True,
+                "widget_id": widget_id,
+                "image_name": image_name,
+                "menu_index": None,
+                "ordinal": ordinal,
+                "action": _renforge_observe_action_class(widget),
+            }
+            bounds = _renforge_observe_widget_bounds(widget)
+            if bounds is not None:
+                record["bounds"] = bounds
+                record["center"] = {
+                    "x": bounds["x"] + bounds["width"] // 2,
+                    "y": bounds["y"] + bounds["height"] // 2,
+                }
+            _renforge_observe_apply_facts(record, widget)
+            records.append((types.SimpleNamespace(widget=widget), record))
+        return records
+
+
+    def _renforge_call_action(action, args):
+        behavior = getattr(getattr(renpy, "display", None), "behavior", None)
+        run = getattr(behavior, "run", None)
+        if not callable(run):
+            run = getattr(renpy, "run", None)
+        if not callable(run):
+            return False, None
+        if args:
+            return True, run(action, *args)
+        return True, run(action)
+
+
+    def _renforge_end_action_result(rv):
+        if rv is None:
+            return
+        end_interaction = getattr(renpy, "end_interaction", None)
+        if callable(end_interaction):
+            end_interaction(rv)
+
+
+    def _renforge_change_adjustment(adjustment, number):
+        if adjustment is None:
+            return False, None
+        round_value = getattr(adjustment, "round_value", None)
+        if callable(round_value):
+            try:
+                number = round_value(number, release=True)
+            except TypeError:
+                try:
+                    number = round_value(number)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        change = getattr(adjustment, "change", None)
+        if not callable(change):
+            return False, None
+        rv = change(number)
+        _renforge_end_action_result(rv)
+        stored = getattr(adjustment, "value", number)
+        if _renforge_observe_number(stored) is None:
+            stored = number
+        return True, stored
+
+
+    def _renforge_act_value(payload, focus, wanted, interaction, control):
+        widget = getattr(focus, "widget", None)
+        result = {
+            "ok": True,
+            "operation": "value",
+            "id": wanted,
+            "interaction": interaction,
+            "screen": control.get("screen"),
+            "via": "action",
+        }
+        if control.get("role") == "viewport":
+            wrote = False
+            for axis, field in (("x", "xadjustment"), ("y", "yadjustment")):
+                if axis not in payload:
+                    continue
+                number = payload.get(axis)
+                if isinstance(number, bool) or not isinstance(number, (builtins.int, builtins.float)):
+                    return {
+                        "ok": False,
+                        "error": "value_required",
+                        "interaction": interaction,
+                        "id": wanted,
+                    }
+                changed, stored = _renforge_change_adjustment(getattr(widget, field, None), number)
+                if not changed:
+                    return {
+                        "ok": False,
+                        "error": "unsupported",
+                        "interaction": interaction,
+                        "id": wanted,
+                    }
+                result[axis] = stored
+                wrote = True
+            if not wrote:
+                return {
+                    "ok": False,
+                    "error": "value_required",
+                    "interaction": interaction,
+                    "id": wanted,
+                }
+            return result
+        number = payload.get("value") if "value" in payload else None
+        if isinstance(number, bool) or not isinstance(number, (builtins.int, builtins.float)):
+            return {"ok": False, "error": "value_required", "interaction": interaction, "id": wanted}
+        changed, stored = _renforge_change_adjustment(getattr(widget, "adjustment", None), number)
+        if not changed:
+            return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
+        result["value"] = stored
+        return result
+
+
+    def _renforge_drag_joined(widget):
+        joined = [widget]
+        drag_joined = getattr(widget, "drag_joined", None)
+        if not callable(drag_joined):
+            return joined
+        try:
+            offsets = drag_joined(widget)
+        except Exception:
+            return joined
+        if not _renforge_observe_is_sequence(offsets):
+            return joined
+        built = []
+        for item in offsets:
+            member = None
+            if _renforge_observe_is_sequence(item) and item:
+                member = item[0]
+            elif item is not None:
+                member = item
+            if member is not None:
+                built.append(member)
+        if not built:
+            return joined
+        return built
+
+
+    def _renforge_act_drop(payload, focus, wanted, interaction, control, pairs, assigned):
+        widget = getattr(focus, "widget", None)
+        result = {
+            "ok": True,
+            "operation": "drop",
+            "id": wanted,
+            "interaction": interaction,
+            "screen": control.get("screen"),
+            "action": control.get("action"),
+            "via": "action",
+        }
+        if "drop" not in payload:
+            clicked = getattr(widget, "clicked", None)
+            if clicked is not None:
+                if not _renforge_invoke_focus_action(focus):
+                    return {
+                        "ok": False,
+                        "error": "unsupported",
+                        "interaction": interaction,
+                        "id": wanted,
+                    }
+                result["operation"] = "click"
+                return result
+            payload = dict(payload)
+            payload["drop"] = ""
+        drop_name = payload.get("drop")
+        target = None
+        if isinstance(drop_name, builtins.str) and drop_name:
+            matched = False
+            for (other_focus, _record), other in zip(pairs, assigned):
+                if other.get("id") != drop_name:
+                    continue
+                target = getattr(other_focus, "widget", None)
+                result["drop"] = drop_name
+                matched = True
+                break
+            if not matched:
+                return {"ok": False, "error": "missing", "interaction": interaction, "id": drop_name}
+        else:
+            result["drop"] = None
+        dragged = getattr(widget, "dragged", None)
+        if dragged is None:
+            return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
+        joined = _renforge_drag_joined(widget)
+        called, rv = _renforge_call_action(dragged, (joined, target))
+        if not called:
+            return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
+        if rv is None and target is not None:
+            dropped = getattr(target, "dropped", None)
+            if dropped is not None:
+                called, rv = _renforge_call_action(dropped, (target, joined))
+                if not called:
+                    return {
+                        "ok": False,
+                        "error": "unsupported",
+                        "interaction": interaction,
+                        "id": wanted,
+                    }
+        _renforge_end_action_result(rv)
+        return result
+
+
     def _renforge_h_act(payload):
         # Mirror renforge.observe.guard_act. Re-resolve the id in this interaction
         # immediately before posting input. Chrome ids are allowed.
@@ -4461,7 +4941,14 @@ init python:
         key_value = payload.get("key") if "key" in payload else None
         if key_value is not None:
             wanted = payload.get("id")
-            if (isinstance(wanted, builtins.str) and wanted) or payload.get("text") is not None:
+            if (
+                (isinstance(wanted, builtins.str) and wanted)
+                or payload.get("text") is not None
+                or "value" in payload
+                or "x" in payload
+                or "y" in payload
+                or "drop" in payload
+            ):
                 return {"ok": False, "error": "key_or_control", "interaction": interaction}
             if not isinstance(key_value, builtins.str) or not key_value.strip():
                 return {
@@ -4527,6 +5014,39 @@ init python:
         if control.get("covered") or control.get("clickable") is False:
             return {"ok": False, "error": "covered", "interaction": interaction, "id": wanted}
         operations = control.get("operations") or []
+        if "value" in operations:
+            try:
+                return _renforge_act_value(payload, focus, wanted, interaction, control)
+            except Exception as exc:
+                if not _renforge_is_script_control_flow(exc):
+                    raise
+                result = {
+                    "ok": True,
+                    "operation": "value",
+                    "id": wanted,
+                    "interaction": interaction,
+                    "screen": control.get("screen"),
+                    "via": "action",
+                }
+                setattr(exc, "renforge_result", result)
+                raise
+        if "drop" in operations:
+            try:
+                return _renforge_act_drop(payload, focus, wanted, interaction, control, pairs, assigned)
+            except Exception as exc:
+                if not _renforge_is_script_control_flow(exc):
+                    raise
+                result = {
+                    "ok": True,
+                    "operation": "drop",
+                    "id": wanted,
+                    "interaction": interaction,
+                    "screen": control.get("screen"),
+                    "action": control.get("action"),
+                    "via": "action",
+                }
+                setattr(exc, "renforge_result", result)
+                raise
         if "click" in operations:
             result = {
                 "ok": True,

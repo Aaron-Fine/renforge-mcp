@@ -70,6 +70,10 @@ def build_wrappers(context):
         text: str | None = None,
         key: str | None = None,
         hold: bool | None = None,
+        value: int | float | None = None,
+        x: int | float | None = None,
+        y: int | float | None = None,
+        drop: str | None = None,
     ) -> dict:
         """Activate one observed control, or post one physical key, in that interaction."""
         return _log_tool_call(
@@ -81,11 +85,24 @@ def build_wrappers(context):
                 "text": text,
                 "key": key,
                 "hold": hold,
+                "value": value,
+                "x": x,
+                "y": y,
+                "drop": drop,
             },
             project_root=project_path,
             fn=live.act,
             args=(project_path, interaction),
-            kwargs={"control_id": id, "text": text, "key": key, "hold": hold},
+            kwargs={
+                "control_id": id,
+                "text": text,
+                "key": key,
+                "hold": hold,
+                "value": value,
+                "x": x,
+                "y": y,
+                "drop": drop,
+            },
         )
 
     def renforge_advance_until(

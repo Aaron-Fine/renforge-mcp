@@ -43,6 +43,10 @@ def operations_for(role: str) -> list[str]:
         return ["click"]
     if role == "input":
         return ["text"]
+    if role == "bar" or role == "viewport":
+        return ["value"]
+    if role == "drag":
+        return ["drop"]
     return []
 
 
@@ -93,18 +97,20 @@ def _action_text(value: Any) -> str | None:
 def assign_control_ids(elements: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Assign canonical ids. The bridge copies this order.
 
-    Widget id, else menu item index, else the action string, else the
-    idle-image basename, else ``screen/role/ordinal`` with ``synthetic``
-    set. An action shared by siblings gains that image basename. Further
-    duplicates gain ``#2``. ``image`` is always the basename, or null.
+    Widget id, else menu item index, else ``drag_name``, else the action
+    string, else the idle-image basename, else ``screen/role/ordinal`` with
+    ``synthetic`` set. A drag name or action shared by siblings gains that
+    image basename. Further duplicates gain ``#2``. ``image`` is always the
+    basename, or null.
     """
     drafts: list[tuple[str, str, str | None, str | None, str, bool, Mapping[str, Any]]] = []
-    action_counts: dict[str, int] = {}
+    split_counts: dict[str, int] = {}
     for fallback, element in enumerate(elements):
         screen = _screen_name(element.get("screen"))
         role = normalize_role(element.get("role"))
         widget_id = _widget_id(element.get("widget_id"))
         menu_index = _menu_index(element.get("menu_index"))
+        drag_name = _widget_id(element.get("drag_name"))
         image = image_basename(element.get("image_name"))
         action = _action_text(element.get("action"))
         synthetic = False
@@ -114,6 +120,9 @@ def assign_control_ids(elements: list[Mapping[str, Any]]) -> list[dict[str, Any]
         elif menu_index is not None:
             base = f"{screen or 'choice'}/item/{menu_index}"
             source = "menu"
+        elif drag_name:
+            base = f"{screen or 'screen'}/{drag_name}"
+            source = "drag"
         elif action:
             base = f"{screen or 'screen'}/{action}"
             source = "action"
@@ -127,14 +136,14 @@ def assign_control_ids(elements: list[Mapping[str, Any]]) -> list[dict[str, Any]
             base = f"{screen or 'screen'}/{role}/{ordinal}"
             source = "synthetic"
             synthetic = True
-        if source == "action":
-            action_counts[base] = action_counts.get(base, 0) + 1
+        if source in {"action", "drag"}:
+            split_counts[base] = split_counts.get(base, 0) + 1
         drafts.append((base, source, image, screen, role, synthetic, element))
 
     used: dict[str, int] = {}
     assigned: list[dict[str, Any]] = []
     for base, source, image, screen, role, synthetic, element in drafts:
-        if source == "action" and action_counts.get(base, 0) > 1 and image:
+        if source in {"action", "drag"} and split_counts.get(base, 0) > 1 and image:
             base = f"{base}/{image}"
         count = used.get(base, 0)
         used[base] = count + 1
@@ -182,6 +191,35 @@ def _bool(value: Any, default: bool) -> bool:
     return default
 
 
+def _real_number(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float))
+
+
+def _public_axis(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    axis = {
+        key: value.get(key) if _real_number(value.get(key)) else None
+        for key in ("value", "range", "step", "page")
+    }
+    if all(item is None for item in axis.values()):
+        return None
+    return axis
+
+
+def _public_adjustment(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    if any(key in value for key in ("value", "range", "step", "page")):
+        return _public_axis(value)
+    axes = {}
+    for name in ("x", "y"):
+        axis = _public_axis(value.get(name))
+        if axis is not None:
+            axes[name] = axis
+    return axes or None
+
+
 def _public_control(control: Mapping[str, Any]) -> dict[str, Any]:
     enabled = _bool(control.get("enabled"), True)
     covered = _bool(control.get("covered"), False)
@@ -192,6 +230,9 @@ def _public_control(control: Mapping[str, Any]) -> dict[str, Any]:
     action = control.get("action") if isinstance(control.get("action"), str) else None
     text = control.get("text") if isinstance(control.get("text"), str) else None
     image = control.get("image") if isinstance(control.get("image"), str) else None
+    alternate = control.get("alternate") if isinstance(control.get("alternate"), str) else None
+    hovered = control.get("hovered") if isinstance(control.get("hovered"), str) else None
+    selected = control.get("selected") if isinstance(control.get("selected"), bool) else None
     return {
         "id": control.get("id"),
         "role": control.get("role"),
@@ -199,6 +240,10 @@ def _public_control(control: Mapping[str, Any]) -> dict[str, Any]:
         "screen": control.get("screen"),
         "action": action,
         "image": image or None,
+        "alternate": alternate or None,
+        "hovered": hovered or None,
+        "selected": selected,
+        "adjustment": _public_adjustment(control.get("adjustment")),
         "operations": list(control.get("operations") or []),
         "enabled": enabled,
         "clickable": clickable,
@@ -434,6 +479,10 @@ def guard_act(
     control_id: str,
     *,
     text: str | None = None,
+    value: Any = None,
+    x: Any = None,
+    y: Any = None,
+    drop: str | None = None,
 ) -> str | None:
     """Return a refusal, or None when the bridge may post this control's input.
 
@@ -456,6 +505,22 @@ def guard_act(
     if "text" in operations:
         if not isinstance(text, str):
             return "text_required"
+        return None
+    if "value" in operations:
+        if found.get("role") == "viewport":
+            if x is None and y is None:
+                return "value_required"
+            if x is not None and not _real_number(x):
+                return "value_required"
+            if y is not None and not _real_number(y):
+                return "value_required"
+            return None
+        if not _real_number(value):
+            return "value_required"
+        return None
+    if "drop" in operations:
+        if drop is not None and not isinstance(drop, str):
+            return "unsupported"
         return None
     return "unsupported"
 
