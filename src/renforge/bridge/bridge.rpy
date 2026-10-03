@@ -1587,22 +1587,171 @@ init python:
             return False
         return left <= x < left + width and top <= y < top + height
 
-    def _renforge_mark_coverage(elements):
-        """Annotate each element with whether a higher-z control covers its center."""
-        # elements is a list of (focus, element) sorted by focus list order.
-        for index, (_focus, element) in enumerate(elements):
-            center = element.get("center") or {}
+    def _renforge_center_point(element):
+        center = element.get("center") or {}
+        try:
+            return int(center.get("x")), int(center.get("y")), True
+        except (TypeError, ValueError, OverflowError):
+            return 0, 0, False
+
+    def _renforge_focus_screen(focus):
+        return getattr(focus, "screen", None)
+
+    def _renforge_full_modal(focus):
+        """A screen whose modal flag grabs every point, the way IgnoreLayers does."""
+        screen = _renforge_focus_screen(focus)
+        modal = getattr(screen, "modal", None)
+        if modal is None or callable(modal) or modal == "window":
+            return False
+        return bool(modal)
+
+    def _renforge_modal_rank(focus, index):
+        screen = _renforge_focus_screen(focus)
+        zorder = getattr(screen, "zorder", None)
+        try:
+            zorder = int(zorder)
+        except (TypeError, ValueError, OverflowError):
+            zorder = 0
+        return (zorder, index)
+
+    def _renforge_same_screen(left, right):
+        left_screen = _renforge_focus_screen(left)
+        right_screen = _renforge_focus_screen(right)
+        if left_screen is not None and right_screen is not None:
+            return left_screen is right_screen
+        left_name = _renforge_screen_name(left)
+        right_name = _renforge_screen_name(right)
+        return bool(left_name) and left_name == right_name
+
+    def _renforge_top_modal(elements):
+        winner = None
+        rank = None
+        for index, (focus, _element) in enumerate(elements):
+            if not _renforge_full_modal(focus):
+                continue
+            current = _renforge_modal_rank(focus, index)
+            if rank is None or current > rank:
+                rank = current
+                winner = focus
+        return winner
+
+    def _renforge_mask_allows(focus, x, y):
+        """Rectangle hits only count when the focus mask also accepts the point.
+
+        ``focus_mask True`` is pixel-tested by the render. Without that render,
+        a mask-bearing widget does not cover other controls: a transparent
+        image must not hide the button underneath it.
+        """
+        widget = getattr(focus, "widget", None)
+        style = getattr(widget, "style", None)
+        mask = getattr(style, "focus_mask", None) if style is not None else None
+        if mask is None or mask is False:
+            return True
+        if callable(mask):
+            local_x = x - int(getattr(focus, "x", 0) or 0)
+            local_y = y - int(getattr(focus, "y", 0) or 0)
             try:
-                cx = int(center.get("x"))
-                cy = int(center.get("y"))
-            except (TypeError, ValueError, OverflowError):
+                return bool(mask(local_x, local_y))
+            except Exception:
+                return False
+        probe = getattr(widget, "focus_mask_opaque", None)
+        if callable(probe):
+            try:
+                return bool(probe(x, y))
+            except Exception:
+                return False
+        return False
+
+    def _renforge_render_hit(x, y):
+        """What a real click would focus at this point.
+
+        Returns ``"unavailable"`` when the last screen render is missing,
+        ``"none"`` when the point hits nothing, ``"modal"`` when a modal
+        render grabs the point, or ``("displayable", widget)``.
+        """
+        render_mod = getattr(getattr(renpy, "display", None), "render", None)
+        screen_render = getattr(render_mod, "screen_render", None)
+        if screen_render is None:
+            return "unavailable"
+        method = getattr(screen_render, "focus_at_point", None)
+        if not callable(method):
+            return "unavailable"
+        try:
+            hit = method(int(x), int(y), None)
+        except Exception as exc:
+            if type(exc).__name__ == "IgnoreLayers":
+                return "modal"
+            return "unavailable"
+        if hit is None:
+            return "none"
+        modal = getattr(render_mod, "Modal", None)
+        if modal is not None and hit is modal:
+            return "modal"
+        if isinstance(hit, tuple) and hit:
+            return ("displayable", hit[0])
+        widget = getattr(hit, "widget", None)
+        if widget is not None:
+            return ("displayable", widget)
+        return "none"
+
+    def _renforge_point_covered_by_render(focus, element):
+        x, y, ok = _renforge_center_point(element)
+        if not ok:
+            return False
+        hit = _renforge_render_hit(x, y)
+        if hit == "unavailable" or hit == "none":
+            return False
+        if hit == "modal":
+            return True
+        if isinstance(hit, tuple) and hit[0] == "displayable":
+            return hit[1] is not getattr(focus, "widget", None)
+        return False
+
+    def _renforge_mark_coverage(elements):
+        """Annotate each element with whether a click at its center would miss it.
+
+        The rendered screen is authoritative: modal renders grab the pointer,
+        and a focus mask can reject a point inside the focus rectangle. When
+        that render is not available, a full-screen ``modal`` flag still
+        removes every other screen from the click, and a mask-bearing widget
+        does not cover neighbors by rectangle alone.
+        """
+        use_render = False
+        for _focus, element in elements:
+            x, y, ok = _renforge_center_point(element)
+            if not ok:
+                continue
+            use_render = _renforge_render_hit(x, y) != "unavailable"
+            break
+        if use_render:
+            for focus, element in elements:
+                covered = _renforge_point_covered_by_render(focus, element)
+                element["covered"] = covered
+                element["clickable"] = (
+                    bool(element.get("enabled", True))
+                    and bool(element.get("visible", True))
+                    and not covered
+                )
+            return elements
+        top_modal = _renforge_top_modal(elements)
+        for index, (focus, element) in enumerate(elements):
+            x, y, ok = _renforge_center_point(element)
+            if not ok:
                 element["covered"] = False
                 element["clickable"] = bool(element.get("enabled", True)) and bool(element.get("visible", True))
                 continue
-            covered = False
-            for later_focus, later in elements[index + 1 :]:
-                bounds = later.get("bounds") or {}
-                if _renforge_bounds_contain(bounds, cx, cy):
+            if top_modal is not None and not _renforge_same_screen(focus, top_modal):
+                covered = True
+            else:
+                covered = False
+                for later_focus, later in elements[index + 1 :]:
+                    if top_modal is not None and not _renforge_same_screen(later_focus, top_modal):
+                        continue
+                    bounds = later.get("bounds") or {}
+                    if not _renforge_bounds_contain(bounds, x, y):
+                        continue
+                    if not _renforge_mask_allows(later_focus, x, y):
+                        continue
                     covered = True
                     break
             element["covered"] = covered
@@ -1923,9 +2072,11 @@ init python:
         if not callable(event_handler):
             return False
         local_x, local_y = x, y
+        owner = None
         for focus in reversed(list(getattr(focus_module, "focus_list", []) or [])):
             if getattr(focus, "widget", None) is not focused:
                 continue
+            owner = focus
             focus_x = getattr(focus, "x", None)
             focus_y = getattr(focus, "y", None)
             if focus_x is not None and focus_y is not None:
@@ -1934,15 +2085,20 @@ init python:
         ignore_event = getattr(getattr(renpy, "display", None), "core", None)
         ignore_event = getattr(ignore_event, "IgnoreEvent", None)
         no_interaction_result = object()
-        interaction_result = no_interaction_result
-        for event in (down, up):
-            try:
-                rv = event_handler(event, local_x, local_y, 0)
-                if rv is not None and interaction_result is no_interaction_result:
-                    interaction_result = rv
-            except Exception as exc:
-                if ignore_event is None or not isinstance(exc, ignore_event):
-                    raise
+
+        def _deliver():
+            delivered = no_interaction_result
+            for event in (down, up):
+                try:
+                    rv = event_handler(event, local_x, local_y, 0)
+                    if rv is not None and delivered is no_interaction_result:
+                        delivered = rv
+                except Exception as exc:
+                    if ignore_event is None or not isinstance(exc, ignore_event):
+                        raise
+            return delivered
+
+        interaction_result = _renforge_with_focus_screen(owner, _deliver)
         if interaction_result is not no_interaction_result:
             end_interaction = getattr(renpy, "end_interaction", None)
             if callable(end_interaction):
@@ -1991,13 +2147,32 @@ init python:
                 return action
         return None
 
+    def _renforge_with_focus_screen(focus, fn):
+        """Run ``fn`` with the focus's screen pushed, then pop it.
+
+        ``ScreenDisplayable.event`` does this before a button sees the click.
+        ``Hide()`` and other actions read ``renpy.current_screen()``, which is
+        empty when the widget event or ``behavior.run`` is called directly.
+        """
+        screen_mod = getattr(getattr(renpy, "display", None), "screen", None)
+        screen = getattr(focus, "screen", None) if focus is not None else None
+        push = getattr(screen_mod, "push_current_screen", None) if screen_mod is not None else None
+        pop = getattr(screen_mod, "pop_current_screen", None) if screen_mod is not None else None
+        if screen is None or not callable(push) or not callable(pop):
+            return fn()
+        push(screen)
+        try:
+            return fn()
+        finally:
+            pop()
+
     def _renforge_invoke_focus_action(focus):
         """Run the focus action the way Button.handle_click does.
 
         Returns True when an action object was run. Returns False when there
         is nothing to run, so the caller can click the rectangle instead.
         A returned value ends the interaction. Jump and EndInteraction
-        propagate.
+        propagate. The action runs with the focus's screen pushed.
         """
         action = _renforge_focus_action_value(focus)
         if action is None:
@@ -2008,12 +2183,16 @@ init python:
             run = getattr(renpy, "run", None)
         if not callable(run):
             return False
-        rv = run(action)
-        if rv is not None:
-            end_interaction = getattr(renpy, "end_interaction", None)
-            if callable(end_interaction):
-                end_interaction(rv)
-        return True
+
+        def _run():
+            rv = run(action)
+            if rv is not None:
+                end_interaction = getattr(renpy, "end_interaction", None)
+                if callable(end_interaction):
+                    end_interaction(rv)
+            return True
+
+        return _renforge_with_focus_screen(focus, _run)
 
     def _renforge_click_focus(focus):
         """Click a focus center through shared synthetic input path."""
@@ -2169,15 +2348,34 @@ init python:
         return result
 
     def _renforge_hit_stack(x, y):
-        """Return topmost and underneath focusables containing point (x, y)."""
+        """Return the focus a click would hit, plus other rectangles at the point."""
+        elements = _renforge_focusable_elements()
+        hit = _renforge_render_hit(x, y)
         hits = []
-        for _focus, element in _renforge_focusable_elements():
+        top_modal = None if hit != "unavailable" else _renforge_top_modal(elements)
+        for focus, element in elements:
+            if top_modal is not None and not _renforge_same_screen(focus, top_modal):
+                continue
             bounds = element.get("bounds") or {}
-            if _renforge_bounds_contain(bounds, x, y):
-                hits.append(element)
-        # focus_list is bottom→top; last entry is topmost.
-        topmost = hits[-1] if hits else None
-        underneath = list(reversed(hits[:-1])) if len(hits) > 1 else []
+            if not _renforge_bounds_contain(bounds, x, y):
+                continue
+            if not _renforge_mask_allows(focus, x, y):
+                continue
+            hits.append((focus, element))
+        topmost = hits[-1][1] if hits else None
+        if hit == "modal":
+            topmost = None
+            hits = []
+        elif isinstance(hit, tuple) and hit[0] == "displayable":
+            for focus, element in elements:
+                if getattr(focus, "widget", None) is hit[1]:
+                    topmost = element
+                    break
+        underneath = []
+        if topmost is not None:
+            for _focus, element in reversed(hits):
+                if element is not topmost:
+                    underneath.append(element)
         result = {
             "ok": True,
             "x": x,

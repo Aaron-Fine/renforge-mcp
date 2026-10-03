@@ -3482,6 +3482,212 @@ def test_hit_test_reports_topmost_focusable(running_bridge):
     assert hit["coordinate_space"] == "logical"
 
 
+def _screen(name, modal=False, zorder=0):
+    return types.SimpleNamespace(screen_name=name, modal=modal, zorder=zorder)
+
+
+def test_modal_screen_button_is_not_covered_by_a_later_drag_rectangle(running_bridge):
+    """A full-screen modal grabs the pointer. Drags underneath it do not cover its button."""
+    renpy = running_bridge.renpy
+    modal = _screen("minigame_message", modal=True, zorder=100)
+    hottub = _screen("minigame_hottub", modal=False, zorder=0)
+    button = _FakeWidget("Skip")
+    drag = _FakeWidget("")
+    drag.style = types.SimpleNamespace(focus_mask=True)
+    button_focus = _FakeFocus("Skip", 860, 540, 200, 80, widget=button)
+    button_focus.screen = modal
+    drag_focus = _FakeFocus("", 700, 400, 500, 400, widget=drag)
+    drag_focus.screen = hottub
+    original = list(renpy.display.focus.focus_list)
+    renpy.display.focus.focus_list[:] = [button_focus, drag_focus]
+    try:
+        elements = running_bridge.client.list_ui_elements()
+    finally:
+        renpy.display.focus.focus_list[:] = original
+    by_screen = {element["screen"]: element for element in elements}
+    assert by_screen["minigame_message"]["covered"] is False
+    assert by_screen["minigame_message"]["clickable"] is True
+    assert by_screen["minigame_hottub"]["covered"] is True
+    assert by_screen["minigame_hottub"]["clickable"] is False
+
+
+def test_focus_mask_rectangle_does_not_cover_the_button_underneath(running_bridge):
+    renpy = running_bridge.renpy
+    button = _FakeWidget("OK")
+    drag = _FakeWidget("")
+    drag.style = types.SimpleNamespace(focus_mask=True)
+    lower = _FakeFocus("OK", 860, 540, 200, 80, widget=button)
+    lower.screen_name = "play"
+    upper = _FakeFocus("", 0, 0, 1920, 1080, widget=drag)
+    upper.screen_name = "play"
+    original = list(renpy.display.focus.focus_list)
+    renpy.display.focus.focus_list[:] = [lower, upper]
+    try:
+        elements = running_bridge.client.list_ui_elements()
+    finally:
+        renpy.display.focus.focus_list[:] = original
+    assert elements[0]["text"] == "OK"
+    assert elements[0]["covered"] is False
+    assert elements[1]["covered"] is False
+
+
+def test_plain_rectangle_still_covers_an_earlier_control(running_bridge):
+    renpy = running_bridge.renpy
+    lower = _FakeFocus("OK", 10, 10, 40, 20)
+    lower.screen_name = "play"
+    upper = _FakeFocus("Later", 0, 0, 100, 100)
+    upper.screen_name = "play"
+    original = list(renpy.display.focus.focus_list)
+    renpy.display.focus.focus_list[:] = [lower, upper]
+    try:
+        elements = running_bridge.client.list_ui_elements()
+    finally:
+        renpy.display.focus.focus_list[:] = original
+    assert elements[0]["text"] == "OK"
+    assert elements[0]["covered"] is True
+    assert elements[0]["clickable"] is False
+    assert elements[1]["covered"] is False
+
+
+def test_render_hit_marks_only_the_displayable_a_click_would_reach(running_bridge):
+    renpy = running_bridge.renpy
+    modal = _screen("minigame_message", modal=True, zorder=100)
+    hottub = _screen("minigame_hottub", modal=False, zorder=0)
+    button = _FakeWidget("OK")
+    drag = _FakeWidget("")
+    button_focus = _FakeFocus("OK", 860, 540, 200, 80, widget=button)
+    button_focus.screen = modal
+    drag_focus = _FakeFocus("", 0, 0, 1920, 1080, widget=drag)
+    drag_focus.screen = hottub
+    modal_sentinel = object()
+
+    def focus_at_point(x, y, screen):
+        if 860 <= x < 1060 and 540 <= y < 620:
+            return (button, None, modal)
+        return modal_sentinel
+
+    renpy.display.render = types.SimpleNamespace(
+        screen_render=types.SimpleNamespace(focus_at_point=focus_at_point),
+        Modal=modal_sentinel,
+    )
+    original = list(renpy.display.focus.focus_list)
+    renpy.display.focus.focus_list[:] = [button_focus, drag_focus]
+    try:
+        elements = running_bridge.client.list_ui_elements()
+        hit = running_bridge.client.hit_test(960, 580)
+    finally:
+        renpy.display.focus.focus_list[:] = original
+        del renpy.display.render
+    by_screen = {element["screen"]: element for element in elements}
+    assert by_screen["minigame_message"]["covered"] is False
+    assert by_screen["minigame_hottub"]["covered"] is True
+    assert hit["topmost"]["screen"] == "minigame_message"
+
+
+def test_action_runs_with_the_focus_screen_pushed(running_bridge):
+    """Hide() reads the current screen. Running the action must push it first."""
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    screen = _screen("minigame_message", modal=True, zorder=100)
+    stack = [None]
+    hidden = []
+
+    def push(current):
+        stack.append(current)
+
+    def pop():
+        stack.pop()
+
+    def current_screen():
+        return stack[-1]
+
+    class Hide:
+        def __call__(self):
+            current = renpy.current_screen()
+            hidden.append(None if current is None else current.screen_name)
+            return None
+
+    button = _FakeWidget("OK")
+    button.clicked = Hide()
+    focus = _FakeFocus("OK", 10, 10, 40, 20, widget=button)
+    focus.screen = screen
+    renpy.display.screen = types.SimpleNamespace(
+        push_current_screen=push,
+        pop_current_screen=pop,
+        current_screen=current_screen,
+    )
+    renpy.current_screen = current_screen
+
+    def _run(action):
+        return action()
+
+    renpy.display.behavior.run = _run
+    try:
+        assert globs["_renforge_invoke_focus_action"](focus) is True
+    finally:
+        del renpy.display.screen
+        del renpy.current_screen
+    assert hidden == ["minigame_message"]
+    assert stack == [None]
+
+
+def test_pointer_click_pushes_the_focused_screen(running_bridge):
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    pygame = globs["pygame"]
+    screen = _screen("minigame_message", modal=True, zorder=100)
+    stack = [None]
+    seen = []
+
+    def push(current):
+        stack.append(current)
+
+    def pop():
+        stack.pop()
+
+    def current_screen():
+        return stack[-1]
+
+    class Button:
+        def event(self, event, x, y, st):
+            if event.type == pygame.MOUSEBUTTONUP:
+                current = renpy.current_screen()
+                seen.append(None if current is None else current.screen_name)
+            return None
+
+    button = Button()
+    focus = _FakeFocus("OK", 10, 10, 40, 20, widget=button)
+    focus.screen = screen
+    focus_module = renpy.display.focus
+    original = list(focus_module.focus_list)
+    original_handler = getattr(focus_module, "mouse_handler", None)
+    original_focused = getattr(focus_module, "get_focused", None)
+    focus_module.focus_list[:] = [focus]
+    focus_module.mouse_handler = lambda event, x, y, default: None
+    focus_module.get_focused = lambda: button
+    renpy.display.screen = types.SimpleNamespace(
+        push_current_screen=push,
+        pop_current_screen=pop,
+    )
+    renpy.current_screen = current_screen
+    try:
+        assert globs["_renforge_dispatch_mouse_click"](20, 20) is True
+    finally:
+        focus_module.focus_list[:] = original
+        if original_handler is None:
+            delattr(focus_module, "mouse_handler")
+        else:
+            focus_module.mouse_handler = original_handler
+        if original_focused is None:
+            delattr(focus_module, "get_focused")
+        else:
+            focus_module.get_focused = original_focused
+        del renpy.display.screen
+        del renpy.current_screen
+    assert seen == ["minigame_message"]
+    assert stack == [None]
+
+
 def test_hover_element_moves_without_clicking(running_bridge):
     element = running_bridge.client.list_ui_elements()[1]
     hovered = running_bridge.client.hover_element(id=element["id"])

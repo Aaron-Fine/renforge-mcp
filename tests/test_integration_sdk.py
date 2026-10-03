@@ -860,6 +860,82 @@ def test_live_imagebutton_hover_bounds_and_capture(sdk, demo_copy: Path) -> None
         assert not errors.get("events"), errors
 
 
+def _add_modal_hide_fixture(demo_copy: Path) -> None:
+    _add_hover_fixtures(demo_copy)
+    fixture = demo_copy / "game" / "renforge_sdk_fixtures.rpy"
+    existing = fixture.read_text(encoding="utf-8")
+    if "renforge_sdk_modal_hide" in existing:
+        return
+    fixture.write_text(
+        existing
+        + """
+default renforge_sdk_under_clicks = 0
+
+screen renforge_sdk_underlay():
+    button:
+        xpos 0
+        ypos 0
+        xsize 1920
+        ysize 1080
+        action SetVariable("renforge_sdk_under_clicks", renforge_sdk_under_clicks + 1)
+        text "Under"
+
+screen renforge_sdk_modal_hide():
+    modal True
+    zorder 100
+    imagebutton:
+        xalign 0.5
+        yalign 0.5
+        idle "renforge_sdk_idle"
+        hover "renforge_sdk_hover"
+        action Hide()
+""",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
+def test_live_modal_hide_is_clickable_and_dismisses_its_screen(sdk, demo_copy: Path) -> None:
+    """A modal image button stays clickable over a full-screen control, and Hide() runs in its screen."""
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.observe import classify
+    from renforge.project import RenpyProject
+
+    _add_modal_hide_fixture(demo_copy)
+
+    with launch_with_bridge(sdk, RenpyProject(demo_copy), startup_timeout=90) as session:
+        client = session.client
+        client.eval_expr('renpy.show_screen("renforge_sdk_underlay")')
+        client.eval_expr('renpy.show_screen("renforge_sdk_modal_hide")')
+        client.eval_expr("renpy.restart_interaction()")
+
+        snapshot = None
+        for _ in range(40):
+            snapshot = classify(client.observe(screenshot=False))
+            if snapshot.get("stable") is True and snapshot.get("controls"):
+                break
+            time.sleep(0.25)
+        assert snapshot is not None and snapshot.get("stable") is True, snapshot
+        assert snapshot.get("controls"), snapshot
+        hide = [
+            control
+            for control in snapshot["controls"]
+            if control.get("screen") == "renforge_sdk_modal_hide"
+            or (control.get("action") or "") == "Hide"
+        ]
+        assert hide, snapshot["controls"]
+        assert hide[0]["covered"] is False, hide[0]
+        assert hide[0]["clickable"] is True
+        for control in snapshot["controls"]:
+            action = control.get("action") or ""
+            if "renforge_sdk_under_clicks" in action or control.get("text") == "Under":
+                assert control["covered"] is True, control
+        reply = client.act(interaction=snapshot["interaction"], control_id=hide[0]["id"])
+        assert reply.get("ok") is True, reply
+        assert client.eval_expr('renpy.get_screen("renforge_sdk_modal_hide") is None') is True
+        assert client.get_var("renforge_sdk_under_clicks") == 0
+
+
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
 def test_live_imagebutton_click_paths_release_testmouse(sdk, demo_copy: Path) -> None:
     """Exercise click_element and click_at against a real Ren'Py ImageButton."""
