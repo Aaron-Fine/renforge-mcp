@@ -27,6 +27,19 @@ from renforge.sdk import RenpySdk
 _LAUNCHER_NAME = "renpy.exe" if os.name == "nt" else "renpy.sh"
 
 
+def test_legacy_sdk_rejected_before_project_lock_or_artifacts(tmp_path, monkeypatch):
+    from renforge.bridge import launcher
+
+    (tmp_path / "game").mkdir()
+    (tmp_path / "sdk").mkdir()
+    sdk = RenpySdk(version="7.8.7", root=tmp_path / "sdk")
+    monkeypatch.setattr(launcher, "ProjectBridgeLock", lambda *args: pytest.fail("must not acquire lock"))
+    with pytest.raises(LaunchError) as exc:
+        launch_with_bridge(sdk, RenpyProject(tmp_path))
+    assert exc.value.code == "UNSUPPORTED_RENPY_VERSION"
+    assert not (tmp_path / ".renforge" / "control").exists()
+
+
 class _FakeProcess:
     def __init__(self):
         self.pid = 424242

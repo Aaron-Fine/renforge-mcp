@@ -129,8 +129,8 @@ class BridgeClient:
 
         return response
 
-    def _checked(self, command: str, payload: dict[str, Any] | None = None) -> dict:
-        reply = self.request(command, payload)
+    def _checked(self, command: str, payload: dict[str, Any] | None = None, *, deadline: float | None = None) -> dict:
+        reply = self.request(command, payload) if deadline is None else self.request(command, payload, deadline=deadline)
         if reply.get("error") is not None:
             raise BridgeError(f"bridge error on '{command}': {reply['error']}")
         return reply
@@ -235,6 +235,12 @@ class BridgeClient:
         )
         return self._normalize_error_reply(reply)
 
+    def progression(self, action: str, operation_id: str, *, deadline: float | None = None, **options) -> dict:
+        """Start or stop an owned, leased native-skip operation."""
+        return self._normalize_error_reply(self.request("progression", {
+            "action": action, "id": operation_id, **options,
+        }, deadline=deadline))
+
     def act(
         self,
         *,
@@ -247,10 +253,19 @@ class BridgeClient:
         x: int | float | None = None,
         y: int | float | None = None,
         drop: str | None = None,
+        session_id: str | None = None,
+        observation_id: str | None = None,
+        submit: bool = True,
         deadline: float | None = None,
     ) -> dict:
         """Activate one control id, or post one physical key, on this interaction."""
         payload: dict[str, Any] = {"interaction": interaction}
+        if session_id is not None:
+            payload["session_id"] = session_id
+        if observation_id is not None:
+            payload["observation_id"] = observation_id
+        if text is not None:
+            payload["submit"] = submit
         if control_id is not None:
             payload["id"] = control_id
         if text is not None:
@@ -269,13 +284,19 @@ class BridgeClient:
         # Empty drop is a release onto nothing, so it has to stay on the wire.
         if drop is not None:
             payload["drop"] = drop
-        return self._normalize_error_reply(self.request("act", payload, deadline=deadline))
+        reply = self.request("act", payload, deadline=deadline)
+        if reply.get("error") is not None and reply.get("ok") is not False:
+            return {**reply, "ok": False, "action_outcome": "unknown", "retry_safe": False}
+        return self._normalize_error_reply(reply)
 
-    def dismiss_if(self, *, interaction: int, deadline: float | None = None) -> dict:
+    def dismiss_if(self, *, interaction: int, session_id: str | None = None, observation_id: str | None = None, deadline: float | None = None) -> dict:
         """Post dismiss only when this interaction still listens for it."""
-        return self._normalize_error_reply(
-            self.request("dismiss_if", {"interaction": interaction}, deadline=deadline)
-        )
+        payload: dict[str, Any] = {"interaction": interaction}
+        if session_id is not None:
+            payload["session_id"] = session_id
+        if observation_id is not None:
+            payload["observation_id"] = observation_id
+        return self._normalize_error_reply(self.request("dismiss_if", payload, deadline=deadline))
 
     def control(
         self,
@@ -335,12 +356,12 @@ class BridgeClient:
         """Return named save slots with compact metadata and no screenshots."""
         return self._normalize_error_reply(self.request("list_slots", {"regexp": regexp}))
 
-    def poll_events(self, since: int = 0) -> dict:
+    def poll_events(self, since: int = 0, *, deadline: float | None = None) -> dict:
         """Return pushed events with ``seq > since`` plus the current cursor.
 
         Reply shape: ``{"events": [...], "cursor": <int>}``.
         """
-        return self._checked("poll_events", {"since": since})
+        return self._checked("poll_events", {"since": since}, deadline=deadline)
 
     def list_choices(self) -> list[dict[str, Any]]:
         """Return textual focusables as ``index``, ``text``, and ``screen``."""
@@ -350,9 +371,14 @@ class BridgeClient:
         """Return visible controls backed by the active Ren'Py menu's ``items``."""
         return self._checked("list_menu_choices")["choices"]
 
-    def select_choice(self, text: str | None = None, index: int | None = None) -> dict:
-        """Select a menu option by visible text (preferred) or by index."""
-        return self._checked("select_choice", {"text": text, "index": index})
+    def select_choice(self, text: str | None = None, index: int | None = None,
+                      *, interaction: int | None = None, session_id: str | None = None,
+                      observation_id: str | None = None) -> dict:
+        """Select a current choice, optionally guarded by an observation identity."""
+        payload = {"text": text, "index": index}
+        payload.update({key: value for key, value in dict(interaction=interaction,
+            session_id=session_id, observation_id=observation_id).items() if value is not None})
+        return self._normalize_error_reply(self.request("select_choice", payload))
 
     def list_ui_elements(
         self,
@@ -610,7 +636,7 @@ class BridgeClient:
         expected_screenshot: str | dict[str, Any] | None = None,
         expected_state: dict[str, Any] | None = None,
         expected_screenshot_hash: str | None = None,
-        expected_frame_id: str | None = None,
+        expected_frame_id: str | dict[str, Any] | None = None,
         coordinate_space: str = "logical",
     ) -> dict:
         """Click screen coordinates, optionally guarded by frame/state.

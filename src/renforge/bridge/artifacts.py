@@ -151,7 +151,8 @@ def session_init_payload() -> bytes:
             # Use the engine's normal file storage and scan lifecycle, with
             # exactly one location. Do not register game/saves or extra_savedirs.
             storage = _renforge_engine.savelocation
-            storage.quit()
+            if getattr(storage, "scan_thread", None) is not None:
+                storage.quit()
             storage.quit_scan_thread = False
             _renforge_engine.config.savedir = _renforge_savedir
             current = _renforge_engine.loadsave.location
@@ -160,7 +161,7 @@ def session_init_payload() -> bytes:
             location.add(previous.get(_renforge_savedir) or storage.FileLocation(_renforge_savedir))
             location.scan()
             _renforge_engine.loadsave.location = location
-            if not _renforge_engine.emscripten:
+            if not getattr(_renforge_engine, "emscripten", False):
                 storage.scan_thread = _renforge_threading.Thread(target=storage.run_scan_thread)
                 storage.scan_thread.start()
 

@@ -7,12 +7,73 @@ versioning.
 
 ### Added
 
+- Runtime compatibility checks reject games/SDKs below Ren'Py 8.0 with
+  `UNSUPPORTED_RENPY_VERSION` before download, injection, or launch. Explicit
+  SDK overrides do not bypass a legacy game's engine requirement.
+- Engine-based ending evidence in gameplay observations and progression:
+  `stop="end"` confirms a root script return at the main menu; `main_menu`
+  distinguishes initial menus and explicit restarts. Evidence persists until a
+  new run, and confirmed endings emit a cursor-readable `ending` event.
 - Public MCP tool `renforge_editor` (`status` / `select` / `save`) so agents
   can drive the Live Editor without private `editor_task0_*` handlers.
 - Every pull request now runs the broad Ren'Py 8.5.3 SDK integration suite on
   Linux/Xvfb, with SDK caching and an explicit diagnostic artifact allowlist.
 
 ### Changed
+
+- Simplified shared discovery: owning screen instances supply named widget IDs,
+  and the collector assigns IDs/facts once for observation and actions. Removed
+  obsolete discovery helpers and scene placement calculations; both host
+  progression modes now live in `progression.py`, with compatibility exports.
+- Updated gameplay/tool guidance for clipped menu entries, incomplete discovery,
+  content-based frame guards, process-exit status, and unavailable text overflow.
+  Historical harness proposals are distinguished from current TODOs.
+- Unified gameplay and legacy UI discovery around one control collector and
+  canonical IDs. Engine menu actions expose clipped choices on custom layers;
+  ambiguous captions are refused and selections accept observation guards.
+- Gameplay images preserve source frame identity and return a frame descriptor
+  for guarded clicks on resized images, independently of the delivered PNG hash.
+- Scene geometry uses completed renders and composes transforms/clipping.
+  Repeated placements retain render paths; alpha inspection uses cached renders.
+  Bounded focus probes find usable points on partially covered/masked controls.
+- Unsupported custom event handlers are explicit input candidates and stop both
+  progression modes. Conditional custom eligibility remains unknown.
+- Owned process termination distinguishes clean exits from nonzero exits while
+  preserving historical observations and leaving story completion unconfirmed.
+- Observations wait for active screens to appear in the completed render;
+  progression boundary reports agree with the settled final observation.
+- Coordinate clicks on unfocused custom displayables now allow hover to render
+  before mouse-up, retain synthetic cursor state until delivery, and clear it
+  before replying. A bounded lease and interaction guard prevent delayed clicks
+  from starting after the scene changes.
+
+- Session storage initialization handles an absent save scanner thread and an
+  absent Emscripten flag while preserving the single isolated save location.
+- Default progression uses bounded native skip, with interaction-level guards,
+  time/step leases, temporary unread-text and presentation preferences, and
+  guaranteed restoration while the engine is responsive. `mode="dismiss"`
+  preserves guarded dismissal; both modes stop before actionable UI.
+- Standalone progression accepts `screenshot=false`. Gameplay PNGs are bounded
+  for MCP transport and report scaling metadata with hashes of returned bytes.
+- Frame timeouts, transport failures, verified runtime errors, and uncertain
+  action outcomes are distinct. Final observations settle after skip stops,
+  stale actions return fresh snapshots, and events are drained during progression.
+- Physical `act` keys include Tab; speaker names and callback dialogue use
+  engine interpolation.
+
+- Host and injected bridge now share one gameplay contract for IDs,
+  classification, text cleanup, operations, and guards. Discovery reuses one
+  bounded scene inventory, and action guards reuse its widget references.
+- `renforge_act` returns the next stable observation by default, with optional
+  `advance=true` progression, `submit=false` input editing, and session and
+  observation guards. Action success remains separate from follow-up status;
+  `observe=false` preserves the previous action-only response.
+- Custom overlay hubs remain gameplay controls. Held keys can be released after
+  interaction changes; viewport axes are validated before mutation; drag
+  capabilities and target eligibility are checked before callbacks run.
+- Crossed dialogue preserves repeated occurrences and reports event-buffer gaps;
+  rendered text replaces older-engine callbacks containing source interpolation.
+
 
 - Autopilot now identifies choices from active Ren'Py menu `items`, including
   custom-named and one-item menus, without inferring narrative intent from

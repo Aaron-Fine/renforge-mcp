@@ -24,7 +24,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..autopilot import autopilot as _autopilot
-from ..observe import apply_screenshot, classify, crossed_transcript, run_advance_until
+from ..observe import apply_screenshot
+from ..interaction import classify, crossed_transcript, validate_act_payload, _real_number, progression_boundary
+from ..progression import failure_status, process_exit, run_advance_until, run_native_skip, settle
 from ..bridge.client import BridgeClient, BridgeError
 from ..bridge.launcher import (
     BridgeSession,
@@ -43,7 +45,7 @@ from ..save_isolation import (
     list_host_slots,
     path_exposes_user_saves,
 )
-from ..sdk import get_or_install_sdk
+from ..sdk import get_or_install_sdk, require_supported_runtime
 from ..state_compact import (
     apply_serialization_limits,
     compact_state,
@@ -79,6 +81,7 @@ class _LaunchTask:
         self.session: BridgeSession | None = None
         self.cleanup_result: dict[str, Any] | None = None
         self.lifecycle: str = "starting"
+        self.exit_code: int | None = None
         self._waiter: threading.Thread | None = None
 
 
@@ -122,6 +125,8 @@ def _attach_session_waiter(task: _LaunchTask, session: BridgeSession) -> None:
             if _LAUNCHES.get(key) is not task or task.session is not session:
                 return
             task.lifecycle = "closing"
+            evidence = process_exit(process)
+            task.exit_code = evidence["exit_code"] if evidence else None
         try:
             cleanup = session.close()
         except Exception as exc:
@@ -251,6 +256,7 @@ def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
             "editor": task.requested_editor,
             "elapsed_ms": elapsed_ms,
             "cleanup": cleanup,
+            "exit_code": task.exit_code,
             "message": "Owned session is closing." if task.lifecycle == "closing" else "Owned session closed.",
         }
 
@@ -502,6 +508,14 @@ def launch_game(
             "error": f"{type(exc).__name__}: {exc}",
             "message": f"{type(exc).__name__}: {exc}",
         }
+
+    try:
+        require_supported_runtime(version, project_root=project.abs_root)
+    except LaunchError as exc:
+        return exc.to_dict()
+    except (ValueError, TypeError) as exc:
+        return {"ok": False, "code": "INVALID_RENPY_VERSION",
+                "phase": "checking_runtime_compatibility", "error": str(exc), "message": str(exc)}
 
     session_cfg = dict(session or {})
     isolation_defaults = apply_launch_isolation_defaults(
@@ -1016,8 +1030,20 @@ def _bridge_session(client: BridgeClient) -> tuple[str, int, str]:
     return (config.host, int(config.port), config.token)
 
 
+def _owned_process(project_path, client):
+    session = _owned_session(project_path)
+    if session is None:
+        return None
+    owner_client = getattr(session, "client", None)
+    try:
+        same = owner_client is client or _bridge_session(owner_client) == _bridge_session(client)
+    except (AttributeError, TypeError, ValueError):
+        same = False
+    return getattr(session, "process", None) if same else None
+
+
 def _crossed_since(project_path: str, client: BridgeClient) -> int:
-    slot = _crossed_after.get(project_path)
+    slot = _crossed_after.get(_key(project_path))
     if slot is None or slot[0] != _bridge_session(client):
         return 0
     return slot[1]
@@ -1026,7 +1052,7 @@ def _crossed_since(project_path: str, client: BridgeClient) -> int:
 def _mark_crossed(project_path: str, client: BridgeClient, seq: Any) -> None:
     if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
         return
-    _crossed_after[project_path] = (_bridge_session(client), seq)
+    _crossed_after[_key(project_path)] = (_bridge_session(client), seq)
 
 
 def _observation_from_reply(reply: dict) -> dict:
@@ -1060,10 +1086,6 @@ def observe(project_path: str, *, screenshot: bool = True) -> dict:
     return _with_client(project_path, _handler)
 
 
-def _act_number(value: Any) -> bool:
-    return not isinstance(value, bool) and isinstance(value, (int, float))
-
-
 def act(
     project_path: str,
     interaction: int,
@@ -1075,46 +1097,101 @@ def act(
     x: int | float | None = None,
     y: int | float | None = None,
     drop: str | None = None,
+    *,
+    session_id: str | None = None,
+    observation_id: str | None = None,
+    submit: bool = True,
+    observe: bool = True,
+    advance: bool = False,
+    screenshot: bool = True,
+    max_steps: int = 30,
+    timeout: float = 5.0,
+    mode: str = "skip",
 ) -> dict:
-    """Activate one control, or post one physical key, re-checked on the main thread."""
-    if isinstance(interaction, bool) or not isinstance(interaction, int):
-        return {"ok": False, "error": "stale"}
-    has_id = isinstance(control_id, str) and bool(control_id)
-    has_key = key is not None
-    has_number = value is not None or x is not None or y is not None or drop is not None
-    if has_id and has_key:
-        return {"ok": False, "error": "key_or_control"}
-    if has_key and has_number:
-        return {"ok": False, "error": "key_or_control"}
-    if not has_id and not has_key:
-        return {"ok": False, "error": "missing"}
-    if has_key and not isinstance(key, str):
-        return {"ok": False, "error": "unknown key %r; accepted keys: a-z, up, down, left, right, escape, return, space" % (key,)}
-    if text is not None and not isinstance(text, str):
-        return {"ok": False, "error": "text_required"}
-    if value is not None and not _act_number(value):
-        return {"ok": False, "error": "value_required"}
-    if x is not None and not _act_number(x):
-        return {"ok": False, "error": "value_required"}
-    if y is not None and not _act_number(y):
-        return {"ok": False, "error": "value_required"}
-    if drop is not None and not isinstance(drop, str):
-        return {"ok": False, "error": "unsupported"}
-    if hold is not None and not isinstance(hold, bool):
-        return {"ok": False, "error": "unsupported"}
+    """Act once, then observe or progress to the next decision within a budget.
+
+    Input success stays distinct from follow-up failure: callers must never
+    retry a successful action simply because the next observation timed out.
+    """
+    payload = {name: item for name, item in {
+        "interaction": interaction, "id": control_id, "text": text, "key": key,
+        "hold": hold, "value": value, "x": x, "y": y, "drop": drop,
+        "session_id": session_id, "observation_id": observation_id,
+    }.items() if item is not None}
+    if text is not None:
+        payload["submit"] = submit
+    refusal = validate_act_payload(payload)
+    if refusal:
+        return {"ok": False, "error": refusal}
+    if not all(isinstance(flag, bool) for flag in (submit, observe, advance, screenshot)):
+        return {"ok": False, "error": "observation and input options must be booleans"}
+    if not _real_number(timeout) or not 0.1 <= timeout <= 120:
+        return {"ok": False, "error": "timeout must be a number from 0.1 to 120 seconds"}
+    if isinstance(max_steps, bool) or not isinstance(max_steps, int) or not 1 <= max_steps <= 200:
+        return {"ok": False, "error": "max_steps must be an integer from 1 to 200"}
+
+    if mode not in ("skip", "dismiss"):
+        return {"ok": False, "error": "mode must be skip or dismiss"}
 
     def _handler(client: BridgeClient) -> dict:
-        return client.act(
-            interaction=interaction,
-            control_id=control_id if has_id else None,
-            text=text,
-            key=key,
-            hold=hold,
-            value=value,
-            x=x,
-            y=y,
-            drop=drop,
-        )
+        process = _owned_process(project_path, client)
+        deadline = time.monotonic() + timeout
+        try:
+            result = client.act(
+                interaction=interaction, control_id=control_id, text=text, key=key,
+                hold=hold, value=value, x=x, y=y, drop=drop, submit=submit,
+                session_id=session_id, observation_id=observation_id, deadline=deadline,
+            )
+        except BridgeError as exc:
+            return {"ok": False, "action_outcome": "unknown", "retry_safe": False,
+                    "error": str(exc), "observation_status": failure_status(exc, process),
+                    "hint": "Observe before deciding whether to retry; the input may have taken effect."}
+        result.setdefault("action_outcome", "refused" if result.get("ok") is False else "succeeded")
+        if result["action_outcome"] == "unknown":
+            result["observation_status"] = failure_status(BridgeError(str(result.get("error"))), process)
+            result["hint"] = "Observe before deciding whether to retry; the input may have taken effect."
+        if isinstance(result.get("observation"), dict):
+            result["observation"] = _observation_from_reply(result["observation"])
+            result["observation_status"] = "ready" if result["observation"].get("stable") else "timeout"
+        if result.get("ok") is False or result.get("error") or not (observe or advance):
+            return result
+        if advance:
+            remaining = deadline - time.monotonic()
+            if remaining < 0.1:
+                result.update({"observation": None, "observation_status": "timeout"})
+                return result
+            progress = _advance_with_client(project_path, client, max_steps=max_steps,
+                                            timeout=remaining, screenshot=screenshot, mode=mode)
+            result["observation"] = progress.pop("observation", None)
+            png = progress.pop("_png", None)
+            if png is not None:
+                result["_png"] = png
+            result["progress"] = progress
+            result["observation_status"] = progress.get("observation_status", "timeout")
+            return result
+        png_box = {}
+        def fetch(want_image):
+            try:
+                raw = client.observe(screenshot=want_image, deadline=deadline)
+                if raw.get("ok") is False:
+                    return raw
+                raw, png = apply_screenshot(raw)
+                if png is not None:
+                    png_box["png"] = png
+                return raw
+            except BridgeError as exc:
+                return {"ok": False, "status": failure_status(exc, process), "error": str(exc)}
+            except (ValueError, TypeError, OSError) as exc:
+                return {"ok": False, "status": "transport_error", "error": f"invalid screenshot: {exc}"}
+        snapshot, status, error = settle(fetch, deadline, screenshot=screenshot)
+        result.update(observation=snapshot, observation_status=status)
+        png = png_box.get("png")
+        if png is not None and snapshot is not None and hashlib.sha256(png).hexdigest() == snapshot.get("frame_hash"):
+            result["_png"] = png
+
+        if error:
+            result["observation_error"] = error
+        return result
 
     return _with_client(project_path, _handler)
 
@@ -1123,107 +1200,137 @@ def advance_until(
     project_path: str,
     max_steps: int = 30,
     timeout: float = 30.0,
+    *,
+    screenshot: bool = True,
+    mode: str = "skip",
 ) -> dict:
-    """Dismiss say/soft-pause lines until the snapshot says the player must choose.
-
-    Does not click controls and does not enable skip. The returned observation's
-    ``frame_hash`` matches ``_png`` when a frame was captured.
-    """
+    """Progress with bounded native skip by default; never select a control."""
+    if (isinstance(max_steps, bool) or not isinstance(max_steps, int) or not 1 <= max_steps <= 200
+            or not _real_number(timeout) or not 0.1 <= timeout <= 120
+            or not isinstance(screenshot, bool) or mode not in ("skip", "dismiss")):
+        return {"ok": False, "stop": "invalid_arguments", "steps": 0, "observation": None,
+                "error": "Require max_steps 1..200, timeout 0.1..120, boolean screenshot, and mode skip or dismiss"}
     try:
         client = _client(project_path)
     except FileNotFoundError:
-        return {
-            "ok": False,
-            "stop": "crash",
-            "steps": 0,
-            "observation": None,
-            "error": "no running game (bridge not found); call renforge_launch first",
-        }
+        return {"ok": False, "stop": "not_running", "steps": 0, "observation": None,
+                "error": "no running game (bridge not found); call renforge_launch first"}
     except Exception as exc:
-        return {
-            "ok": False,
-            "stop": "crash",
-            "steps": 0,
-            "observation": None,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
+        return {"ok": False, "stop": "transport_error", "steps": 0, "observation": None,
+                "error": f"{type(exc).__name__}: {exc}"}
+    return _advance_with_client(project_path, client, max_steps=max_steps, timeout=timeout,
+                                screenshot=screenshot, mode=mode)
 
+
+def _advance_with_client(project_path: str, client: BridgeClient, *, max_steps: int,
+                         timeout: float, screenshot: bool = True, mode: str = "skip") -> dict:
+    process = _owned_process(project_path, client)
+    started = time.monotonic()
+    wall_end = started + float(timeout)
+    # Cleanup, final render, and transcript drain have their own share of the
+    # caller's budget instead of attempting RPCs after progression used it all.
+    reserve = min(2.0, max(0.05, timeout * 0.25))
+    progress_end = wall_end - reserve
     png_box: dict[str, bytes] = {}
     frames: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
+    guard: dict[str, Any] = {}
     since = _crossed_since(project_path, client)
-    wall_end = time.monotonic() + float(timeout) if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) else time.monotonic()
+    cursor = since
+    truncated = False
 
-    def fetch(screenshot: bool) -> dict:
-        remaining = wall_end - time.monotonic()
-        request_budget = min(5.0, max(0.05, remaining))
+    def collect():
+        nonlocal cursor, truncated
         try:
-            reply = client.observe(
-                screenshot=bool(screenshot),
-                deadline=time.monotonic() + request_budget,
-            )
+            polled = client.poll_events(cursor, deadline=min(wall_end, time.monotonic() + 1.0))
+        except BridgeError:
+            truncated = True
+            return
+        if not isinstance(polled, dict) or polled.get("ok") is False:
+            truncated = True
+            return
+        events.extend(polled.get("events") or [])
+        truncated = truncated or bool(polled.get("truncated"))
+        next_cursor = polled.get("cursor")
+        if isinstance(next_cursor, int) and not isinstance(next_cursor, bool):
+            cursor = next_cursor
+
+    def fetch(want_image):
+        try:
+            request_end = min(wall_end, time.monotonic() + 5.0)
+            if time.monotonic() < progress_end:
+                request_end = min(request_end, progress_end)
+            reply = client.observe(screenshot=want_image and screenshot, deadline=request_end)
         except BridgeError as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "status": failure_status(exc, process), "error": str(exc)}
         if not isinstance(reply, dict):
-            return {"ok": False, "error": "observe reply must be an object"}
+            return {"ok": False, "status": "transport_error", "error": "observe reply must be an object"}
         if reply.get("ok") is False or reply.get("error"):
-            failed = dict(reply)
-            failed["ok"] = False
-            return failed
+            return {**reply, "ok": False, "status": "transport_error"}
         try:
             raw, png = apply_screenshot(reply)
         except (ValueError, TypeError) as exc:
-            return {"ok": False, "error": f"invalid screenshot: {exc}"}
+            return {"ok": False, "status": "transport_error", "error": f"invalid screenshot: {exc}"}
         if isinstance(png, bytes):
             png_box["png"] = png
         raw["ok"] = True
+        guard.update({name: raw.get(name) for name in ("session_id", "observation_id") if raw.get(name) is not None})
         seq = raw.get("event_seq")
-        # A frame at or before the watermark was already returned. Lines queued
-        # after that watermark still arrive through poll_events.
         already = isinstance(seq, int) and not isinstance(seq, bool) and seq <= since
-        if raw.get("stable") is True and not already:
-            frames.append(
-                {
-                    "label": raw.get("label"),
-                    "dialogue": raw.get("dialogue"),
-                    "event_seq": seq,
-                }
-            )
+        identity = (raw.get("interaction"), raw.get("say_id"), raw.get("label"), raw.get("dialogue"))
+        previous = (frames[-1].get("interaction"), frames[-1].get("say_id"), frames[-1].get("label"), frames[-1].get("dialogue")) if frames else None
+        if raw.get("stable") is True and not already and identity != previous:
+            frames.append({key: raw.get(key) for key in ("label", "dialogue", "event_seq", "say_id", "interaction")})
+        collect()
         return raw
 
-    def dismiss(interaction: int) -> dict:
-        remaining = wall_end - time.monotonic()
-        request_budget = min(5.0, max(0.05, remaining))
+    def dismiss(interaction):
         try:
-            return client.dismiss_if(
-                interaction=interaction,
-                deadline=time.monotonic() + request_budget,
-            )
+            return client.dismiss_if(interaction=interaction, deadline=progress_end, **guard)
         except BridgeError as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "status": failure_status(exc, process), "error": str(exc)}
 
-    result = run_advance_until(
-        fetch,
-        dismiss,
-        max_steps=max_steps,
-        timeout=timeout,
-    )
+    if mode == "skip":
+        result = run_native_skip(client, fetch, max_steps=max_steps, deadline=progress_end, total_deadline=wall_end)
+    else:
+        result = run_advance_until(fetch, dismiss, max_steps=max_steps,
+                                   timeout=max(0.01, progress_end - time.monotonic()))
+        result["mode"] = "dismiss"
+    prior = result.get("observation")
+    final, status, error = settle(fetch, wall_end, screenshot=screenshot)
+    result.update(observation=final, observation_status=status)
+    result["ending"] = final["lifecycle"]["ending"] if final is not None and status == "ready" else None
+    if final is not None and result.get("ok") and status == "ready":
+        phase = final["lifecycle"]["phase"]
+        if phase in ("ended", "main_menu"):
+            result["stop"] = "end" if phase == "ended" else "main_menu"
+        elif result.get("stop") in ("choose", "none", "unsupported"):
+            # Construction can briefly expose an empty interaction before its
+            # screen draws. Report the boundary established by the settled
+            # frame, while retaining actual budget/failure stop reasons.
+            boundary = progression_boundary(final)
+            if boundary is not None:
+                result["stop"] = boundary
+    elif result.get("stop") == "end":
+        # An earlier observation is historical if the final frame was lost.
+        result["stop"] = status if status != "ready" else "timeout"
+    exited = process_exit(process)
+    if exited is not None:
+        result["process"] = exited
+        if final is None:
+            result.update(ok=False, stop="exited" if exited["exit_code"] == 0 else "crash", ending=None)
+    if final is None and prior is not None:
+        result["last_observation"] = prior
+    if error:
+        result["observation_error"] = error
     png = png_box.get("png")
-    observation = result.get("observation") if isinstance(result, dict) else None
-    if isinstance(png, bytes) and isinstance(observation, dict):
-        if hashlib.sha256(png).hexdigest() == observation.get("frame_hash"):
-            result["_png"] = png
-    if isinstance(result, dict):
-        try:
-            polled = client.poll_events(since)
-        except BridgeError:
-            polled = {"events": [], "cursor": since}
-        events = polled.get("events") if isinstance(polled, dict) else None
-        result["crossed"] = crossed_transcript(events if isinstance(events, list) else [], frames)
-        cursor = polled.get("cursor") if isinstance(polled, dict) else None
-        if isinstance(cursor, int) and not isinstance(cursor, bool):
-            _mark_crossed(project_path, client, cursor)
-        else:
-            _mark_crossed(project_path, client, since)
+    if png is not None and final is not None and hashlib.sha256(png).hexdigest() == final.get("frame_hash"):
+        result["_png"] = png
+    collect()
+    result["crossed"] = crossed_transcript(events, frames)
+    result["crossed_truncated"] = truncated
+    _mark_crossed(project_path, client, cursor)
+    result["elapsed_ms"] = int((time.monotonic() - started) * 1000)
     return result
 
 
@@ -1413,34 +1520,17 @@ def saves(
     )
 
 
-def _filter_narrative_choices(raw_choices: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep only choices that come from the active narrative choice screen."""
-
-    choices: list[dict[str, Any]] = []
-    for choice in raw_choices:
-        if not isinstance(choice, dict):
-            continue
-        if choice.get("screen") == "choice":
-            choices.append(choice)
-    return choices
-
-
 def list_choices(project_path: str) -> dict:
-    def _handler(client: BridgeClient) -> dict:
-        state = client.get_state()
-        if not bool(state.get("menu")):
-            return {"ok": True, "choices": []}
-
-        raw_choices = client.list_choices()
-        if not isinstance(raw_choices, list):
-            raw_choices = []
-        return {"ok": True, "choices": _filter_narrative_choices(raw_choices)}
-
-    return _with_client(project_path, _handler)
+    return _with_client(project_path, lambda client: {
+        "ok": True, "choices": client.list_menu_choices()})
 
 
-def select_choice(project_path: str, text: str | None = None, index: int | None = None) -> dict:
-    return _with_client(project_path, lambda c: c.select_choice(text=text, index=index))
+def select_choice(project_path: str, text: str | None = None, index: int | None = None,
+                  *, interaction: int | None = None, session_id: str | None = None,
+                  observation_id: str | None = None) -> dict:
+    guards = {key: value for key, value in dict(interaction=interaction, session_id=session_id,
+              observation_id=observation_id).items() if value is not None}
+    return _with_client(project_path, lambda c: c.select_choice(text=text, index=index, **guards))
 
 
 def list_ui_elements(
@@ -1770,7 +1860,7 @@ def click_at(
     expected_screenshot: str | dict[str, Any] | None = None,
     expected_state: dict[str, Any] | None = None,
     expected_screenshot_hash: str | None = None,
-    expected_frame_id: str | None = None,
+    expected_frame_id: str | dict[str, Any] | None = None,
     coordinate_space: str = "logical",
 ) -> dict:
     """Click screen coordinates with optional screenshot/state guards."""
@@ -2096,7 +2186,10 @@ def run_autopilot(project_path: str, version: str = "stable", max_runs: int = 16
     """Explore the game's branches and return a coverage/crash report."""
     try:
         project = RenpyProject(Path(project_path))
+        require_supported_runtime(version, project_root=project.abs_root)
         sdk = get_or_install_sdk(version, project_root=project.abs_root)
+    except LaunchError as exc:
+        return exc.to_dict()
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     # Autopilot launches its own throwaway sessions; free any manual one first.

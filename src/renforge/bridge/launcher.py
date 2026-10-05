@@ -29,7 +29,7 @@ from ..launch_env import (
 )
 from ..project import RenpyProject
 from ..save_isolation import LaunchIsolation, resolve_launch_isolation
-from ..sdk import RenpySdk
+from ..sdk import RenpySdk, require_supported_runtime
 from .artifacts import (
     ArtifactOwnershipError,
     allocate_and_materialize,
@@ -357,6 +357,16 @@ class ProjectBridgeLock:
 
 
 _DEFERRED_LOCKS: set[ProjectBridgeLock] = set()
+
+def bridge_payload() -> bytes:
+    """Build one owned bridge artifact with the canonical gameplay contract."""
+    source = (Path(__file__).parent.parent / "interaction.py").read_text(encoding="utf-8")
+    template = _BRIDGE_RESOURCE.read_text(encoding="utf-8")
+    marker = '"__RENFORGE_INTERACTION_SOURCE__"'
+    if template.count(marker) != 1:
+        raise ValueError("bridge must contain exactly one gameplay contract marker")
+    return template.replace(marker, repr(source)).encode("utf-8")
+
 
 def _editor_screen_sources() -> list[Path]:
     """The region screens, in a stable order.
@@ -875,7 +885,7 @@ def _launch_after_project_lock(
             editor_assets, editor_font_relative = _prepare_editor_asset_payloads()
         materialized = allocate_and_materialize(
             project,
-            bridge_payload=_BRIDGE_RESOURCE.read_bytes(),
+            bridge_payload=bridge_payload(),
             include_session_init=bool(savedir_path),
             editor_payload=editor_payload,
             editor_asset_files=editor_assets,
@@ -1135,6 +1145,7 @@ def launch_with_bridge(
     editor: bool = False,
 ) -> BridgeSession:
     """Launch a bridge while exclusively owning this project's artifacts."""
+    require_supported_runtime(sdk.version, project_root=project.abs_root)
     project_lock = ProjectBridgeLock(project.root)
     project_lock.acquire()
     editor_coordinator: EditorCoordinator | None = None

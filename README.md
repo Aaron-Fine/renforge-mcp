@@ -182,15 +182,27 @@ JSON summary of the project (labels, scripts, assets, and related metadata).
   inspectable. Guide: [docs/LIVE_EDITOR.md](docs/LIVE_EDITOR.md).
 - **Project inspection** — summarize structure, scan scripts/labels/assets,
   parse lint output.
+- **Agent gameplay** — `renforge_observe` reads a coherent interaction;
+  runtime launches require Ren'Py 8.0 or newer and report an incompatibility for
+  older game engines before SDK download or bridge injection.
+  `renforge_act` guards the selected control and returns the next observation.
+  Pass `advance=true` for bounded native skip to the next decision or ending, with
+  temporary preferences restored afterward. `mode="dismiss"` retains single-step
+  progression; `screenshot=false` returns text-only results.
+  Choices on custom layers and in clipped viewports use engine menu actions.
+  Shared frame geometry reports uncertain custom input explicitly; bounded
+  progression stops before it. Pass an observation's `frame` descriptor to
+  `click_at` when using pixels from a resized gameplay image.
+  Use `editor=false` for play sessions. See [the gameplay workflow](docs/MCP.md#look-then-act).
 - **Live game control** — launch a project with an injected in-game bridge and
   Live Editor, then advance dialogue, list/select choices, evaluate
   expressions, get/set store variables, send focused text/key/scroll input,
   poll pushed events, and capture frames the model can literally see.
-- **Scene perception (pixel-perfect, no vision needed)** — read the whole frame
-  as structured logical-coordinate nodes (`renforge_scene_tree`): every sprite,
-  control, and text block with bounds, z-order, colour, and style, plus an ASCII
-  wireframe and structural scene diffs. Then `renforge_measure` reports alignment,
-  spacing, overlap, fit, and WCAG contrast as numbers an agent can act on.
+- **Scene perception** — inspect a bounded scene inventory
+  (`renforge_scene_tree`) with completed-frame logical bounds where available,
+  z-order, colour, style, an ASCII wireframe, and structural scene diffs.
+  Unknown geometry and custom input remain explicit. `renforge_measure` reports
+  alignment, spacing, overlap, fit, and WCAG contrast as numbers an agent can act on.
 - **Autopilot** — auto-play choices backed by Ren'Py menu `items` across
   fresh replays, including custom-named and one-item menus, while reporting
   label coverage and crashes. Custom `call_screen` interactions that do not

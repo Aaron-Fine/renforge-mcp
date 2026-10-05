@@ -228,6 +228,25 @@ def bundled_engine_version(project_root: Path) -> str | None:
     return f"{triple[0]}.{triple[1]}.{triple[2]}"
 
 
+def require_supported_runtime(version: str = "stable", *, project_root: Path) -> None:
+    """Reject legacy game/SDK engines before runtime launch has side effects."""
+    from .launch_env import LaunchError
+
+    bundled = bundled_engine_version(project_root)
+    requested = bundled if bundled and (not version or version == "stable") else version
+    selected = _validate_version_identifier(_resolve_version(requested))
+    for source, candidate in (("bundled_engine", bundled), ("selected_sdk", selected)):
+        if candidate is not None and int(candidate.split(".", 1)[0]) < 8:
+            raise LaunchError(
+                "UNSUPPORTED_RENPY_VERSION",
+                f"Ren'Py {candidate} is incompatible with RenForge runtime control; Ren'Py 8.0 or newer is required.",
+                phase="checking_runtime_compatibility",
+                suggested_fix="Use a game build targeting Ren'Py 8.x or newer.",
+                details={"source": source, "detected_version": bundled,
+                         "selected_version": selected, "minimum_version": "8.0.0"},
+            )
+
+
 def _validated_sdk_version(root: Path, required_version: str) -> str | None:
     try:
         launcher = _find_entrypoint(root)

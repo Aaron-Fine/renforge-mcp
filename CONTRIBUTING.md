@@ -14,10 +14,17 @@ how you installed RenForge (`pip` / `uvx`), and the exact command + output.
 git clone https://github.com/alex-jordan547/renforge-mcp.git
 cd renforge-mcp
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[fastmcp,ui,test]"
+python -m pip install -e ".[ui,test]"
 npm --prefix ui ci
-pytest
+python -m pytest
 ```
+
+Use the virtual environment's interpreter for both installation and tests.
+`fastmcp`, `mcp`, Pydantic, and Pillow are required runtime dependencies, not
+optional test stubs. If contract tests report `_FallbackServer` or missing
+`ToolAnnotations`, reinstall with `.venv/bin/python -m pip install -e ".[ui,test]"`
+and run `.venv/bin/python -m pytest`. With uv, the equivalent install is
+`uv pip install --python .venv/bin/python -e ".[ui,test]"`.
 
 For **Cursor Cloud Agents** and other headless VMs (Ren'Py 8.5.3 + Xvfb + live
 editor smoke), use the committed bootstrap instead of repeating those steps by

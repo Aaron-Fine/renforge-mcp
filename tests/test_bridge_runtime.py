@@ -22,8 +22,9 @@ from renforge.bridge.client import BridgeClient, BridgeConfig, BridgeProtocolErr
 
 
 def _load_bridge_body():
-    raw = Path(__file__).resolve().parents[1] / "src/renforge/bridge/bridge.rpy"
-    lines = raw.read_text(encoding="utf-8").splitlines()
+    from renforge.bridge.launcher import bridge_payload
+
+    lines = bridge_payload().decode("utf-8").splitlines()
     assert lines[0].strip() == "init python:"
     return "\n".join(line[4:] if line.startswith("    ") else line for line in lines[1:])
 
@@ -99,6 +100,7 @@ def _fake_renpy(store):
         label_callbacks=[],
         periodic_callbacks=[],
         all_character_callbacks=[],
+        statement_callbacks=[],
         exception_handler=None,
     )
     renpy = types.ModuleType("renpy")
@@ -198,12 +200,12 @@ def _fake_renpy(store):
 
     renpy.show = _show
 
-    def _render_to_surface(child, width, height, resize=True):
+    def _render_to_surface(child, width=None, height=None, resize=True):
         for focus in focus_list:
             widget = getattr(focus, "widget", None)
             if widget is None or not callable(getattr(widget, "get_child", None)):
                 continue
-            if widget.get_child() is child and hasattr(widget, "_alpha_rect"):
+            if (widget.get_child() is child or widget in getattr(child, "render_of", ())) and hasattr(widget, "_alpha_rect"):
                 return _FakeSurface(widget._alpha_rect)
         return _FakeSurface(_FakeRect(0, 0, 0, 0))
 
@@ -831,6 +833,7 @@ def test_observe_dismiss_guard_and_stale_act(running_bridge):
     from renforge.observe import classify
 
     renpy = running_bridge.renpy
+    renpy.display.focus.focus_list[:] = []
 
     class SayBehavior:
         def __init__(self):
@@ -908,6 +911,7 @@ def test_soft_pause_dismiss_unfocused_is_dismissable(running_bridge):
     from renforge.observe import classify
 
     renpy = running_bridge.renpy
+    renpy.display.focus.focus_list[:] = []
 
     class SayBehavior:
         def __init__(self):
@@ -1460,8 +1464,12 @@ def test_readout_skips_focus_control_text(running_bridge):
     renpy.get_filename_line = lambda: ("game/script.rpy", 4)
     renpy.config.overlay_screens = []
 
+    text_render = types.SimpleNamespace(width=40, height=16, render_of=[day], children=[], reverse=None)
+    renpy.display.render = types.SimpleNamespace(screen_render=types.SimpleNamespace(
+        width=800, height=600, render_of=[], children=[(text_render, 12, 8, True, True)], reverse=None))
+    renpy.config.screen_width, renpy.config.screen_height = 800, 600
     snapshot = classify(running_bridge.client.observe(screenshot=False))
-    assert snapshot["forward"] == "dismiss", snapshot
+    assert snapshot["forward"] == "choose", snapshot
     assert [item["text"] for item in snapshot["readout"]] == ["Day 1"]
     assert snapshot["readout"][0]["bounds"] == {"x": 12, "y": 8, "width": 40, "height": 16}
     assert snapshot["readout"][0]["screen"] == "sandbox"
@@ -1740,7 +1748,7 @@ def test_act_sets_adjustments_and_drops_a_named_drag(running_bridge):
     assert by_id["puzzle/page"]["adjustment"]["x"]["range"] == 100
     assert by_id["puzzle/page"]["adjustment"]["y"]["value"] == 5
     assert by_id["puzzle/towel"]["image"] == "towel.png"
-    assert by_id["puzzle/towel"]["operations"] == ["drop"]
+    assert by_id["puzzle/towel"]["operations"] == ["drop", "click"]
 
     valued = running_bridge.client.act(interaction=6, control_id="puzzle/volume", value=11)
     assert valued.get("ok") is True, valued
@@ -2055,12 +2063,16 @@ def test_list_menu_choices_returns_only_items_from_their_active_screen(running_b
         types.SimpleNamespace(caption="Narrator caption", action=None),
     ]
     screens = {
-        "story_menu": types.SimpleNamespace(scope={"items": menu_items}),
+        "story_menu": types.SimpleNamespace(screen_name=("story_menu", None), scope={"items": menu_items}),
         # The HUD visibly repeats a story caption but has no menu items.
         # A single unioned caption set would falsely classify that HUD control.
         "hud": types.SimpleNamespace(scope={}),
     }
     running_bridge.renpy.get_screen = screens.get
+    focus_list[1].screen = screens["story_menu"]
+    focus_list[2].screen = screens["story_menu"]
+    focus_list[1].widget.clicked = menu_items[0].action
+    focus_list[2].widget.clicked = menu_items[1].action
 
     assert running_bridge.client.list_menu_choices() == [
         {"index": 0, "text": "Alpha choice", "screen": "story_menu"},
@@ -3435,41 +3447,26 @@ def test_list_ui_elements_reports_bounds_and_semantic_fields(running_bridge):
     assert len(info["frame_id"]) == 64
 
 
-def test_list_ui_elements_uses_named_textbutton_widget_id(running_bridge):
+def test_list_ui_elements_uses_owning_screen_for_named_textbutton_widget_id(running_bridge):
     renpy = running_bridge.renpy
     named_text = _FakeWidget("Tools On")
     button = _FakeWidget("Tools On")
     button.child = named_text
     focus = _FakeFocus("Tools On", 10, 10, 100, 30, widget=button)
-    focus.screen_name = "_renforge_editor_overlay"
-    original_focus_list = list(renpy.display.focus.focus_list)
-    original_get_screen = getattr(renpy, "get_screen", None)
+    focus.screen = types.SimpleNamespace(screen_name=("tools", None),
+        layer="custom_layer", widgets={"rf_tools": named_text})
     renpy.display.focus.focus_list[:] = [focus]
-    renpy.get_screen = lambda name: (
-        types.SimpleNamespace(widgets={"rf_tools": named_text})
-        if name == "_renforge_editor_overlay"
-        else None
-    )
 
-    try:
-        elements = running_bridge.client.list_ui_elements(
-            screen="_renforge_editor_overlay"
-        )
-        assert elements[0]["id"] == "rf_tools"
-        _focus, element, error = running_bridge.globs[
-            "_renforge_resolve_ui_element"
-        ](
-            {"id": "rf_tools", "screen": "_renforge_editor_overlay"},
-            "click_element",
-        )
-        assert error is None
-        assert element["id"] == "rf_tools"
-    finally:
-        renpy.display.focus.focus_list[:] = original_focus_list
-        if original_get_screen is None:
-            delattr(renpy, "get_screen")
-        else:
-            renpy.get_screen = original_get_screen
+    def default_layer_lookup(name):
+        raise AssertionError("named IDs must come from the owning screen instance")
+
+    renpy.get_screen = default_layer_lookup
+    elements = running_bridge.client.list_ui_elements(screen="tools")
+    assert elements[0]["id"] == "tools/rf_tools"
+    _focus, element, error = running_bridge.globs["_renforge_resolve_ui_element"](
+        {"id": "tools/rf_tools", "screen": "tools"}, "click_element")
+    assert error is None
+    assert element["id"] == "tools/rf_tools"
 
 
 def test_hit_test_reports_topmost_focusable(running_bridge):
@@ -3839,13 +3836,18 @@ def test_get_ui_element_bounds_non_imagebutton_reports_unavailable(running_bridg
 
 
 def test_get_ui_element_bounds_imagebutton_reports_painted_bounds(running_bridge):
+    renpy = running_bridge.renpy
+    widget = renpy.display.focus.focus_list[-1].widget
+    renpy.config.screen_width, renpy.config.screen_height = 800, 600
+    renpy.display.render = types.SimpleNamespace(screen_render=_completed_render(800, 600,
+        children=[(_completed_render(100, 30, [widget]), 200, 100, True, True)]))
     element = running_bridge.client.list_ui_elements()[-1]
     reply = running_bridge.client.get_ui_element_bounds(id=element["id"])
     assert reply["ok"] is True
     assert reply["focus_bounds"] == {"x": 200, "y": 100, "width": 100, "height": 30}
     assert reply["painted_bounds"] == {"x": 204, "y": 106, "width": 80, "height": 14}
     assert reply["painted_bounds_available"] is True
-    assert reply["painted_bounds_source"] == "rendered-alpha"
+    assert reply["painted_bounds_source"] == "completed-render-alpha"
     assert reply["state"] == "idle"
 
 
@@ -5337,3 +5339,615 @@ def test_bridge_rpy_windows_read_write_adapter_and_version_enforcement(tmp_path:
         with simulate_nt():
             globs["_renforge_bridge_read_starting_info"](project_root)
     assert len(calls["close_handle"]) == 1
+
+
+def test_act_rejects_another_session_and_rebuilt_controls(running_bridge):
+    renpy = running_bridge.renpy
+    _arm_stable_interaction(running_bridge, generation=5)
+    focus = _FakeFocus("Go", 0, 0, 40, 40)
+    focus.screen_name = "map"
+    renpy.display.focus.focus_list[:] = [focus]
+    raw = running_bridge.client.observe()
+    assert raw["session_id"] == running_bridge.session_id
+    assert isinstance(raw["observation_id"], str)
+    wrong_session = running_bridge.client.act(
+        interaction=5, control_id="map/button/0", session_id="c" * 32,
+        observation_id=raw["observation_id"],
+    )
+    assert wrong_session["error"] == "stale"
+    focus.widget = _FakeWidget("Go")
+    rebuilt = running_bridge.client.act(
+        interaction=5, control_id="map/button/0", session_id=raw["session_id"],
+        observation_id=raw["observation_id"],
+    )
+    assert rebuilt["error"] == "stale"
+    assert renpy._clicks == []
+
+
+def test_owned_key_can_be_released_after_interaction_and_stability_change(running_bridge):
+    import sys
+
+    pygame = sys.modules["pygame_sdl2"]
+    pygame.K_LEFT = 276
+    bridge = _arm_stable_interaction(running_bridge, generation=3)
+    held = running_bridge.client.act(interaction=3, key="left", hold=True,
+                                     session_id=running_bridge.session_id)
+    assert held["ok"]
+    bridge.observe_generation = 4
+    running_bridge.renpy.game.context = lambda: types.SimpleNamespace(interacting=False)
+    wrong = running_bridge.client.act(interaction=3, key="left", hold=False, session_id="c" * 32)
+    assert wrong["error"] == "stale"
+    released = running_bridge.client.act(interaction=3, key="left", hold=False,
+                                         session_id=running_bridge.session_id)
+    assert released["ok"] and released["events"] == ["keyup"]
+    assert bridge.held_keys == set()
+
+
+def test_act_collects_scene_inventory_once_and_skips_readout(running_bridge, monkeypatch):
+    _arm_stable_interaction(running_bridge)
+    focus = _FakeFocus("Go", 0, 0, 40, 40)
+    focus.widget.role = "button"
+    running_bridge.renpy.display.focus.focus_list[:] = [focus]
+    original = running_bridge.globs["_renforge_scene_inventory"]
+    calls = []
+
+    def inventory():
+        calls.append(True)
+        return original()
+
+    monkeypatch.setitem(running_bridge.globs, "_renforge_scene_inventory", inventory)
+    monkeypatch.setitem(running_bridge.globs, "_renforge_observe_readout",
+                        lambda *args: pytest.fail("act does not need readout"))
+    reply = running_bridge.client.act(interaction=1, control_id="screen/button/0")
+    assert reply["ok"], reply
+    assert len(calls) == 1
+
+
+def test_viewport_rejection_does_not_partially_change_an_axis(running_bridge):
+    calls = []
+    horizontal = types.SimpleNamespace(change=lambda value: calls.append(value), value=0)
+    vertical = types.SimpleNamespace(value=0)  # Missing the adapter on the second axis.
+    viewport = types.SimpleNamespace(xadjustment=horizontal, yadjustment=vertical)
+    adapter = running_bridge.globs["_renforge_act_value"]
+    reply = adapter({"x": 20, "y": 30}, types.SimpleNamespace(widget=viewport),
+                    "page", 1, {"role": "viewport"})
+    assert reply["error"] == "unsupported"
+    assert calls == []
+    reply = adapter({"x": 20, "y": float("nan")}, types.SimpleNamespace(widget=viewport),
+                    "page", 1, {"role": "viewport"})
+    assert reply["error"] == "value_required"
+    assert calls == []
+
+
+def test_say_callback_records_repeated_lines_and_reports_event_overflow(running_bridge):
+    import sys
+
+    bridge = sys.modules["_renforge_runtime"].bridge
+    callback = running_bridge.renpy.config.all_character_callbacks[0]
+    for _ in range(2):
+        callback("begin", what="Yes.")
+        callback("show", what="Yes.")
+    says = [event for event in running_bridge.client.poll_events()["events"] if event["type"] == "say"]
+    assert len(says) == 2 and says[0]["say_id"] != says[1]["say_id"]
+    for _ in range(1001):
+        bridge.push_event("label", {"label": "loop"})
+    polled = running_bridge.client.poll_events(0)
+    assert polled["truncated"] is True
+    assert polled["oldest_cursor"] > 1
+
+
+def test_pending_screen_restart_is_not_an_actionable_observation(running_bridge):
+    _arm_stable_interaction(running_bridge)
+    running_bridge.renpy.display.interface.restart_interaction = True
+    raw = running_bridge.client.observe()
+    assert raw["stable"] is False and raw["unstable_reason"] == "not_ready"
+    refused = running_bridge.client.act(interaction=1, key="left")
+    assert refused["error"] == "unstable"
+    assert running_bridge.renpy._pygame_events == []
+
+
+def test_drag_target_eligibility_and_target_only_callback(running_bridge):
+    adapter = running_bridge.globs["_renforge_act_drop"]
+    calls = []
+    source = types.SimpleNamespace(draggable=True, dragged=None, clicked=None)
+    target = types.SimpleNamespace(dropped=lambda drop, joined: calls.append((drop, joined)))
+    target.drop_allowable = lambda drop, joined: drop is target and joined == [source]
+    running_bridge.renpy.display.behavior.run = lambda action, *args: action(*args)
+    focuses = [types.SimpleNamespace(widget=source), types.SimpleNamespace(widget=target)]
+    controls = [{"id": "source", "role": "drag", "draggable": True},
+                {"id": "target", "role": "drag", "droppable": False}]
+    pairs = list(zip(focuses, controls))
+    refused = adapter({"drop": "target"}, focuses[0], "source", 1, controls[0], pairs)
+    assert refused["error"] == "unsupported" and calls == []
+    controls[1]["droppable"] = True
+    accepted = adapter({"drop": "target"}, focuses[0], "source", 1, controls[0], pairs)
+    assert accepted["ok"] and calls == [(target, [source])]
+
+
+def test_drag_joined_names_resolve_to_widgets(running_bridge):
+    partner = object()
+    source = types.SimpleNamespace(drag_joined=lambda drag: [("partner", 0, 0)],
+                                   get_drag_from_name=lambda name: partner)
+    assert running_bridge.globs["_renforge_drag_joined"](source) == [partner]
+
+
+def test_dialogue_prefers_rendered_text_over_source_interpolation(running_bridge):
+    screen = types.SimpleNamespace(screen_name=("say",), hiding=False,
+                                   scope={"who": None, "what": "Hello [name]."},
+                                   widgets={"what": _FakeWidget("Hello Alex.")})
+    dialogue = running_bridge.globs["_renforge_observe_dialogue"]([screen], "dismiss")
+    assert dialogue == {"who": None, "what": "Hello Alex."}
+
+
+@pytest.mark.parametrize("nested,stack,menu,replay", [
+    (1, [], False, False), (0, ["caller"], False, False),
+    (0, [], True, False), (0, [], False, True),
+])
+def test_nonterminal_returns_do_not_detect_endings(running_bridge, monkeypatch, nested, stack, menu, replay):
+    renpy = running_bridge.renpy
+    monkeypatch.setattr(renpy, "context", lambda: types.SimpleNamespace(_menu=menu, _main_menu=False), raising=False)
+    monkeypatch.setattr(renpy, "context_nesting_level", lambda: nested, raising=False)
+    monkeypatch.setattr(renpy, "get_return_stack", lambda: stack, raising=False)
+    renpy.store.main_menu = False
+    renpy.store._in_replay = replay
+    for callback in renpy.config.statement_callbacks:
+        callback("return")
+    renpy.store.main_menu = True
+    monkeypatch.setattr(renpy, "context", lambda: types.SimpleNamespace(_main_menu=True))
+    assert running_bridge.globs["_renforge_game_lifecycle"]() == {"phase": "main_menu", "ending": None}
+
+
+def test_terminal_return_requires_menu_confirmation_and_is_latched(running_bridge, monkeypatch):
+    renpy = running_bridge.renpy
+    context = types.SimpleNamespace(_main_menu=False, _menu=False)
+    monkeypatch.setattr(renpy, "context", lambda: context, raising=False)
+    monkeypatch.setattr(renpy, "context_nesting_level", lambda: 0, raising=False)
+    monkeypatch.setattr(renpy, "get_return_stack", lambda: [], raising=False)
+    monkeypatch.setattr(renpy, "get_filename_line", lambda: ("game/story.rpy", 42), raising=False)
+    lifecycle = running_bridge.globs["_renforge_game_lifecycle"]
+    for callback in renpy.config.statement_callbacks:
+        callback("return")
+    assert lifecycle() == {"phase": "playing", "ending": None}
+    context._main_menu = True
+    ended = lifecycle()
+    assert ended == {"phase": "ended", "ending": {
+        "id": 1, "reason": "script_return", "statement": {"file": "game/story.rpy", "line": 42}}}
+    assert lifecycle() == ended
+    assert len([event for event in running_bridge.client.poll_events()["events"] if event["type"] == "ending"]) == 1
+    # A custom Start(label) must also clear old evidence before another menu
+    # restart, even if the host never observes a frame in that short new run.
+    context._main_menu = False
+    for callback in renpy.config.statement_callbacks:
+        callback("say")
+    context._main_menu = True
+    assert lifecycle() == {"phase": "main_menu", "ending": None}
+    for callback in renpy.config.label_callbacks:
+        callback("start", False)
+    assert lifecycle() == {"phase": "main_menu", "ending": None}
+
+
+def test_return_expression_exception_does_not_confirm_ending(running_bridge, monkeypatch):
+    renpy = running_bridge.renpy
+    context = types.SimpleNamespace(_main_menu=False, _menu=False)
+    monkeypatch.setattr(renpy, "context", lambda: context, raising=False)
+    monkeypatch.setattr(renpy, "context_nesting_level", lambda: 0, raising=False)
+    monkeypatch.setattr(renpy, "get_return_stack", lambda: [], raising=False)
+    monkeypatch.setattr(renpy, "get_filename_line", lambda: ("game/story.rpy", 42), raising=False)
+    for callback in renpy.config.statement_callbacks:
+        callback("return")
+    renpy.config.exception_handler("error", "bad return expression", None)
+    context._main_menu = True
+    assert running_bridge.globs["_renforge_game_lifecycle"]() == {"phase": "main_menu", "ending": None}
+
+
+def test_init_return_does_not_confirm_ending(running_bridge, monkeypatch):
+    renpy = running_bridge.renpy
+    context = types.SimpleNamespace(_main_menu=False, _menu=False)
+    monkeypatch.setattr(renpy, "context", lambda: context, raising=False)
+    monkeypatch.setattr(renpy, "context_nesting_level", lambda: 0, raising=False)
+    monkeypatch.setattr(renpy, "get_return_stack", lambda: [], raising=False)
+    monkeypatch.setattr(renpy, "is_init_phase", lambda: True, raising=False)
+    for callback in renpy.config.statement_callbacks:
+        callback("return")
+    context._main_menu = True
+    assert running_bridge.globs["_renforge_game_lifecycle"]() == {"phase": "main_menu", "ending": None}
+
+
+@pytest.mark.parametrize("phase,stop", [("ended", "end"), ("main_menu", "main_menu")])
+def test_native_skip_stops_at_lifecycle_boundaries(running_bridge, monkeypatch, phase, stop):
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    raw["lifecycle"] = {"phase": phase, "ending": {"reason": "script_return"} if phase == "ended" else None}
+    # Even a menu that advertises dismiss must never be skipped.
+    running_bridge.globs["_renforge_progress_tick"]()
+    assert bridge.progression["stop"] == stop
+    assert renpy.config.skipping is None
+    assert renpy.store._preferences.skip_unseen is False
+
+
+def _native_skip_setup(running_bridge, monkeypatch):
+    import sys
+    bridge = sys.modules["_renforge_runtime"].bridge
+    renpy = running_bridge.renpy
+    renpy.config.skipping = None
+    renpy.config.allow_skipping = True
+    renpy.store._skipping = True
+    renpy.store._preferences = types.SimpleNamespace(skip_unseen=False, skip_after_choices=True)
+    raw = {"ok": True, "interaction": bridge.observe_generation, "stable": True,
+           "session_id": bridge.session_id, "observation_id": "initial", "screens": [],
+           "elements": [], "say_dismiss": "dismiss", "dialogue": None}
+    monkeypatch.setitem(running_bridge.globs, "_renforge_observe_raw", lambda *a, **k: dict(raw))
+    reply = running_bridge.client.progression("start", "owner", interaction=raw["interaction"],
+        session_id=bridge.session_id, observation_id="initial", max_steps=2, timeout=10)
+    assert reply["ok"], reply
+    return bridge, renpy, raw
+
+
+@pytest.mark.parametrize("kind", ["choice", "input", "custom"])
+def test_bounded_native_skip_stops_at_decisions_and_restores_preferences(running_bridge, monkeypatch, kind):
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    assert renpy.config.skipping == "slow"
+    assert renpy.store._preferences.skip_unseen is True
+    assert renpy.store._preferences.skip_after_choices is False
+    # Every new interaction freezes skip even before screen inventory settles.
+    renpy.config.start_interact_callbacks[0]()
+    assert renpy.config.skipping is None
+    raw["interaction"] = bridge.observe_generation
+    raw["elements"] = [{"screen": kind, "role": "input" if kind == "input" else "button",
+                        "enabled": True, "clickable": True, "covered": False}]
+    running_bridge.globs["_renforge_progress_tick"]()
+    assert bridge.progression["active"] is False
+    assert bridge.progression["stop"] == "choose"
+    assert renpy.config.skipping is None
+    assert renpy.store._preferences.skip_unseen is False
+    assert renpy.store._preferences.skip_after_choices is True
+    assert renpy._queued_events == []
+
+
+def test_bounded_native_skip_enforces_budget_without_host_poll(running_bridge, monkeypatch):
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    callback = renpy.config.start_interact_callbacks[0]
+    callback()
+    raw["interaction"] = bridge.observe_generation
+    running_bridge.globs["_renforge_progress_tick"]()
+    callback()
+    assert bridge.progression["steps"] == 2
+    assert bridge.progression["stop"] == "max_steps"
+    assert not bridge.progression["active"]
+    assert renpy.config.skipping is None
+    assert not renpy.store._preferences.skip_unseen
+
+
+def test_bounded_native_skip_lease_restores_state_after_disconnect(running_bridge, monkeypatch):
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    bridge.progression["deadline"] = 0
+    running_bridge.globs["_renforge_progress_tick"]()
+    assert bridge.progression["stop"] == "timeout"
+    assert renpy.config.skipping is None
+    assert not renpy.store._preferences.skip_unseen
+    assert renpy.store._preferences.skip_after_choices
+
+
+def test_bounded_native_skip_stop_cannot_cancel_another_owner(running_bridge, monkeypatch):
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    assert running_bridge.client.progression("stop", "other")["error"] == "stale_operation"
+    assert bridge.progression["active"]
+    reply = running_bridge.client.progression("stop", "owner", reason="cancelled")
+    assert reply["progression"]["stop"] == "cancelled"
+    assert renpy.config.skipping is None
+
+
+def test_speaker_and_callback_text_use_engine_substitution(running_bridge):
+    renpy = running_bridge.renpy
+    renpy.store.hero = types.SimpleNamespace(name="[povname] (thinking)")
+    renpy.store._last_say_who = "hero"
+    renpy.substitute = lambda value: value.replace("[povname]", "Nathan")
+    callback = renpy.config.all_character_callbacks[0]
+    callback("begin", what="Hello [povname].")
+    says = [e for e in running_bridge.client.poll_events()["events"] if e["type"] == "say"]
+    assert says[-1]["who"] == "Nathan (thinking)"
+    assert says[-1]["what"] == "Hello Nathan."
+
+
+def test_act_accepts_physical_tab(running_bridge, monkeypatch):
+    import sys
+    pygame = sys.modules["pygame_sdl2"]
+    pygame.K_TAB = 9
+    monkeypatch.setitem(running_bridge.globs, "_renforge_observe_stability", lambda: (True, None))
+    snapshot = running_bridge.client.observe()
+    result = running_bridge.client.act(interaction=snapshot["interaction"], key="tab")
+    assert result["ok"], result
+    assert result["key"] == "tab"
+    assert result["events"] == ["keydown", "keyup"]
+
+
+def test_bounded_skip_restores_presentation_preferences(running_bridge, monkeypatch):
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    running_bridge.client.progression("stop", "owner")
+    prefs = renpy.store._preferences
+    prefs.transitions = 2
+    prefs.text_cps = 40
+    reply = running_bridge.client.progression("start", "presentation", interaction=raw["interaction"],
+        max_steps=2, timeout=10)
+    assert reply["ok"], reply
+    assert prefs.transitions == 0 and prefs.text_cps == 0
+    running_bridge.client.progression("stop", "presentation")
+    assert prefs.transitions == 2 and prefs.text_cps == 40
+
+
+def test_bounded_skip_restores_preferences_on_engine_quit(running_bridge, monkeypatch):
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    for callback in renpy.config.quit_callbacks:
+        callback()
+    assert bridge.progression["stop"] == "cancelled"
+    assert renpy.config.skipping is None
+    assert not renpy.store._preferences.skip_unseen
+    assert renpy.store._preferences.skip_after_choices
+
+
+def test_expired_native_skip_start_never_changes_preferences(running_bridge, monkeypatch):
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    running_bridge.client.progression("stop", "owner")
+    result = running_bridge.client.progression("start", "late", interaction=raw["interaction"],
+        max_steps=2, timeout=10, expires_at=0)
+    assert result["error"] == "expired"
+    assert not renpy.store._preferences.skip_unseen
+    assert renpy.store._preferences.skip_after_choices
+    assert renpy.config.skipping is None
+
+
+def test_unfocused_pointer_waits_for_hover_frame_and_reply_cleanup(running_bridge):
+    import sys
+
+    globs = running_bridge.globs
+    bridge = sys.modules['_renforge_runtime'].bridge
+    renpy = running_bridge.renpy
+    clock = [100.0]
+    globs['_renforge_time'] = types.SimpleNamespace(monotonic=lambda: clock[0], time=time.time, sleep=time.sleep)
+    request = types.SimpleNamespace(event=threading.Event(), error=None)
+    bridge.current_request = request
+    renpy.display.focus.focus_list = []
+    renpy.display.focus.get_focused = lambda: None
+    clicks = []
+    renpy.test.testmouse.move_mouse = lambda x, y: setattr(renpy.test.testmouse, 'mouse_pos', (x, y))
+    renpy.test.testmouse.click_mouse = lambda button, x, y: clicks.append((button, x, y))
+    assert globs['_renforge_click_pointer'](44, 55) == 'renpy-test'
+    bridge.current_request = None
+    assert renpy.test.testmouse.mouse_pos == (44, 55)
+    assert clicks == []
+    assert not request.event.is_set()
+    clock[0] = 100.11
+    globs['_renforge_pointer_tick']()
+    assert clicks == [(1, 44, 55)]
+    assert not request.event.is_set()
+    clock[0] = 100.22
+    globs['_renforge_pointer_tick']()
+    assert request.event.is_set()
+    assert request.error is None
+    assert renpy.test.testmouse.mouse_pos is None
+    assert bridge.pointer_click is None
+
+
+@pytest.mark.parametrize('reason', ['cancel', 'expiry', 'interaction'])
+def test_unfocused_pointer_cancels_before_delivering_into_another_interaction(running_bridge, reason):
+    import sys
+
+    globs = running_bridge.globs
+    bridge = sys.modules['_renforge_runtime'].bridge
+    renpy = running_bridge.renpy
+    clock = [100.0]
+    globs['_renforge_time'] = types.SimpleNamespace(monotonic=lambda: clock[0], time=time.time, sleep=time.sleep)
+    request = types.SimpleNamespace(event=threading.Event(), error=None)
+    bridge.current_request = request
+    renpy.display.focus.focus_list = []
+    renpy.display.focus.get_focused = lambda: None
+    clicks = []
+    renpy.test.testmouse.move_mouse = lambda x, y: setattr(renpy.test.testmouse, 'mouse_pos', (x, y))
+    renpy.test.testmouse.click_mouse = lambda *args: clicks.append(args)
+    globs['_renforge_click_pointer'](44, 55)
+    bridge.current_request = None
+    if reason == 'expiry':
+        clock[0] = 101.0
+    elif reason == 'interaction':
+        bridge.observe_generation += 1
+        clock[0] = 100.11
+    globs['_renforge_pointer_tick'](cancel=reason == 'cancel')
+    assert clicks == []
+    assert request.event.is_set()
+    assert request.error
+    assert renpy.test.testmouse.mouse_pos is None
+    assert bridge.pointer_click is None
+
+
+def test_delivered_frame_clicks_and_guards(running_bridge):
+    import io
+    from PIL import Image
+    from renforge.observe import apply_screenshot
+
+    output = io.BytesIO()
+    Image.new('RGB', (100, 50)).save(output, format='PNG')
+    running_bridge.renpy.screenshot_to_bytes = lambda _size: output.getvalue()
+    running_bridge.renpy.config.screen_width = 1000
+    running_bridge.renpy.config.screen_height = 500
+    raw, _png = apply_screenshot(running_bridge.client.observe(screenshot=True))
+    frame = dict(raw['frame'], width=50, height=25, scaled=True)
+    result = running_bridge.client.click_at(10, 10, coordinate_space='screenshot', expected_frame_id=frame)
+    assert result['ok'], result
+    assert (result['x'], result['y']) == (200, 200)
+    count = len(running_bridge.renpy._clicks)
+    for invalid in [dict(frame, session_id='wrong'), dict(frame, frame_id='0' * 64),
+                    dict(frame, width=0), dict(frame, logical_width=900),
+                    dict(frame, original_width=200), dict(frame, height=True)]:
+        refused = running_bridge.client.click_at(10, 10, coordinate_space='screenshot', expected_frame_id=invalid)
+        assert refused['ok'] is False, refused
+    for x, y in [(50, 10), (-0.1, 10), (10, float('inf'))]:
+        refused = running_bridge.client.click_at(x, y, coordinate_space='screenshot', expected_frame_id=frame)
+        assert refused['ok'] is False, refused
+    assert len(running_bridge.renpy._clicks) == count
+
+
+def _completed_render(width, height, widgets=(), children=(), reverse=None, **extra):
+    return types.SimpleNamespace(width=width, height=height, render_of=list(widgets),
+        children=list(children), reverse=reverse, **extra)
+
+
+def test_completed_render_geometry_composes_clipping_rotation_and_repeated_placements(running_bridge):
+    renpy = running_bridge.renpy
+    renpy.config.screen_width, renpy.config.screen_height = 800, 600
+    shared = object()
+    widget = _completed_render(80, 40, [shared])
+    zoom = types.SimpleNamespace(transform=lambda x, y: (x*.5, y*.5))
+    scaled = _completed_render(200, 100, children=[(widget, 40, 60, True, True)], reverse=zoom)
+    viewport = _completed_render(100, 50, children=[(widget, 70, -10, True, True)], xclipping=True, yclipping=True)
+    rotated_widget = object()
+    rotated = _completed_render(100, 100, children=[(_completed_render(40, 20, [rotated_widget]), 0, 0, True, True)],
+        reverse=types.SimpleNamespace(transform=lambda x, y: (-y, x)))
+    root = _completed_render(800, 600, children=[(scaled, 100, 80, True, True),
+        (viewport, 300, 200, True, True), (rotated, 500, 300, True, True)])
+    renpy.display.render = types.SimpleNamespace(screen_render=root)
+    geometry = running_bridge.globs['_renforge_render_geometry']()
+    occurrences = geometry['occurrences'][id(shared)]
+    assert [item['bounds'] for item in occurrences] == [
+        {'x': 140, 'y': 140, 'width': 40, 'height': 20},
+        {'x': 370, 'y': 200, 'width': 30, 'height': 30}]
+    assert occurrences[0]['render_path'] != occurrences[1]['render_path']
+    assert geometry['occurrences'][id(rotated_widget)][0]['bounds'] == {'x': 480, 'y': 300, 'width': 20, 'height': 40}
+    assert not geometry['truncated']
+    assert running_bridge.globs['_renforge_render_geometry'](max_nodes=1)['truncated']
+
+
+def test_partial_occlusion_uses_a_proven_point_instead_of_the_center(running_bridge):
+    renpy = running_bridge.renpy
+    target = _FakeWidget('Partly visible')
+    upper = object()
+    renpy.display.focus.focus_list[:] = [_FakeFocus('', 10, 10, 100, 20, widget=target)]
+    renpy.display.render = types.SimpleNamespace(screen_render=types.SimpleNamespace(
+        focus_at_point=lambda x, y, _screen: (target if x < 45 else upper, None, None)))
+    element = running_bridge.client.list_ui_elements()[0]
+    assert element['covered'] is False
+    assert element['clickable'] is True
+    clicked = running_bridge.client.click_element(id=element['id'])
+    assert clicked['ok']
+    assert clicked['x'] < 45
+
+
+def test_custom_input_candidates_keep_eligibility_unknown_and_block_dismiss(running_bridge):
+    from renforge.observe import classify
+    renpy = running_bridge.renpy
+
+    class CustomRegion:
+        def event(self, ev, x, y, st):
+            raise AssertionError('inspection must not invoke custom input')
+
+    class Decoration:
+        pass
+
+    class ScreenDisplayable:
+        screen_name = ('free_roam', None)
+        layer = 'hub_layer'
+        modal = False
+        hiding = False
+        widgets = {}
+        scope = {}
+
+    target, decoration = CustomRegion(), Decoration()
+    screen = ScreenDisplayable()
+    screen.children = [target, decoration]
+    _arm_stable_interaction(running_bridge, generation=8)
+    renpy.game.context = lambda: types.SimpleNamespace(interacting=True,
+        scene_lists=types.SimpleNamespace(layers={'hub_layer': [types.SimpleNamespace(displayable=screen)]}))
+    renpy.config.screen_width, renpy.config.screen_height = 800, 600
+    renpy.display.focus.focus_list[:] = []
+    renpy.display.render = types.SimpleNamespace(screen_render=_completed_render(800, 600, [screen],
+        children=[(_completed_render(120, 80, [target]), 240, 180, True, True),
+                  (_completed_render(50, 50, [decoration]), 0, 0, True, True)]))
+    raw = running_bridge.client.observe(screenshot=False)
+    snapshot = classify(raw)
+    assert snapshot['controls'] == []
+    assert snapshot['omitted']['unclassified'] is True
+    assert len(snapshot['input_candidates']) == 1
+    candidate = snapshot['input_candidates'][0]
+    assert candidate['bounds'] == {'x': 240, 'y': 180, 'width': 120, 'height': 80}
+    assert candidate['layer'] == 'hub_layer'
+    assert not any(key in candidate for key in ('enabled', 'clickable', 'action'))
+    from renforge.interaction import progression_boundary
+    assert progression_boundary(snapshot) == 'unsupported'
+    assert running_bridge.client.dismiss_if(interaction=8)['ok'] is False
+
+
+@pytest.mark.parametrize('candidate_layer,blocked', [('below', True), ('above', False)])
+def test_modal_order_preserves_custom_input_above_its_layer(running_bridge, candidate_layer, blocked):
+    renpy = running_bridge.renpy
+    renpy.config.bottom_layers = []
+    renpy.config.layers = ['below', 'screens', 'above']
+    renpy.config.top_layers = []
+
+    class CustomRegion:
+        def event(self, ev, x, y, st):
+            raise AssertionError('inspection must not invoke custom input')
+
+    node = CustomRegion()
+    screen = types.SimpleNamespace(layer=candidate_layer, zorder=0)
+    modal = types.SimpleNamespace(widget=None,
+        screen=types.SimpleNamespace(layer='screens', zorder=0, modal=True))
+    candidate_focus = types.SimpleNamespace(widget=node, screen=screen)
+    record = {'layer': candidate_layer, 'semantic': True, 'enabled': True}
+    pairs = [(modal, {'layer': 'screens'}), (candidate_focus, record)]
+    running_bridge.globs['_renforge_mark_coverage'](pairs)
+    assert record['covered'] is blocked
+    assert record['clickable'] is not blocked
+    inventory = {'nodes': [(node, candidate_layer, 'region', screen, ())],
+        'geometry': {'occurrences': {id(node): [{'bounds': {'x': 10, 'y': 20, 'width': 40, 'height': 50},
+            'visible': True, 'bounds_reason': None}]}}}
+    candidates, unclassified = running_bridge.globs['_renforge_input_candidates'](inventory, pairs[:1])
+    assert candidates[0]['modal_blocked'] is blocked
+    assert unclassified is not blocked
+
+
+def test_unfocused_menu_actions_are_sensitive_distinct_and_guarded(running_bridge):
+    from renforge.observe import classify
+    renpy = running_bridge.renpy
+    calls = []
+
+    class Action:
+        def __init__(self, value, enabled=True):
+            self.value, self.enabled = value, enabled
+        def __call__(self):
+            calls.append(self.value)
+
+    class ScreenDisplayable:
+        screen_name = ('branch_picker', None)
+        layer = 'custom_layer'
+        modal = False
+        hiding = False
+        children = []
+        widgets = {}
+
+    first, second, disabled = Action(1), Action(2), Action(3, False)
+    screen = ScreenDisplayable()
+    screen.scope = {'items': [types.SimpleNamespace(caption='Repeat', action=first),
+        types.SimpleNamespace(caption='Repeat', action=second),
+        types.SimpleNamespace(caption='Disabled', action=disabled),
+        types.SimpleNamespace(caption='Caption', action=None)]}
+    _arm_stable_interaction(running_bridge, generation=9)
+    renpy.game.context = lambda: types.SimpleNamespace(interacting=True,
+        scene_lists=types.SimpleNamespace(layers={'custom_layer': [types.SimpleNamespace(displayable=screen)]}))
+    renpy.display.focus.focus_list[:] = []
+    renpy.display.behavior.is_sensitive = lambda action: action.enabled
+    renpy.display.behavior.run = lambda action: action()
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    assert len(snapshot['controls']) == 3
+    assert all(item['bounds'] is None for item in snapshot['controls'])
+    assert len(running_bridge.client.list_menu_choices()) == 3
+    assert running_bridge.client.select_choice(text='Repeat')['ok'] is False
+    assert running_bridge.client.select_choice(index=2)['error'] == 'disabled'
+    assert running_bridge.client.act(interaction=9, control_id='branch_picker/item/2')['error'] == 'disabled'
+    screen.scope['items'][1].action = Action(22)
+    stale = running_bridge.client.select_choice(index=1, interaction=9, observation_id=snapshot['observation_id'])
+    assert stale['error'] == 'stale'
+    assert calls == []
+    selected = running_bridge.client.select_choice(index=1)
+    assert selected['ok'] and selected['via'] == 'action'
+    assert calls == [22]
+    clicked = running_bridge.client.click_element(id='branch_picker/item/0')
+    assert clicked['ok'] and clicked['via'] == 'action'
+    assert calls == [22, 1]

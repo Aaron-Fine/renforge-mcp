@@ -132,7 +132,7 @@ uv sync --all-extras
 Or using `pip`:
 
 ```bash
-pip install -e ".[fastmcp,ui,test]"
+python -m pip install -e ".[ui,test]"
 ```
 
 ### 4. Install Ren'Py SDK

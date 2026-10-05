@@ -463,41 +463,27 @@ def test_project_selection_switches_runtime_and_notifies_clients(tmp_path: Path,
     assert broadcasts[0]["payload"]["project"] == str(target)
 
 
-def test_list_choices_filters_out_non_choice_screen_controls(monkeypatch, tmp_path) -> None:
+def test_list_choices_uses_engine_membership_on_custom_screens(monkeypatch, tmp_path) -> None:
     class FakeClient:
         def get_state(self):
-            return {"menu": True}
+            raise AssertionError("menu discovery must not depend on conventional screen names")
 
-        def list_choices(self):
-            return [
-                {"index": 0, "text": "history", "screen": "quick_menu"},
-                {"index": 10, "text": "Continue", "screen": "choice"},
-                {"index": 11, "text": "Retry", "screen": "choice"},
-                {"index": 12, "text": "Auto", "screen": None},
-            ]
+        def list_menu_choices(self):
+            return [{"index": 10, "text": "Continue", "screen": "branch_picker"},
+                    {"index": 11, "text": "Retry", "screen": "branch_picker"}]
 
     monkeypatch.setattr(live_module, "_client", lambda _path: FakeClient())
     result = live_module.list_choices(str(tmp_path))
-    assert result == {
-        "ok": True,
-        "choices": [
-            {"index": 10, "text": "Continue", "screen": "choice"},
-            {"index": 11, "text": "Retry", "screen": "choice"},
-        ],
-    }
+    assert result == {"ok": True, "choices": FakeClient().list_menu_choices()}
 
 
 def test_list_choices_returns_empty_when_no_active_menu(monkeypatch, tmp_path) -> None:
     class FakeClient:
-        def get_state(self):
-            return {"menu": False}
-
-        def list_choices(self):
-            return [{"index": 0, "text": "should not see", "screen": "choice"}]
+        def list_menu_choices(self):
+            return []
 
     monkeypatch.setattr(live_module, "_client", lambda _path: FakeClient())
-    result = live_module.list_choices(str(tmp_path))
-    assert result == {"ok": True, "choices": []}
+    assert live_module.list_choices(str(tmp_path)) == {"ok": True, "choices": []}
 
 
 @pytest.mark.skipif(TestClient is None, reason="starlette not installed")

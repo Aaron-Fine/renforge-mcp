@@ -238,6 +238,9 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         description=(
             "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor "
             "runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; "
+            "Runtime control requires Ren'Py 8.0 or newer. Pre-8 bundled games or selected SDKs return "
+            "UNSUPPORTED_RENPY_VERSION before SDK download, bridge injection, or process launch; an explicit "
+            "newer SDK does not bypass a legacy game's incompatibility. "
             "poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. "
             "Saves, preferences, and HOME default to isolated temporary locations so the session does not read or write the "
             "user's normal Ren'Py state; the ready payload includes `session_id` and an `isolation` object. "
@@ -260,7 +263,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
                 "Launcher version selector. `stable` uses the engine recorded in the project's "
                 "`renpy/vc_version.py` when that file exists, otherwise the configured stable SDK "
                 "(`8.5.3`). An explicit version such as `8.1.2` is downloaded when no cached SDK "
-                "shares that major.minor. A cached SDK is reused only when the major and minor match "
+                "is available. Runtime launch rejects bundled game engines or selected SDKs below 8.0. "
+                "A cached SDK is reused only when the major and minor match "
                 "and its patch is the same or newer."
             ),
             "editor": "Enable/disable live editor injection; default True for interactive work.",
@@ -433,25 +437,21 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "renforge_observe": ToolDefinition(
         description=(
-            "Read one interaction snapshot: dialogue, screens, pointer controls, and whether this interaction "
-            "listens for dismiss. Safe to call at any time, including mid-transition (`stable` false is not a "
-            "legal token for `renforge_act`). `screenshot` true (the default) attaches the PNG, and `frame_hash` "
-            "is the SHA-256 of that exact PNG. Pointer controls come from Ren'Py `focus_list`. A text field "
-            "does not enter that list; it is still returned as an `input` control whose `text` is the prompt. "
-            "`dialogue` is the line on the showing say window, including the speaker's display name, with "
-            "text tags such as `{b}`, `{w}`, and `{nw}` removed, and is null when that window is not showing. "
-            "`readout` is other visible text (day, time, objectives, history), not a control and not a reason "
-            "to stop. `action` names the control's action and target, such as `Start(\"start\")`, "
-            "`ShowMenu(\"load\")`, `SetVariable(\"show_button\", False)`, or "
-            "`Function(ChangeLocation, newLocation=\"beach\")`, including when the button has no label. "
-            "A control id is its widget id or menu index when Ren'Py has one, otherwise that action. "
-            "`image` is the idle picture's file name and joins the id only when siblings share an action. "
-            "A drag's id is its `drag_name` when it has one. `selected` is the action's selected state. "
-            "`alternate` and `hovered` are those actions when the control has them. `adjustment` is a bar's "
-            "value, range, step, and page, or a viewport's x and y adjustments. "
-            "Keyboard shortcuts are not listed; `dismiss` is a capability, not a key. Screens in "
-            "`config.overlay_screens`, and injected `_renforge_` editor screens, are returned as `chrome`. "
-            "Identity is this interaction, not a save-stable widget path."
+            'Read one interaction snapshot: session_id, observation_id, interaction, stability, dialogue, '
+            'screens, controls, chrome, readout, lifecycle, and forward. lifecycle.phase is playing, main_menu, '
+            'ended, or unknown; ending evidence records a root script return confirmed at the engine main menu. '
+            'Initial menus and explicit menu restarts are not endings. screenshot=true attaches the PNG whose SHA-256 '
+            'is frame_hash. frame_id guards the source capture; frame is its session/dimension descriptor for clicks on resized images. Pass all three identity fields to renforge_act to reject observations from '
+            'another launch or rebuilt controls. Controls use widget ids or menu indices, then drag names, '
+            'action summaries, image basenames, or synthetic ordinals. Action summaries include targets and '
+            'arguments, including for unlabeled buttons. operations lists the supported adapters for that '
+            'widget; adjustment reports bar values or viewport axes; draggable and droppable describe drag '
+            'eligibility. Inputs outside focus_list are still inventoried. Dialogue and readout remove text '
+            'tags while retaining literal braces and paragraph breaks. Only quick_menu and injected '
+            '_renforge_ screens are chrome; custom overlay hubs remain gameplay controls. forward is '
+            'dismiss, choose, wait, or none. An unstable snapshot is not an action token. omitted reports '
+            'focus, traversal, and readout limits; input_candidates reports unsupported custom event regions with unknown eligibility. Both progression modes stop on incomplete input discovery. Keyboard shortcuts are not fully '
+            'inventoried.'
         ),
         annotations=_ann(
             readOnlyHint=True,
@@ -467,22 +467,23 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "renforge_act": ToolDefinition(
         description=(
-            "Activate one control from an `renforge_observe` snapshot, or post one physical key on that same "
-            "interaction. A control uses `interaction` and `id` (a `controls` or `chrome` id). A key uses "
-            "`interaction` and `key` and does not take an id. Immediately before input, the bridge checks that "
-            "the interaction is still current and the frame is stable. It returns `stale`, `unstable`, "
-            "`covered`, `disabled`, `missing`, `text_required`, `key_or_control`, or `unsupported` and does "
-            "not post input when the check fails. A button or hotspot runs its action. One with no action "
-            "is clicked at the center of its focus rectangle. A bar takes `value` and sets its adjustment. "
-            "A viewport takes `x`, `y`, or both. A drag takes `drop` (another control id) and runs its "
-            "dragged callback; omit `drop` to click it, or pass an empty `drop` to release it on nothing. "
-            "An Input takes `text`, "
-            "replaces the current value (a prefilled name is not kept), and submits with Ren'Py `input_enter`. "
-            "The field's allow, exclude, and length still apply. A value the field rejects returns "
-            "`text_rejected` and is not submitted. An empty string clears the field and submits that. "
-            "`key` posts `KEYDOWN` and `KEYUP` for a-z, the arrows, escape, return, or space. `hold` true "
-            "posts key-down only; `hold` false posts key-up only; omit `hold` for a tap. An unknown key is "
-            "refused with that list. Bars, drags, and viewports are not actuated. Does not enable skip."
+            'Activate one observed control or post one physical key. Pass interaction plus session_id and '
+            'observation_id from the same snapshot for full stale-state protection; interaction-only callers '
+            'retain the legacy guard. Controls use id; keys use key without id. A button runs its action in '
+            'its screen context, falling back to a pointer click when it has no action. Inputs replace text '
+            'with allow/exclude/length filtering; submit=false edits without Enter. A bar takes value; a '
+            'viewport takes x and/or y. All supplied numeric values must be finite and all axes are '
+            'validated before mutation. A draggable control takes drop as an eligible droppable drag id, or '
+            'an empty string for release on nothing; omit drop to click when supported. Drop runs callbacks, '
+            'not a pointer trajectory. key accepts a-z, arrows, escape, return, space, or tab; omit hold for a '
+            'tap, true holds, false releases. A held key can be released after its interaction changes, '
+            'within its owning session. The bridge rechecks identity, stability, availability, and widget '
+            'operations before mutation. By default return the next stable observation and optional PNG. '
+            'observe=false returns only the action result. advance=true uses bounded native skip to the next '
+            'decision or ending with max_steps and timeout budgets, returning progress and the final observation. '
+            'progress.stop=end identifies a confirmed script return; main_menu is a menu without ending evidence. ok '
+            'reports a known action outcome; action_outcome=unknown and retry_safe=false mark a lost input reply. observation_status separately reports ready, timeout, transport_error, or crash. '
+            'Never repeat a successful or uncertain action solely because observation failed. Native skip temporarily allows unseen narrative and restores preferences; mode=dismiss retains guarded dismiss progression.'
         ),
         annotations=_ann(
             readOnlyHint=False,
@@ -495,35 +496,50 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "interaction": "Interaction number from the observe snapshot this action belongs to.",
             "id": "Control or chrome id from that same snapshot. Omit it when posting a key.",
             "text": "Full replacement for an input control. Omit it for a click or a key.",
-            "key": "Physical key to post: a-z, up, down, left, right, escape, return, or space.",
+            "key": "Physical key to post: a-z, up, down, left, right, escape, return, space, or tab.",
             "hold": "True posts key-down only. False posts key-up only. Omit it for a tap.",
             "value": "New value for a bar or slider adjustment.",
             "x": "New horizontal offset for a viewport adjustment.",
             "y": "New vertical offset for a viewport adjustment.",
-            "drop": "Control id to drop a drag onto. An empty string releases it on nothing.",
+            "drop": "Eligible droppable drag id. An empty string releases it on nothing.",
+            "session_id": "Session id from the originating observation; rejects other launches.",
+            "observation_id": "Observation id from the originating snapshot; rejects rebuilt or changed controls.",
+            "submit": "Submit text with Enter when true; false only replaces it.",
+            "observe": "Return the next stable observation after a successful action (default true).",
+            "advance": "After acting, progress to the next decision within the same time budget.",
+            "screenshot": "Attach the resulting observation's PNG when true.",
+            "max_steps": "Maximum narrative interaction advances when advance=true, from 1 to 200.",
+            "timeout": "Total action and observation/progression budget in seconds, from 0.1 to 120.",
+            "mode": "Progression mode: skip (default, bounded native skip) or dismiss (guarded events).",
         },
         parameter_schemas={
+            "mode": _enum("skip", "dismiss"),
             "interaction": {"type": "integer"},
             "value": {"type": "number"},
             "x": {"type": "number"},
             "y": {"type": "number"},
+            "max_steps": {"minimum": 1, "maximum": 200},
+            "timeout": {"minimum": 0.1, "maximum": 120},
         },
     ),
     "renforge_advance_until": ToolDefinition(
         description=(
-            "Post Ren'Py's `dismiss` event until the player must choose, a hard-pause hub is showing, or nothing "
-            "is listening. Returns `stop` (`choose`, `wait`, `none`, `max_steps`, `timeout`, `stalled`, or `crash`), "
-            "`steps` (dismiss posts), and the last observation. Never clicks a choice, hotspot, map door, or "
-            "quick-menu button, never sends a key, and never enables skip. A text field stops as `choose`. "
-            "Readout text does not stop it. A hard pause with "
-            "decision controls stops as `choose`. "
-            "A hard pause with no decision controls, such as a timed cutscene, is `wait`: this polls and does not "
-            "dismiss. A hub whose screen is in `config.overlay_screens` is chrome, so that hard pause stops as "
-            "`wait` and those buttons stay in `chrome` for `renforge_act`. Custom displayables that never enter "
-            "`focus_list` are not guessed. `max_steps` bounds dismiss posts (1 to 200). `timeout` is the wall-clock "
-            "budget in seconds (0.1 to 120). `crossed` lists label changes and say lines since the previous "
-            "observe or advance_until, including lines already queued when this call starts. A say entry has "
-            "`who` and `what` with text tags removed. `crossed` does not change where the call stops."
+            "Progress to the next decision with bounded native skip by default (mode=skip). The bridge "
+            "pauses skip at every interaction and resumes only for known narrative; choices, inputs, "
+            "custom actionable screens, and unknown interactions stop progression. Never selects controls. "
+            "Unseen narrative is temporarily permitted, skip-after-choices is disabled, and preferences "
+            "are restored on completion or lease expiry. mode=dismiss retains guarded single-step events. "
+            "max_steps bounds narrative interaction advances (1..200); timeout includes cleanup, final "
+            "observation, and transcript retrieval (0.1..120 seconds). Returns mode, stop, steps, "
+            "observation_status, final observation, elapsed_ms, and crossed dialogue. Stop reasons include "
+            "end, main_menu, choose, none, max_steps, timeout, wait, stalled, unsupported, transport_error, exited, and crash. "
+            "end requires a top-level script return followed by the engine main menu; ending records its id, "
+            "reason, and statement. Initial menus and explicit restarts stop at main_menu with ending=null. "
+            "Verified runtime exceptions and nonzero owned process exits are crashes; frame timeouts and lost connections are distinct. "
+            "If no final frame settles, observation is null and last_observation is explicitly historical. "
+            "Events are collected throughout progression; crossed preserves repeated occurrences and "
+            "crossed_truncated reports retrieval gaps. screenshot=false omits the PNG; returned images "
+            "are size-bounded and frame_hash hashes the returned PNG. Use observation.frame for guarded screenshot-pixel clicks. Verified owned process exits report exited or crash without confirming an ending."
         ),
         annotations=_ann(
             readOnlyHint=False,
@@ -533,10 +549,14 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         ),
         parameters={
             "project_path": "Project root of the running live session.",
-            "max_steps": "Maximum dismiss events to post before stopping. Integer from 1 to 200.",
-            "timeout": "Wall-clock budget in seconds, from 0.1 to 120.",
+            "max_steps": "Maximum narrative interaction advances before stopping. Integer from 1 to 200.",
+            "timeout": "Wall-clock budget including cleanup in seconds, from 0.1 to 120.",
+            "screenshot": "Attach a size-bounded PNG of the final observation (default true).",
+            "mode": "skip (default) uses bounded native skip; dismiss posts guarded dismiss events.",
         },
         parameter_schemas={
+            "mode": _enum("skip", "dismiss"),
+            "screenshot": {"type": "boolean"},
             "max_steps": {"minimum": 1, "maximum": 200},
             "timeout": {"minimum": 0.1, "maximum": 120},
         },
@@ -676,8 +696,9 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "renforge_list_choices": ToolDefinition(
         description=(
-            "List on-screen menu choices with index and text ordering. Call before `renforge_select_choice` to pick valid entries "
-            "for the current menu state."
+            "List current engine menu entries across runtime layers, including clipped choices. Use the returned "
+            "indices with renforge_select_choice; they retain legacy textual-control ordering and need not be contiguous. "
+            "Duplicate captions remain distinct; sensitivity is checked when selecting."
         ),
         annotations=_ann(
             readOnlyHint=True,
@@ -690,7 +711,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     "renforge_select_choice": ToolDefinition(
         description=(
             "Select a menu choice by case-insensitive text or zero-based index. Text matching prefers an exact match, then "
-            "uses the shortest case-insensitive substring match. Use list output first to avoid ambiguous partial text."
+            "uses a case-insensitive substring match. Ambiguous text is refused; use the listed index. Optional observation guards reject stale selections."
         ),
         annotations=_ann(
             readOnlyHint=False,
@@ -701,7 +722,10 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         parameters={
             "project_path": "Project root of the running live session.",
             "text": "Visible text to match; preferred over index.",
-            "index": "Zero-based choice index fallback when text is omitted.",
+            "index": "Zero-based choice index from list output when text is omitted.",
+            "interaction": "Optional interaction generation from observe; rejects a stale selection.",
+            "session_id": "Optional session identity from observe.",
+            "observation_id": "Optional observation identity from observe.",
         },
         input_schema={
             "oneOf": [
@@ -718,7 +742,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "renforge_list_ui_elements": ToolDefinition(
         description=(
-            "List focusable UI elements with bounds and element metadata. Use this first for semantic interaction planning; "
+            "List supported controls and engine menu actions with canonical IDs, operations, and logical bounds when available. "
+            "Clipped menu actions can remain semantically selectable. Use this first for semantic interaction planning; "
             "it is narrower than a full scene readout and aligned to click/hover workflows."
         ),
         annotations=_ann(
@@ -858,7 +883,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "project_path": "Project root with active live session.",
             "x": "Horizontal coordinate in selected coordinate space.",
             "y": "Vertical coordinate in selected coordinate space.",
-            "expected_frame_id": "Frame id that must match for safety checks.",
+            "expected_frame_id": "Source frame id or complete observation frame descriptor. A descriptor maps delivered screenshot pixels and guards session/frame/dimensions.",
             "expected_state": "Optional expected runtime state dictionary before click.",
             "coordinate_space": "`logical` (default) or `screenshot` coordinates.",
         },
@@ -1068,8 +1093,9 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "renforge_scene_tree": ToolDefinition(
         description=(
-            "Read the full scene graph (logical scene data). Unlike `renforge_list_ui_elements` this is broad and includes non-"
-            "focusable nodes, so use it for full-tree inspection when semantic selectors are ambiguous. `save_as` or "
+            "Inspect a bounded scene inventory with completed-frame logical geometry where established. Beyond "
+            "renforge_list_ui_elements it includes non-focusable nodes and uncertain custom input. Natural text overflow "
+            "is explicitly unavailable. Use this when semantic selectors are ambiguous. `save_as` or "
             "`diff_against` may create `.renforge/scenes/`; `save_as` writes and overwrites the named JSON snapshot. Omit both "
             "options for read-only inspection."
         ),
