@@ -3483,31 +3483,6 @@ def _screen(name, modal=False, zorder=0):
     return types.SimpleNamespace(screen_name=name, modal=modal, zorder=zorder)
 
 
-def test_modal_screen_button_is_not_covered_by_a_later_drag_rectangle(running_bridge):
-    """A full-screen modal grabs the pointer. Drags underneath it do not cover its button."""
-    renpy = running_bridge.renpy
-    modal = _screen("minigame_message", modal=True, zorder=100)
-    hottub = _screen("minigame_hottub", modal=False, zorder=0)
-    button = _FakeWidget("Skip")
-    drag = _FakeWidget("")
-    drag.style = types.SimpleNamespace(focus_mask=True)
-    button_focus = _FakeFocus("Skip", 860, 540, 200, 80, widget=button)
-    button_focus.screen = modal
-    drag_focus = _FakeFocus("", 700, 400, 500, 400, widget=drag)
-    drag_focus.screen = hottub
-    original = list(renpy.display.focus.focus_list)
-    renpy.display.focus.focus_list[:] = [button_focus, drag_focus]
-    try:
-        elements = running_bridge.client.list_ui_elements()
-    finally:
-        renpy.display.focus.focus_list[:] = original
-    by_screen = {element["screen"]: element for element in elements}
-    assert by_screen["minigame_message"]["covered"] is False
-    assert by_screen["minigame_message"]["clickable"] is True
-    assert by_screen["minigame_hottub"]["covered"] is True
-    assert by_screen["minigame_hottub"]["clickable"] is False
-
-
 def test_focus_mask_rectangle_does_not_cover_the_button_underneath(running_bridge):
     renpy = running_bridge.renpy
     button = _FakeWidget("OK")
@@ -3528,7 +3503,8 @@ def test_focus_mask_rectangle_does_not_cover_the_button_underneath(running_bridg
     assert elements[1]["covered"] is False
 
 
-def test_plain_rectangle_still_covers_an_earlier_control(running_bridge):
+def test_without_a_render_coverage_trusts_the_engine_focus_list(running_bridge):
+    """Overlap alone proves nothing; only the engine hit test decides coverage."""
     renpy = running_bridge.renpy
     lower = _FakeFocus("OK", 10, 10, 40, 20)
     lower.screen_name = "play"
@@ -3540,10 +3516,9 @@ def test_plain_rectangle_still_covers_an_earlier_control(running_bridge):
         elements = running_bridge.client.list_ui_elements()
     finally:
         renpy.display.focus.focus_list[:] = original
-    assert elements[0]["text"] == "OK"
-    assert elements[0]["covered"] is True
-    assert elements[0]["clickable"] is False
-    assert elements[1]["covered"] is False
+    assert [element["covered"] for element in elements] == [False, False]
+    assert all(element["clickable"] for element in elements)
+    assert not any("click_point" in element for element in elements)
 
 
 def test_render_hit_marks_only_the_displayable_a_click_would_reach(running_bridge):

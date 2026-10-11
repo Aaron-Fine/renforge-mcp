@@ -1431,18 +1431,46 @@ init python:
         except Exception:
             return None
 
-    def _renforge_focus_text(widget):
-        """Best-effort accessible text for a Ren'Py focus widget.
+    def _renforge_child_text(widget):
+        """Visible label: the Text displayables inside a control, in order."""
+        parts = []
+        stack = [widget]
+        seen = set()
+        while stack and len(seen) < 64:
+            node = stack.pop()
+            if node is None or id(node) in seen:
+                continue
+            seen.add(id(node))
+            # Like Ren'Py's self-voicing, nested controls keep their own text.
+            if node is not widget and getattr(node, "focusable", None):
+                continue
+            if node.__class__.__name__ == "Text":
+                text = _renforge_observe_text_string(node)
+                if text:
+                    parts.append(text)
+                continue
+            visit = getattr(node, "visit", None)
+            try:
+                children = visit() if callable(visit) else ()
+            except Exception:
+                children = ()
+            stack.extend(reversed([child for child in children or () if child is not None]))
+        return " ".join(parts)
 
-        Ren'Py 8.5 changed ``Displayable._tts_all`` to require a ``raw``
-        boolean (``_tts_all(self, raw: bool)``). Calling it with no arguments
-        raises ``TypeError``, which earlier code swallowed — every button then
-        looked unlabeled and choice selection / autopilot went blind. Prefer
-        the 8.5 contract (``raw=False`` = spoken text); fall back to a no-arg
-        call only for older displayables / ``get_text``.
+    def _renforge_focus_text(widget):
+        """Best-effort label for a Ren'Py focus widget.
+
+        Prefer the control's own Text children. Self-voicing text
+        (``_tts_all``) appends state words such as "selected" and "bar", so it
+        is only the fallback, with those words removed. Ren'Py 8.5 requires
+        ``_tts_all(raw)``; older engines take no argument.
         """
         if widget is None:
             return ""
+        if widget.__class__.__name__ != "Text":
+            text = _renforge_child_text(widget)
+            if text:
+                return text
         text = None
         for method_name in ("_tts_all", "get_text"):
             method = getattr(widget, method_name, None)
@@ -1460,6 +1488,27 @@ init python:
                 continue
             if text:
                 break
+        if isinstance(text, builtins.str):
+            translate = getattr(getattr(renpy, "minstore", None), "__", None)
+
+            def suffixes(word):
+                words = {word}
+                try:
+                    words.add(str(translate(word)) if callable(translate) else word)
+                except Exception:
+                    pass
+                return words
+
+            if widget.__class__.__name__ == "Bar":
+                for word in suffixes("bar"):
+                    if word and text.endswith(word):
+                        text = text[:-len(word)]
+                        break
+            else:
+                for word in suffixes("selected"):
+                    if word and text.endswith(" " + word):
+                        text = text[:-len(word) - 1]
+                        break
         if text is None:
             for attr_name in ("text", "label", "caption", "value"):
                 value = getattr(widget, attr_name, None)
@@ -1615,33 +1664,6 @@ init python:
         return (_renforge_modal_rank(focus, 0, element)[:2]
                 <= _renforge_modal_rank(modal, 0, modal_record)[:2])
 
-    def _renforge_mask_allows(focus, x, y):
-        """Rectangle hits only count when the focus mask also accepts the point.
-
-        ``focus_mask True`` is pixel-tested by the render. Without that render,
-        a mask-bearing widget does not cover other controls: a transparent
-        image must not hide the button underneath it.
-        """
-        widget = getattr(focus, "widget", None)
-        style = getattr(widget, "style", None)
-        mask = getattr(style, "focus_mask", None) if style is not None else None
-        if mask is None or mask is False:
-            return True
-        if callable(mask):
-            local_x = x - int(getattr(focus, "x", 0) or 0)
-            local_y = y - int(getattr(focus, "y", 0) or 0)
-            try:
-                return bool(mask(local_x, local_y))
-            except Exception:
-                return False
-        probe = getattr(widget, "focus_mask_opaque", None)
-        if callable(probe):
-            try:
-                return bool(probe(x, y))
-            except Exception:
-                return False
-        return False
-
     def _renforge_render_hit(x, y):
         """What a real click would focus at this point.
 
@@ -1683,46 +1705,49 @@ init python:
                                (0.9, 0.9), (0.5, 0.1), (0.5, 0.9), (0.1, 0.5), (0.9, 0.5))]
 
 
+    def _renforge_engine_focus_ids():
+        focus_module = getattr(renpy.display, "focus", None)
+        return {id(getattr(focus, "widget", None))
+                for focus in getattr(focus_module, "focus_list", ()) or ()}
+
+
     def _renforge_mark_coverage(elements):
-        """Prove a usable point or leave coverage unknown; never infer full occlusion from a center."""
+        """Ask the engine's click hit test which controls a click would reach.
+
+        ``focus_at_point`` applies layer order, modal screens, and focus masks.
+        Without a completed render, the engine focus list, which already drops
+        controls behind a full modal, is the remaining evidence.
+        """
+        focusable = _renforge_engine_focus_ids()
         top_modal = _renforge_top_modal(elements)
-        for index, (focus, element) in enumerate(elements):
-            modal_blocked = _renforge_modal_blocks(focus, top_modal, elements, element)
-            covered = True if modal_blocked else False
-            clickable = bool(element.get("enabled", True)) and element.get("visible") is not False
+        for focus, element in elements:
+            widget = getattr(focus, "widget", None)
+            enabled = bool(element.get("enabled", True))
             if element.get("semantic"):
-                clickable = bool(element.get("enabled", True))
+                # Semantic operations bypass the pointer, so a probe cannot
+                # tell whether a modal screen above blocks them.
+                blocked = _renforge_modal_blocks(focus, top_modal, elements, element)
+                element["covered"] = blocked
+                element["clickable"] = enabled and not blocked
+                continue
             points = _renforge_point_candidates(element.get("bounds"))
             hits = [_renforge_render_hit(x, y) for x, y in points]
             point = next((p for p, hit in zip(points, hits)
-                          if isinstance(hit, tuple) and hit[1] is getattr(focus, "widget", None)), None)
+                          if isinstance(hit, tuple) and hit[1] is widget), None)
             if point is not None:
-                # The completed render knows layer order and window/callable
-                # modal masks more precisely than screen flags do.
-                modal_blocked, covered = False, False
-            if not modal_blocked and not element.get("semantic") and hits and hits[0] != "unavailable":
-                if point is not None:
-                    element["click_point"] = {"x": point[0], "y": point[1]}
-                    covered = False
-                else:
-                    covered = None
-                    element["coverage_reason"] = "no eligible point proven by bounded focus probes"
-                    clickable = False
-            elif not modal_blocked and points and not element.get("semantic"):
-                # With no render, only a plain rectangle containing the whole
-                # target or a known full-screen modal proves coverage.
-                target = element.get("bounds") or {}
-                for later_focus, later in elements[index+1:]:
-                    bounds = later.get("bounds") or {}
-                    if (bounds and target and
-                        _renforge_bounds_contain(bounds, target["x"], target["y"]) and
-                        _renforge_bounds_contain(bounds, target["x"]+target["width"]-1,
-                                                target["y"]+target["height"]-1) and
-                        _renforge_mask_allows(later_focus, *points[0])):
-                        covered = True
-                        break
+                element["click_point"] = {"x": point[0], "y": point[1]}
+                covered = False
+            elif "modal" in hits:
+                covered = True
+            elif not hits or hits[0] == "unavailable":
+                covered = False if widget is None or id(widget) in focusable else None
+            elif not enabled:
+                covered = False
+            else:
+                covered = None
+                element["coverage_reason"] = "no eligible point proven by bounded focus probes"
             element["covered"] = covered
-            element["clickable"] = clickable and covered is False
+            element["clickable"] = enabled and element.get("visible") is not False and covered is False
         return elements
 
 
@@ -2280,17 +2305,9 @@ init python:
         """Return the focus a click would hit, plus other rectangles at the point."""
         elements = _renforge_focusable_elements()
         hit = _renforge_render_hit(x, y)
-        hits = []
-        top_modal = None if hit != "unavailable" else _renforge_top_modal(elements)
-        for focus, element in elements:
-            if _renforge_modal_blocks(focus, top_modal, elements, element):
-                continue
-            bounds = element.get("bounds") or {}
-            if not _renforge_bounds_contain(bounds, x, y):
-                continue
-            if not _renforge_mask_allows(focus, x, y):
-                continue
-            hits.append((focus, element))
+        hits = [(focus, element) for focus, element in elements
+                if element.get("covered") is not True
+                and _renforge_bounds_contain(element.get("bounds") or {}, x, y)]
         topmost = hits[-1][1] if hits else None
         if hit == "modal":
             topmost = None
@@ -3993,6 +4010,23 @@ init python:
         return entries
 
 
+    def _renforge_source_location(displayable):
+        """``file:line`` of the screen-language statement that built it.
+
+        Screen language records the location on ``d._main or d``: a
+        textbutton's location lives on its Text child.
+        """
+        location = getattr(displayable, "_location", None)
+        if location is None:
+            location = getattr(getattr(displayable, "_main", None), "_location", None)
+        if not _renforge_observe_is_sequence(location) or len(location) < 2:
+            return None
+        try:
+            return "%s:%d" % (str(location[0]), int(location[1]))
+        except (TypeError, ValueError):
+            return None
+
+
     def _renforge_action_contains(container, wanted):
         if container is wanted:
             return True
@@ -4033,6 +4067,7 @@ init python:
                         w=getattr(focus, "w", None), h=getattr(focus, "h", None))
                     break
             record["widget_id"] = _renforge_observe_widget_id(focus, widget, inventory["named"])
+            record["source"] = _renforge_source_location(widget)
             record["type"] = _renforge_focus_type(focus, widget)
             record["coordinate_space"] = "logical"
             record["zorder"] = _renforge_focus_zorder(focus, widget, len(pairs))
@@ -4098,10 +4133,13 @@ init python:
                 geometry = _renforge_widget_geometry(widget, inventory)
                 if geometry["visible"] is not True:
                     continue
+                # Ren'Py leaves a Button out of the focus list when it has no
+                # action (insensitive) or a modal screen hides it.
                 focus = types.SimpleNamespace(widget=widget, screen=screen)
                 add(focus, {"screen": name, "layer": layer, "role": "button",
                     "text": _renforge_focus_text(widget) or None,
-                    "enabled": bool(_renforge_focus_enabled(focus, widget)),
+                    "enabled": (getattr(widget, "clicked", None) is not None
+                                and bool(_renforge_focus_enabled(focus, widget))),
                     "clickable": True, "covered": False,
                     "image_name": _renforge_observe_image_name(widget),
                     "menu_index": None, "ordinal": len(pairs),

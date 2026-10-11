@@ -271,6 +271,7 @@ def _public_control(control: Mapping[str, Any]) -> dict[str, Any]:
         "occurrences": control.get("occurrences") or [],
         "layer": control.get("layer"),
         "synthetic": bool(control.get("synthetic")),
+        "source": control.get("source") if isinstance(control.get("source"), str) else None,
     }
 
 
