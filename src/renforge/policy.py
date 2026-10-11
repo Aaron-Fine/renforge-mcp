@@ -55,7 +55,8 @@ SAVES_ACTIONS: dict[str, str] = {
 }
 
 MOD_ACTIONS: dict[str, str] = {
-    "write": RISK_MUTATING,
+    # A mod file is code the game runs on reload, like renforge_eval.
+    "write": RISK_OPEN_WORLD,
     # Matches renforge_control(action="reload_script").
     "reload": RISK_DESTRUCTIVE,
     "remove": RISK_MUTATING,

@@ -440,7 +440,7 @@ def test_reload_skips_polling_when_control_fails(tmp_path, monkeypatch) -> None:
 @pytest.mark.parametrize(
     ("action", "risk"),
     [
-        ("write", policy.RISK_MUTATING),
+        ("write", policy.RISK_OPEN_WORLD),
         ("reload", policy.RISK_DESTRUCTIVE),
         ("remove", policy.RISK_MUTATING),
         ("list", policy.RISK_OBSERVATIONAL),

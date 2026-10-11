@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable
 
 from .lint import run_lint
+from .util.files import PrivatePathError, ensure_nofollow_directory, write_atomic
 
 MANIFEST_NAME = "renforge-mod.json"
 ALLOWED_SUFFIXES = (".rpy", ".txt", ".json", ".md")
@@ -141,18 +142,12 @@ def _load_manifest(mod_dir: Path) -> dict[str, Any] | None:
 
 
 def _atomic_write_bytes(target: Path, data: bytes) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp")
+    """Write through no-follow directory handles so a swapped symlink cannot redirect it."""
     try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-        os.replace(tmp, target)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+        ensure_nofollow_directory(target.parent)
+        write_atomic(target, data, follow_symlinks=False)
+    except (PrivatePathError, OSError) as exc:
+        raise ValueError(f"refusing unsafe write to {target.name}: {exc}") from exc
 
 
 def _write_manifest(mod_dir: Path, name: str, files: list[str]) -> None:
@@ -256,7 +251,7 @@ def remove(project_root: str | Path, name: str) -> dict[str, Any]:
         if target.is_symlink():
             kept.append(rel)
             continue
-        if target.is_file():
+        if target.is_file() and target.resolve().is_relative_to(mod_dir.resolve()):
             target.unlink()
             removed.append(rel)
         if rel.endswith(".rpy"):

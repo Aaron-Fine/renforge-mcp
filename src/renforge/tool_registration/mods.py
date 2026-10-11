@@ -16,8 +16,13 @@ def build_wrappers(context):
         name: str | None = None,
         path: str | None = None,
         content: str | None = None,
+        authorize: bool = False,
     ) -> dict:
-        """Write, test, or remove a mod under `game/mods/<name>/`."""
+        """Write, test, or remove a mod under `game/mods/<name>/`.
+
+        Mod files are code the game runs, so `write` is open-world and
+        requires authorize=true when RENFORGE_POLICY=enforce.
+        """
         return _log_tool_call(
             name="renforge_mod",
             params={
@@ -26,6 +31,7 @@ def build_wrappers(context):
                 "name": name,
                 "path": path,
                 "content_bytes": len(content.encode("utf-8")) if isinstance(content, str) else None,
+                "authorize": authorize,
             },
             project_root=project_path,
             fn=mod_tools.mod,

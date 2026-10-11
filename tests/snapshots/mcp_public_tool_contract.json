@@ -4423,6 +4423,11 @@
           ],
           "default": null,
           "description": "UTF-8 file content, at most 1,000,000 bytes. Required for `write`."
+        },
+        "authorize": {
+          "default": false,
+          "description": "Mod files are code the game runs, so `write` is open-world: pass true when RENFORGE_POLICY=enforce.",
+          "type": "boolean"
         }
       },
       "required": [

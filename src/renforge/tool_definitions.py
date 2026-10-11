@@ -718,6 +718,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             ),
             "path": "Path relative to the mod directory, for example `script.rpy`. Required for `write`.",
             "content": "UTF-8 file content, at most 1,000,000 bytes. Required for `write`.",
+            "authorize": "Mod files are code the game runs, so `write` is open-world: pass true when RENFORGE_POLICY=enforce.",
         },
         parameter_schemas={
             "action": _enum("write", "list", "lint", "reload", "remove", "package", "guide"),
