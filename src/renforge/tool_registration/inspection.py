@@ -137,14 +137,17 @@ def build_wrappers(context):
         screen: str = "",
         id: str = "",
         limit: int = 200,
+        source: str = "",
+        query: str = "",
     ) -> dict:
         """Explain where game content is defined and what it does, without evaluating it.
 
         Reads the running game's loaded syntax trees, so it also works for
         games that ship only ``.rpa``/``.rpyc``. With no selector it indexes
-        labels, screens and files. ``label`` lists a label's statements, ``screen``
-        its displayable tree, and ``id`` (a control id from ``renforge_observe``)
-        the statement that built that control with its enclosing conditions.
+        labels and screens, filtered by ``query``. ``label`` lists a label's
+        statements, ``screen`` its displayable tree, and ``id`` (a control id
+        from ``renforge_observe``) or ``source`` (a ``file:line`` from observe or
+        an input candidate) the statement there with its enclosing conditions.
         """
         return _log_tool_call(
             name="renforge_explain",
@@ -154,6 +157,8 @@ def build_wrappers(context):
                 "screen": screen,
                 "id": id,
                 "limit": limit,
+                "source": source,
+                "query": query,
             },
             project_root=project_path,
             fn=live.explain,
@@ -162,6 +167,8 @@ def build_wrappers(context):
                 "label": label or None,
                 "screen": screen or None,
                 "id": id or None,
+                "source": source or None,
+                "query": query or None,
                 "limit": limit,
             },
         )

@@ -191,12 +191,15 @@ class BridgeClient:
         label: str | None = None,
         screen: str | None = None,
         id: str | None = None,
+        source: str | None = None,
+        query: str | None = None,
         limit: int | None = None,
     ) -> dict:
         """Explain game content from the loaded syntax trees, without evaluating it.
 
-        With no selector this indexes labels, screens and files. ``label`` and
-        ``screen`` name one definition; ``id`` names a control from observe.
+        With no selector this indexes labels and screens, filtered by ``query``.
+        ``label`` and ``screen`` name one definition; ``id`` names a control
+        from observe; ``source`` is a ``file:line`` from observe.
         """
         payload: dict[str, Any] = {}
         if label is not None:
@@ -205,6 +208,10 @@ class BridgeClient:
             payload["screen"] = screen
         if id is not None:
             payload["id"] = id
+        if source is not None:
+            payload["source"] = source
+        if query is not None:
+            payload["query"] = query
         if limit is not None:
             payload["limit"] = limit
         return self.request("explain", payload)

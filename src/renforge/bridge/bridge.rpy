@@ -4549,6 +4549,7 @@ init python:
                 unclassified = True
                 break
             candidates.append({"screen": name, "layer": layer,
+                "source": _renforge_source_location(node),
                 "reason": "custom event handler; input semantics and eligibility unknown",
                 "bounds": geometry["bounds"], "bounds_reason": geometry["bounds_reason"],
                 "visible": geometry["visible"], "modal_blocked": blocked,
@@ -4666,7 +4667,6 @@ init python:
 
 
     _RENFORGE_EXPLAIN_TEXT_CHARS = 160
-    _RENFORGE_EXPLAIN_MAX_LABELS = 2000
     _RENFORGE_EXPLAIN_KEYWORDS = ("action", "sensitive", "hovered", "unhovered", "selected", "alternate", "value", "id")
 
 
@@ -4679,7 +4679,7 @@ init python:
 
 
     def _renforge_explain_text(value):
-        text = _renforge_explain_str(value)
+        text = " ".join(_renforge_explain_str(value).split())
         if len(text) > _RENFORGE_EXPLAIN_TEXT_CHARS:
             text = text[:_RENFORGE_EXPLAIN_TEXT_CHARS - 3] + "..."
         return text
@@ -4853,7 +4853,9 @@ init python:
         return (item.get("file") or "", item.get("line") or 0, item.get("name") or "")
 
 
-    def _renforge_explain_index():
+    def _renforge_explain_index(query=None, limit=200):
+        """Labels and screens, optionally filtered by a case-insensitive name substring."""
+        needle = query.casefold() if query else None
         labels = []
         for key, value in _renforge_explain_namemap().items():
             # Ren'Py keys the namemap by the node itself, which hashes as its name.
@@ -4862,16 +4864,17 @@ init python:
                 continue
             if value.__class__.__name__ != "Label":
                 continue
+            if needle and needle not in name.casefold():
+                continue
             where = _renforge_explain_loc(value) or {}
             labels.append({"name": name, "file": where.get("file"), "line": where.get("line")})
         labels.sort(key=_renforge_explain_sort_key)
-        labels_truncated = len(labels) > _RENFORGE_EXPLAIN_MAX_LABELS
-        labels = labels[:_RENFORGE_EXPLAIN_MAX_LABELS]
+        label_total = len(labels)
 
         layers = list(getattr(renpy.config, "layers", None) or ()) + list(getattr(renpy.config, "top_layers", None) or ())
         screens = []
         for name, variant, screen in _renforge_explain_screens():
-            if name.startswith("_"):
+            if name.startswith("_") or (needle and needle not in name.casefold()):
                 continue
             where = _renforge_explain_loc(screen) or {}
             params = getattr(screen, "parameters", None)
@@ -4897,16 +4900,17 @@ init python:
             if item.get("file") is not None:
                 files[item["file"]] = True
         base = getattr(renpy.config, "basedir", "") or ""
-        file_items = [
-            {"file": name, "on_disk": os.path.exists(os.path.join(base, name))}
-            for name in sorted(files)
-        ]
+        on_disk = sum(1 for name in files if os.path.exists(os.path.join(base, name)))
+        screen_total = len(screens)
         return {
             "ok": True,
-            "labels": labels,
-            "labels_truncated": labels_truncated,
-            "screens": screens,
-            "files": file_items,
+            "query": query,
+            "labels": labels[:limit],
+            "label_total": label_total,
+            "screens": screens[:limit],
+            "screen_total": screen_total,
+            "truncated": label_total > limit or screen_total > limit,
+            "files": {"total": len(files), "on_disk": on_disk},
         }
 
 
@@ -5051,6 +5055,36 @@ init python:
         return None
 
 
+    def _renforge_explain_statement(wanted):
+        """The screen-language statement at ``(file, line)``, with its enclosing conditions."""
+        seen = set()
+        for screen_name, _variant, screen in _renforge_explain_screens():
+            ast = getattr(screen, "ast", None)
+            if ast is None or id(ast) in seen:
+                continue
+            seen.add(id(ast))
+            found = _renforge_explain_find(getattr(ast, "children", None), wanted, [])
+            if found is None:
+                continue
+            node, conditions = found
+            where = _renforge_explain_loc(node) or {}
+            return {
+                "defined_in_screen": screen_name,
+                "statement": {
+                    "kind": _renforge_explain_name(getattr(node, "name", None)),
+                    "file": where.get("file"),
+                    "line": where.get("line"),
+                    "positional": [_renforge_explain_text(item) for item in getattr(node, "positional", None) or ()],
+                    "keywords": {
+                        _renforge_explain_str(pair[0]): _renforge_explain_text(pair[1])
+                        for pair in getattr(node, "keyword", None) or ()
+                    },
+                },
+                "conditions": list(conditions),
+            }
+        return {"statement": None, "reason": "location not found in screen definitions"}
+
+
     def _renforge_h_explain_control(control_id):
         focus, element, error = _renforge_resolve_ui_element({"id": control_id}, "explain")
         if error:
@@ -5070,47 +5104,26 @@ init python:
                 "statement": None,
                 "reason": "built in Python; no screen-language location",
             }
-        seen = set()
-        for screen_name, _variant, screen in _renforge_explain_screens():
-            ast = getattr(screen, "ast", None)
-            if ast is None or id(ast) in seen:
-                continue
-            seen.add(id(ast))
-            found = _renforge_explain_find(getattr(ast, "children", None), wanted, [])
-            if found is None:
-                continue
-            node, conditions = found
-            where = _renforge_explain_loc(node) or {}
-            statement = {
-                "kind": _renforge_explain_name(getattr(node, "name", None)),
-                "file": where.get("file"),
-                "line": where.get("line"),
-                "positional": [_renforge_explain_text(item) for item in getattr(node, "positional", None) or ()],
-                "keywords": {
-                    _renforge_explain_str(pair[0]): _renforge_explain_text(pair[1])
-                    for pair in getattr(node, "keyword", None) or ()
-                },
-            }
-            return {
-                "ok": True,
-                "control": summary,
-                "defined_in_screen": screen_name,
-                "statement": statement,
-                "conditions": list(conditions),
-            }
-        return {
-            "ok": True,
-            "control": summary,
-            "statement": None,
-            "reason": "location not found in screen definitions",
-        }
+        return dict(_renforge_explain_statement(wanted), ok=True, control=summary)
+
+
+    def _renforge_h_explain_source(source):
+        """Explain a ``file:line`` reported as ``source`` by observe or input candidates."""
+        filename, _sep, line = source.rpartition(":")
+        try:
+            wanted = _renforge_explain_location_tuple((filename, builtins.int(line)))
+        except ValueError:
+            wanted = None
+        if not filename or wanted is None:
+            return {"ok": False, "error": "source must look like file:line"}
+        return dict(_renforge_explain_statement(wanted), ok=True, source=source)
 
 
     def _renforge_h_explain(payload):
         payload = payload or {}
-        selectors = [key for key in ("label", "screen", "id") if payload.get(key) is not None]
+        selectors = [key for key in ("label", "screen", "id", "source") if payload.get(key) is not None]
         if len(selectors) > 1:
-            return {"ok": False, "error": "pass at most one of label, screen, id"}
+            return {"ok": False, "error": "pass at most one of label, screen, id, source"}
         for key in selectors:
             if not isinstance(payload.get(key), builtins.str):
                 return {"ok": False, "error": "%s must be a string" % key}
@@ -5119,12 +5132,17 @@ init python:
         except (TypeError, ValueError):
             limit = 200
         limit = max(1, min(2000, limit))
+        query = payload.get("query")
+        if query is not None and not isinstance(query, builtins.str):
+            return {"ok": False, "error": "query must be a string"}
         if not selectors:
-            return _renforge_explain_index()
+            return _renforge_explain_index(query, limit)
         if selectors[0] == "label":
             return _renforge_explain_label(payload["label"], limit)
         if selectors[0] == "screen":
             return _renforge_explain_screen(payload["screen"], limit)
+        if selectors[0] == "source":
+            return _renforge_h_explain_source(payload["source"])
         return _renforge_h_explain_control(payload["id"])
 
 

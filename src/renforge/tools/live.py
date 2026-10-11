@@ -1021,11 +1021,14 @@ def explain(
     screen: str | None = None,
     id: str | None = None,
     limit: int = 200,
+    source: str | None = None,
+    query: str | None = None,
 ) -> dict:
     """Explain where game content is defined and what it does."""
     return _with_client(
         project_path,
-        lambda c: c.explain(label=label, screen=screen, id=id, limit=limit),
+        lambda c: c.explain(label=label, screen=screen, id=id, source=source,
+                            query=query, limit=limit),
     )
 
 

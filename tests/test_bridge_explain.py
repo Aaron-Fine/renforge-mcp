@@ -46,7 +46,7 @@ def _rows(reply):
 def test_explain_rejects_more_than_one_selector(running_bridge):
     reply = running_bridge.client.explain(label="start", screen="rf_hub")
 
-    assert reply == {"ok": False, "error": "pass at most one of label, screen, id"}
+    assert reply == {"ok": False, "error": "pass at most one of label, screen, id, source"}
 
 
 def test_explain_rejects_non_string_selector(running_bridge):
@@ -92,7 +92,8 @@ def test_index_sorts_labels_filters_private_names_and_reports_files(running_brid
     reply = running_bridge.client.explain()
 
     assert reply["ok"] is True
-    assert reply["labels_truncated"] is False
+    assert reply["truncated"] is False
+    assert (reply["label_total"], reply["screen_total"]) == (3, 2)
     assert [(item["name"], item["file"], item["line"]) for item in reply["labels"]] == [
         ("zeta", "game/a.rpy", 3),
         ("beta", "game/script.rpy", 2),
@@ -103,26 +104,28 @@ def test_index_sorts_labels_filters_private_names_and_reports_files(running_brid
         ("rf_hub", None, "game/screens.rpy", ["overlay"]),
     ]
     assert reply["screens"][0]["parameters"] is None
-    assert reply["files"] == [
-        {"file": "game/a.rpy", "on_disk": False},
-        {"file": "game/screens.rpy", "on_disk": False},
-        {"file": "game/script.rpy", "on_disk": True},
-    ]
+    assert reply["files"] == {"total": 3, "on_disk": 1}
+
+    filtered = running_bridge.client.explain(query="HUB")
+    assert [item["name"] for item in filtered["screens"]] == ["rf_hub"]
+    assert filtered["labels"] == [] and filtered["query"] == "HUB"
 
 
-def test_index_caps_labels_and_flags_truncation(running_bridge):
+def test_index_is_bounded_by_limit_and_flags_truncation(running_bridge):
     labels = {
         "label_%04d" % number: _script_node("Label", "game/big.rpy", number + 1)
-        for number in range(2001)
+        for number in range(250)
     }
     _set_script(running_bridge, labels)
     _set_screens(running_bridge, {})
 
     reply = running_bridge.client.explain()
 
-    assert reply["labels_truncated"] is True
-    assert len(reply["labels"]) == 2000
+    assert reply["truncated"] is True
+    assert reply["label_total"] == 250
+    assert len(reply["labels"]) == 200
     assert reply["labels"][0]["line"] == 1
+    assert len(running_bridge.client.explain(limit=5)["labels"]) == 5
 
 
 # --- label walk ----------------------------------------------------------
@@ -419,3 +422,20 @@ def test_compiled_script_names_are_reported_as_source_names(running_bridge):
 
     assert reply["file"] == "game/script.rpy"
     assert reply["statements"][0]["file"] == "game/script.rpy"
+
+
+def test_explain_source_traces_a_file_line_from_observe(running_bridge):
+    _set_screens(running_bridge, {("rf_hub", None): _screen(("game/screens.rpy", 4), ast=_rf_hub_ast())})
+
+    reply = running_bridge.client.explain(source="game/screens.rpy:9")
+
+    assert reply["ok"] is True
+    assert reply["source"] == "game/screens.rpy:9"
+    assert reply["statement"]["keywords"] == {"action": 'Jump("rf_room")'}
+    assert reply["conditions"] == ["if quest_stage >= 3", "for i in range(10)"]
+    assert running_bridge.client.explain(source="nowhere")["ok"] is False
+    assert running_bridge.client.explain(source="game/screens.rpy:99")["statement"] is None
+
+
+def test_explain_text_collapses_whitespace(running_bridge):
+    assert running_bridge.globs["_renforge_explain_text"]("A(\n    key='x',\n)") == "A( key='x', )"
