@@ -59,12 +59,52 @@ removes the mod, and the original screen returns.
 
 Commit after each step.
 
+## Status after implementation and an Academy34 trial (2026-10-11)
+
+All three steps are implemented on `feat/engine-native-perception`. The trial
+drove a copy of Academy34 (archive-only: no `.rpy` files) through the public
+MCP tools only: main menu → startup choices → name input → free-roam room.
+
+What worked:
+
+- Every ordinary control and every custom input region carries `source`
+  (`file:line`), even with no source files on disk.
+- Two `explain` calls showed how the game's free roam works: hotspot `X` at
+  location `L` calls label `location_L_interact_X`. `explain(screen=...)`
+  listed the room's 30 interactables and the `event_available(...)` gates;
+  `explain(source=...)` showed that the bed region triggers `interact_bed`.
+- The mod loop worked end to end: write an overlay button → reload (game state
+  kept) → observe shows it with its mod source → act runs it → package →
+  remove (deleting `main.rpy` and `main.rpyc`) → reload → button gone.
+
+Re-evaluation:
+
+- Step 1 fixed real bugs (disabled buttons reported as usable; "selected" and
+  "bar" leaking into labels) but removed far less code than planned. The render
+  walk is still needed for text bounds and the not-yet-drawn check, so it can't
+  be made lazy.
+- The trial's first full index was 200 KB; it now takes `query`, honours
+  `limit`, and reports file counts. Explain also takes `source`.
+- The biggest remaining gap is free-roam geometry: most Academy34 props render
+  a full-frame canvas, so their bounds cover the whole screen. `explain` now
+  tells the agent *what* each prop is; it still can't tell *where* to click.
+  Sampling pixel opacity is now clearly the next most valuable change.
+- Menu choices drawn in a transformed viewport have no `source`.
+- On Ren'Py 8.0.3, 22 of 35 live tests fail both before and after these changes;
+  the demo game needs a newer engine. That's test debt, not a regression.
+- Stopping a session deletes its temporary saves; pass an explicit `savedir`
+  to keep checkpoints across launches.
+- Haiku implemented both new tools from task cards. Opus still had to fix tool
+  counts after merging and two security issues (mod writes must be
+  authorized like `eval`; writes must not follow symlinks). Agent worktrees
+  started from a stale commit; task cards must check their base commit.
+
 ## Later, only if needed
 
-- Tighter bounds for custom free-roam hotspots (sample pixel opacity).
+- **Next:** tighter bounds for custom free-roam hotspots (sample pixel opacity).
 - Fewer agent-facing tools; Live Editor off by default for agent sessions.
 - Split `bridge.rpy` into a few files.
-- Fix repeated labels like `RETURN: RETURN: RETURN`.
+- `source` for menu choices drawn in a transformed viewport.
 
 ## Risks
 
