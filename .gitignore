@@ -94,3 +94,6 @@ screens
 
 # Sandbox contract test diagnostics
 /.sandbox-test-artifacts/
+
+# Agent worktrees
+.claude/worktrees/
