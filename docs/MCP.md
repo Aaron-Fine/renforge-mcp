@@ -658,6 +658,28 @@ progression and again after stopping. `crossed_truncated` reports event-buffer
 gaps or failed retrieval. A follow-up observation returned by `act` does not
 consume the transcript cursor; explicit `observe` and progression do.
 
+## Modding
+
+`renforge_mod` writes a mod into a game without touching the game's own files.
+Each mod lives in `game/mods/<name>/` and records every file it writes in
+`renforge-mod.json`, so removal deletes exactly what RenForge created.
+
+The loop for an agent:
+
+```text
+renforge_mod(project_path=project, action="write", name="demo", path="intro.rpy", content="...")
+renforge_mod(project_path=project, action="lint", name="demo")          # diagnostics inside the mod only
+renforge_mod(project_path=project, action="reload", name="demo")        # hot reload, errors, fresh observation
+renforge_observe(project_path=project)                                  # check the result in the running game
+renforge_mod(project_path=project, action="remove", name="demo")        # listed files, .rpyc siblings, empty dirs
+```
+
+`package` zips the mod into `.renforge/mods/<name>.zip`. `list` shows each
+mod's files plus any `missing` (listed but gone) or `unlisted` files. Paths must
+be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
+1,000,000 UTF-8 bytes. Symlinks under `game/` are refused. `guide` returns modding idioms
+(`init offset`, screen replacement, `config.label_overrides`, overlay screens).
+
 ## Tool catalogue
 
 ### Discovery and static analysis
@@ -691,6 +713,12 @@ consume the transcript cursor; explicit `observe` and progression do.
 | `renforge_send_input` | Send exactly one `text`, named `key`, or logical-coordinate `scroll` operation. Text replaces the contents of a focused Ren'Py `Input` (falling back to character events when needed); `submit=true` presses Enter. Supported keys include `enter`, `esc`, arrows, `pageup`, `pagedown`, `backspace`, `delete`, `home`, `end`, `space`, `tab`, and `f1`-`f12`. Scroll uses `{"x": ..., "y": ..., "direction": "up"|"down", "amount": 1}`. |
 | `renforge_saves` | Run `save`, `load`, `list`, `list_user`, or `import` for named slots. `list` reads the running session; `list_user` observes host slots without a running game; `import` copies selected host slots (`slot`, `slots`, or `regexp`) into the isolated session and refuses when the session exposes the user tree. Save/load require `slot`; save accepts optional `extra_info`; load returns `restored_label`; list/list_user accept optional `regexp` and return `name`, `extra_info`, and `mtime` without screenshots. |
 | `renforge_screenshot` | Capture a frame; width, height, crop, scale, and `grid`/`rulers`/`crosshair` overlays are optional. Passing only one of `width`/`height` keeps the game's aspect ratio. |
+
+### Mods
+
+| Tool | Purpose |
+| --- | --- |
+| `renforge_mod` | Write, test, and remove a mod under `game/mods/<name>/`. `action` is `write` (`path`, `content`), `list`, `lint`, `reload`, `remove`, `package`, or `guide`; every action except `list` and `guide` takes `name`. Game files outside that directory are never modified. `remove` deletes only manifest-listed files plus their `.rpyc` siblings, and reports unlisted files under `kept`. `reload` hot-reloads the running game and returns `reload`, `observation`, and `errors`. See [Modding](#modding). |
 
 ### Choices and user interface
 

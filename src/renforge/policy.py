@@ -54,6 +54,17 @@ SAVES_ACTIONS: dict[str, str] = {
     "load": RISK_DESTRUCTIVE,
 }
 
+MOD_ACTIONS: dict[str, str] = {
+    "write": RISK_MUTATING,
+    # Matches renforge_control(action="reload_script").
+    "reload": RISK_DESTRUCTIVE,
+    "remove": RISK_MUTATING,
+    "list": RISK_OBSERVATIONAL,
+    "lint": RISK_OBSERVATIONAL,
+    "guide": RISK_OBSERVATIONAL,
+    "package": RISK_OBSERVATIONAL,
+}
+
 EDITOR_ACTIONS: dict[str, str] = {
     "status": RISK_OBSERVATIONAL,
     "select": RISK_MUTATING,
@@ -208,6 +219,15 @@ def classify(name: str, params: Mapping[str, Any] | None = None) -> tuple[str, s
         if risk is None:
             return f"renforge_saves.{action}", RISK_MALFORMED
         return f"renforge_saves.{action}", risk
+    if name == "renforge_mod":
+        action = payload.get("action")
+        if not isinstance(action, str) or not action.strip():
+            return "renforge_mod", RISK_MALFORMED
+        action = action.strip()
+        risk = MOD_ACTIONS.get(action)
+        if risk is None:
+            return f"renforge_mod.{action}", RISK_MALFORMED
+        return f"renforge_mod.{action}", risk
     if name == "renforge_editor":
         action = payload.get("action")
         if not isinstance(action, str) or not action.strip():

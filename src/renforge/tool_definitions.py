@@ -694,6 +694,36 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             ]
         },
     ),
+    "renforge_mod": ToolDefinition(
+        description=(
+            "Write, test, and remove mods under `game/mods/<name>/` with a `renforge-mod.json` manifest. Never modifies "
+            "game files outside that directory. `write` takes `path` and `content` (`.rpy`, `.txt`, `.json`, or `.md`). "
+            "`list` reports listed, missing, and unlisted files. `lint` returns project lint diagnostics that point into "
+            "the mod. `remove` deletes only manifest-listed files, their compiled `.rpyc` siblings, and empty directories; "
+            "unlisted files are kept and reported. `package` zips the mod into `.renforge/mods/`. `reload` hot-reloads the "
+            "running game and returns errors and a fresh observation. `guide` returns modding idioms. Mod actions are "
+            "classified per action by the runtime policy."
+        ),
+        annotations=_ann(
+            readOnlyHint=False,
+            idempotentHint=False,
+            destructiveHint=False,
+            openWorldHint=False,
+        ),
+        parameters={
+            "project_path": "Project root of the game that owns the mod.",
+            "action": "One of `write`, `list`, `lint`, `reload`, `remove`, `package`, or `guide`.",
+            "name": (
+                "Mod name matching `^[a-z0-9][a-z0-9_-]{0,63}$`. Required for every action except `list` and `guide`."
+            ),
+            "path": "Path relative to the mod directory, for example `script.rpy`. Required for `write`.",
+            "content": "UTF-8 file content, at most 1,000,000 bytes. Required for `write`.",
+        },
+        parameter_schemas={
+            "action": _enum("write", "list", "lint", "reload", "remove", "package", "guide"),
+            "name": {"minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"},
+        },
+    ),
     "renforge_list_choices": ToolDefinition(
         description=(
             "List current engine menu entries across runtime layers, including clipped choices. Use the returned "

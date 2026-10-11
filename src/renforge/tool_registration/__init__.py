@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..tool_definitions import TOOL_DEFINITIONS
-from . import content_build, inspection, interaction, lifecycle, project_analysis, runtime_state, scenarios
+from . import content_build, inspection, interaction, lifecycle, mods, project_analysis, runtime_state, scenarios
 from .registry import ToolRegistrar
 from .wrappers import build_tool_wrappers
 
@@ -17,6 +17,7 @@ DOMAIN_MODULES = (
     inspection,
     scenarios,
     content_build,
+    mods,
 )
 
 
