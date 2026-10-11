@@ -1015,6 +1015,20 @@ def inspect_screen(project_path: str, name: str) -> dict:
     return _with_client(project_path, lambda c: c.inspect_screen(name.strip()))
 
 
+def explain(
+    project_path: str,
+    label: str | None = None,
+    screen: str | None = None,
+    id: str | None = None,
+    limit: int = 200,
+) -> dict:
+    """Explain where game content is defined and what it does."""
+    return _with_client(
+        project_path,
+        lambda c: c.explain(label=label, screen=screen, id=id, limit=limit),
+    )
+
+
 def advance(project_path: str) -> dict:
     return _with_client(project_path, lambda c: c.advance())
 
@@ -2889,6 +2903,7 @@ __all__ = [
     "stop_all",
     "game_state",
     "inspect_screen",
+    "explain",
     "advance",
     "control",
     "send_input",

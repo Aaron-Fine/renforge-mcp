@@ -9,6 +9,7 @@ from typing import Any
 TOOL_NAMES = (
     "renforge_diff_screenshots",
     "renforge_scene_tree",
+    "renforge_explain",
     "renforge_measure",
     "renforge_screenshot",
     "renforge_capture_screenshot",
@@ -126,6 +127,42 @@ def build_wrappers(context):
                 "max_items": max_items,
                 "max_output_depth": max_output_depth,
                 "max_output_bytes": max_output_bytes,
+            },
+        )
+
+
+    def renforge_explain(
+        project_path: str,
+        label: str = "",
+        screen: str = "",
+        id: str = "",
+        limit: int = 200,
+    ) -> dict:
+        """Explain where game content is defined and what it does, without evaluating it.
+
+        Reads the running game's loaded syntax trees, so it also works for
+        games that ship only ``.rpa``/``.rpyc``. With no selector it indexes
+        labels, screens and files. ``label`` lists a label's statements, ``screen``
+        its displayable tree, and ``id`` (a control id from ``renforge_observe``)
+        the statement that built that control with its enclosing conditions.
+        """
+        return _log_tool_call(
+            name="renforge_explain",
+            params={
+                "project_path": project_path,
+                "label": label,
+                "screen": screen,
+                "id": id,
+                "limit": limit,
+            },
+            project_root=project_path,
+            fn=live.explain,
+            args=(project_path,),
+            kwargs={
+                "label": label or None,
+                "screen": screen or None,
+                "id": id or None,
+                "limit": limit,
             },
         )
 

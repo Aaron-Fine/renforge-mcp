@@ -2683,6 +2683,50 @@
       "type": "object"
     }
   },
+  "renforge_explain": {
+    "description": "Explain where game content is defined and what it does, read from the running game's loaded syntax trees without evaluating anything. Works for games that ship only .rpa/.rpyc files. With no selector it returns an index of labels, screens and files (with on_disk flags). `label` returns the statements of a label, flattened depth-first with file, line and text. `screen` returns the displayable tree of a screen. `id` takes a control id from renforge_observe and returns the statement that built it, its keyword arguments, and the if/for/use conditions enclosing it. Output is bounded by `limit`.",
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true,
+      "destructiveHint": false,
+      "openWorldHint": false
+    },
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "project_path": {
+          "description": "Project root with active game session.",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "description": "Label name to explain. Pass at most one of label, screen, or id.",
+          "type": "string"
+        },
+        "screen": {
+          "default": "",
+          "description": "Screen name to explain. Pass at most one of label, screen, or id.",
+          "type": "string"
+        },
+        "id": {
+          "default": "",
+          "description": "Control id from renforge_observe to trace back to its screen-language statement.",
+          "type": "string"
+        },
+        "limit": {
+          "default": 200,
+          "description": "Maximum statements or nodes to return (1-2000, default 200).",
+          "maximum": 2000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "project_path"
+      ],
+      "type": "object"
+    }
+  },
   "renforge_measure": {
     "description": "Measure geometry between scene nodes without visual inspection. `contrast` samples the live frame and reports a WCAG ratio. Use this to detect layout drift after positional edits.",
     "annotations": {

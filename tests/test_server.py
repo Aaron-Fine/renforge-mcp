@@ -98,6 +98,7 @@ EXPECTED_TOOLS = {
     "renforge_position_element",
     "renforge_diff_screenshots",
     "renforge_scene_tree",
+    "renforge_explain",
     "renforge_measure",
     "renforge_hit_test",
     "renforge_run_scenario",
@@ -251,7 +252,7 @@ def test_create_app_registers_expected_tools() -> None:
 
     tools = asyncio.run(app.list_tools())
     names = {tool.name for tool in tools if tool.name.startswith("renforge_")}
-    assert len(EXPECTED_TOOLS) == 59
+    assert len(EXPECTED_TOOLS) == 60
     assert EXPECTED_TOOLS == set(TOOL_DEFINITIONS) == names
     instructions = getattr(app, "instructions", "") or ""
     assert "renforge_info" in instructions or not hasattr(app, "instructions")

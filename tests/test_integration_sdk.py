@@ -1781,3 +1781,90 @@ label chapter:
             assert status['stop'] == ('exited' if terminal == 'clean_exit' else 'crash'), status
             assert status['ending'] is None
             assert status['process']['exit_code'] == (0 if terminal == 'clean_exit' else 1)
+
+
+_RPYC_OPTIONS = """define config.name = "RenForge Explain"
+define config.version = "0.0.1"
+"""
+
+_RPYC_SCRIPT = """default rf_gate = True
+
+label main_menu:
+    return
+
+screen rf_hub():
+    modal True
+    if rf_gate:
+        textbutton "Door" action Jump("rf_room")
+    textbutton "Look" action NullAction()
+
+label start:
+    menu:
+        "Open" if rf_gate:
+            jump rf_room
+        "Leave":
+            pass
+    call screen rf_hub
+    return
+
+label rf_room:
+    "Room."
+    return
+"""
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
+def test_live_explain_reads_rpyc_only_game(sdk, tmp_path: Path) -> None:
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.observe import classify
+    from renforge.project import RenpyProject
+
+    project = tmp_path / "rpyc_only"
+    game = project / "game"
+    game.mkdir(parents=True)
+    (game / "script.rpy").write_text(_RPYC_SCRIPT, encoding="utf-8")
+    (game / "options.rpy").write_text(_RPYC_OPTIONS, encoding="utf-8")
+
+    # The first launch compiles the scripts to .rpyc; then the sources go away.
+    with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False):
+        pass
+    for source in game.glob("*.rpy"):
+        source.unlink()
+    assert list(game.glob("*.rpyc")), "expected compiled scripts"
+
+    with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
+        index = session.client.explain()
+        assert index["ok"] is True, index
+        labels = {item["name"]: item for item in index["labels"]}
+        assert {"start", "rf_room"} <= set(labels), index
+        assert labels["start"]["file"] == "game/script.rpy", labels["start"]
+        files = {item["file"]: item["on_disk"] for item in index["files"]}
+        assert files.get("game/script.rpy") is False, index["files"]
+        assert any(item["name"] == "rf_hub" for item in index["screens"]), index["screens"]
+
+        # Wait for the start menu to appear, then explain the label.
+        for _ in range(40):
+            if any(control.get("text") == "Leave" for control in session.client.list_ui_elements()):
+                break
+            time.sleep(0.25)
+        start = session.client.explain(label="start")
+        assert start["ok"] is True, start
+        assert any(row["kind"] == "choice" and row["text"] == "Open if rf_gate" for row in start["statements"]), start
+
+        selected = session.client.select_choice(text="Leave")
+        assert selected["ok"] is True, selected
+
+        # The hub is reached through "call screen rf_hub".
+        door = None
+        for _ in range(40):
+            snapshot = classify(session.client.observe(screenshot=False))
+            door = next((c for c in snapshot.get("controls") or [] if c.get("text") == "Door"), None)
+            if door is not None:
+                break
+            time.sleep(0.25)
+        assert door is not None, snapshot.get("controls")
+
+        traced = session.client.explain(id=door["id"])
+        assert traced["ok"] is True, traced
+        assert traced["statement"]["keywords"]["action"] == 'Jump("rf_room")', traced
+        assert traced["conditions"] == ["if rf_gate"], traced

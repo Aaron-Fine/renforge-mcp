@@ -465,6 +465,13 @@ input.
 - `none`: no supported progression was established, including incomplete
   custom-input discovery. Check `omitted` and `input_candidates` before acting.
 
+Controls from `renforge_observe` carry a `source` field: the `file:line` of the
+screen-language statement that built them, or null for controls built in
+Python. Pass a control `id` to `renforge_explain` to see that statement, its
+keyword arguments (such as `action`), and the `if`/`for`/`use` conditions that
+enclose it. `renforge_explain` reads the loaded syntax trees and never evaluates
+anything, so it is safe to call on a live game.
+
 The conventional `quick_menu` and injected `_renforge_` screens are chrome.
 Custom overlay screens remain gameplay controls: overlay registration is a
 rendering detail, not a reason to ignore a hub. Readout text does not stop
@@ -748,6 +755,7 @@ be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 | --- | --- |
 | `renforge_eval` | Evaluate a Python expression in `store`. Use for diagnosis and development only. Open-world: requires `authorize=true` when `RENFORGE_POLICY=enforce`. |
 | `renforge_inspect_screen` | Inspect whether a screen is active and, when shown, return its layer, JSON-safe scope, and passed arguments. |
+| `renforge_explain` | Explain where game content is defined and what it does, read from the running game's loaded syntax trees without evaluating anything. Works for `.rpa`/`.rpyc`-only games. No selector returns an index of labels, screens, and files; `label` lists a label's statements; `screen` lists a screen's displayable tree; `id` (a control from `renforge_observe`) returns the statement that built it, its keyword arguments, and the enclosing `if`/`for`/`use` conditions. Bounded by `limit`. |
 | `renforge_get_var` | Read a store variable. |
 | `renforge_set_var` | Write a store variable. |
 | `renforge_poll_events` | Read label, dialogue, confirmed ending, exception, and business events (`quick_save.completed`, `skip.stopped`, …) from a cursor. Events may carry `correlation_id` and `timestamp`. |

@@ -422,6 +422,35 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "name": "Screen name to inspect in the live bridge state.",
         },
     ),
+    "renforge_explain": ToolDefinition(
+        description=(
+            "Explain where game content is defined and what it does, read from the running game's loaded syntax "
+            "trees without evaluating anything. Works for games that ship only .rpa/.rpyc files. With no selector "
+            "it returns an index of labels, screens and files (with on_disk flags). `label` returns the statements "
+            "of a label, flattened depth-first with file, line and text. `screen` returns the displayable tree of a "
+            "screen. `id` takes a control id from renforge_observe and returns the statement that built it, its "
+            "keyword arguments, and the if/for/use conditions enclosing it. Output is bounded by `limit`."
+        ),
+        annotations=_ann(
+            readOnlyHint=True,
+            idempotentHint=True,
+            destructiveHint=False,
+            openWorldHint=False,
+        ),
+        parameters={
+            "project_path": "Project root with active game session.",
+            "label": "Label name to explain. Pass at most one of label, screen, or id.",
+            "screen": "Screen name to explain. Pass at most one of label, screen, or id.",
+            "id": "Control id from renforge_observe to trace back to its screen-language statement.",
+            "limit": "Maximum statements or nodes to return (1-2000, default 200).",
+        },
+        parameter_schemas={
+            "label": {"type": "string"},
+            "screen": {"type": "string"},
+            "id": {"type": "string"},
+            "limit": _limits(1, 2000),
+        },
+    ),
     "renforge_advance": ToolDefinition(
         description=(
             "Advance one dialogue event from the currently active queue. Prefer `renforge_control(action=\"advance\")` "

@@ -185,6 +185,30 @@ class BridgeClient:
             return result
         return reply
 
+    def explain(
+        self,
+        *,
+        label: str | None = None,
+        screen: str | None = None,
+        id: str | None = None,
+        limit: int | None = None,
+    ) -> dict:
+        """Explain game content from the loaded syntax trees, without evaluating it.
+
+        With no selector this indexes labels, screens and files. ``label`` and
+        ``screen`` name one definition; ``id`` names a control from observe.
+        """
+        payload: dict[str, Any] = {}
+        if label is not None:
+            payload["label"] = label
+        if screen is not None:
+            payload["screen"] = screen
+        if id is not None:
+            payload["id"] = id
+        if limit is not None:
+            payload["limit"] = limit
+        return self.request("explain", payload)
+
     def eval_expr(self, expr: str) -> Any:
         return self._checked("eval", {"expr": expr})["value"]
 

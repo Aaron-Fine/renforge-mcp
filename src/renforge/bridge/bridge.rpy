@@ -4010,8 +4010,8 @@ init python:
         return entries
 
 
-    def _renforge_source_location(displayable):
-        """``file:line`` of the screen-language statement that built it.
+    def _renforge_source_tuple(displayable):
+        """``(file, line)`` of the screen-language statement that built it.
 
         Screen language records the location on ``d._main or d``: a
         textbutton's location lives on its Text child.
@@ -4019,12 +4019,15 @@ init python:
         location = getattr(displayable, "_location", None)
         if location is None:
             location = getattr(getattr(displayable, "_main", None), "_location", None)
-        if not _renforge_observe_is_sequence(location) or len(location) < 2:
+        return _renforge_explain_location_tuple(location)
+
+
+    def _renforge_source_location(displayable):
+        """``file:line`` of the screen-language statement that built it."""
+        location = _renforge_source_tuple(displayable)
+        if location is None:
             return None
-        try:
-            return "%s:%d" % (str(location[0]), int(location[1]))
-        except (TypeError, ValueError):
-            return None
+        return "%s:%d" % location
 
 
     def _renforge_action_contains(container, wanted):
@@ -4662,6 +4665,470 @@ init python:
         return (reply, pairs) if with_pairs else reply
 
 
+    _RENFORGE_EXPLAIN_TEXT_CHARS = 160
+    _RENFORGE_EXPLAIN_MAX_LABELS = 2000
+    _RENFORGE_EXPLAIN_KEYWORDS = ("action", "sensitive", "hovered", "unhovered", "selected", "alternate", "value", "id")
+
+
+    def _renforge_explain_str(value):
+        if value is None:
+            return ""
+        if isinstance(value, builtins.str):
+            return value
+        return builtins.str(value)
+
+
+    def _renforge_explain_text(value):
+        text = _renforge_explain_str(value)
+        if len(text) > _RENFORGE_EXPLAIN_TEXT_CHARS:
+            text = text[:_RENFORGE_EXPLAIN_TEXT_CHARS - 3] + "..."
+        return text
+
+
+    def _renforge_explain_location_tuple(location):
+        """Normalize a ``(file, line)`` pair; None when the value is not one."""
+        if not _renforge_observe_is_sequence(location) or len(location) < 2:
+            return None
+        try:
+            filename = builtins.str(location[0])
+            # Ren'Py 8.0 records compiled scripts under their .rpyc name; report the source name.
+            if filename.endswith(".rpyc"):
+                filename = filename[:-1]
+            return (filename, builtins.int(location[1]))
+        except (TypeError, ValueError):
+            return None
+
+
+    def _renforge_explain_loc(node):
+        """``{"file", "line"}`` for script nodes and screen-language nodes."""
+        pair = None
+        filename = getattr(node, "filename", None)
+        linenumber = getattr(node, "linenumber", None)
+        if filename is not None and linenumber is not None:
+            pair = _renforge_explain_location_tuple((filename, linenumber))
+        if pair is None:
+            pair = _renforge_explain_location_tuple(getattr(node, "location", None))
+        if pair is None:
+            return None
+        return {"file": pair[0], "line": pair[1]}
+
+
+    def _renforge_explain_pysrc(code):
+        source = getattr(code, "source", None)
+        if isinstance(source, builtins.str):
+            return source
+        return None
+
+
+    def _renforge_explain_code_text(code):
+        source = _renforge_explain_pysrc(code)
+        if source is None:
+            return ""
+        for line in source.splitlines():
+            if line.strip():
+                return line.strip()
+        return ""
+
+
+    def _renforge_explain_name(raw):
+        if isinstance(raw, (builtins.list, builtins.tuple)):
+            return " ".join(_renforge_explain_str(part) for part in raw)
+        return _renforge_explain_str(raw)
+
+
+    def _renforge_explain_branch(index, cond, first):
+        """Kind and condition text for entry ``index`` of an if-chain."""
+        if index > 0 and cond in (None, "True"):
+            return "else", ""
+        return (first if index == 0 else "elif"), _renforge_explain_str(cond)
+
+
+    def _renforge_explain_emit(state, depth, kind, loc, text):
+        if len(state["entries"]) >= state["limit"]:
+            state["truncated"] = True
+            return
+        where = loc or {}
+        state["entries"].append({
+            "depth": depth,
+            "kind": kind,
+            "file": where.get("file"),
+            "line": where.get("line"),
+            "text": _renforge_explain_text(text),
+        })
+
+
+    def _renforge_explain_label_walk(block, depth, state):
+        for node in block or ():
+            if state["truncated"]:
+                return
+            try:
+                _renforge_explain_label_node(node, depth, state)
+            except Exception:
+                continue
+
+
+    def _renforge_explain_label_node(node, depth, state):
+        kind = node.__class__.__name__
+        loc = _renforge_explain_loc(node)
+        emit = _renforge_explain_emit
+        if kind == "Say":
+            who = getattr(node, "who", None)
+            what = getattr(node, "what", None)
+            if who:
+                text = "%s: %s" % (_renforge_explain_str(who), _renforge_explain_str(what))
+            else:
+                text = _renforge_explain_str(what)
+            emit(state, depth, "say", loc, text)
+        elif kind == "Menu":
+            emit(state, depth, "menu", loc, "")
+            for item in getattr(node, "items", None) or ():
+                if state["truncated"]:
+                    return
+                caption, condition, block = item[0], item[1], item[2]
+                if block is None:
+                    emit(state, depth, "caption", loc, _renforge_explain_str(caption))
+                    continue
+                text = _renforge_explain_str(caption)
+                if condition not in (None, "True"):
+                    text = "%s if %s" % (text, _renforge_explain_str(condition))
+                emit(state, depth, "choice", loc, text)
+                _renforge_explain_label_walk(block, depth + 1, state)
+        elif kind == "If":
+            for index, entry in enumerate(getattr(node, "entries", None) or ()):
+                branch, cond_text = _renforge_explain_branch(index, entry[0], "if")
+                emit(state, depth, branch, loc, cond_text)
+                _renforge_explain_label_walk(entry[1], depth + 1, state)
+        elif kind == "While":
+            emit(state, depth, "while", loc, getattr(node, "condition", None))
+            _renforge_explain_label_walk(getattr(node, "block", None), depth + 1, state)
+        elif kind in ("Jump", "Call"):
+            target = getattr(node, "label", None) if kind == "Call" else getattr(node, "target", None)
+            prefix = "expression " if getattr(node, "expression", None) else ""
+            emit(state, depth, kind.lower(), loc, prefix + _renforge_explain_str(target))
+        elif kind == "Return":
+            emit(state, depth, "return", loc, getattr(node, "expression", None))
+        elif kind in ("Python", "EarlyPython"):
+            emit(state, depth, "python", loc, _renforge_explain_code_text(getattr(node, "code", None)))
+        elif kind in ("Show", "Scene", "Hide"):
+            imspec = getattr(node, "imspec", None)
+            name = ""
+            if imspec and imspec[0]:
+                name = " ".join(_renforge_explain_str(part) for part in imspec[0])
+            emit(state, depth, kind.lower(), loc, name)
+        elif kind == "Translate":
+            _renforge_explain_label_walk(getattr(node, "block", None), depth, state)
+        elif kind in ("EndTranslate", "Pass"):
+            return
+        elif kind == "UserStatement":
+            emit(state, depth, "statement", loc, getattr(node, "line", None))
+        elif kind == "Label":
+            emit(state, depth, "label", loc, getattr(node, "name", None))
+        else:
+            emit(state, depth, kind, loc, "")
+
+
+    def _renforge_explain_namemap():
+        script = getattr(getattr(renpy, "game", None), "script", None)
+        namemap = getattr(script, "namemap", None)
+        return namemap if namemap is not None else {}
+
+
+    def _renforge_explain_screens():
+        """``(name, variant, screen)`` for every defined screen."""
+        screen_module = getattr(getattr(renpy, "display", None), "screen", None)
+        screens = getattr(screen_module, "screens", None)
+        if screens is None:
+            return []
+        found = []
+        for key, screen in screens.items():
+            try:
+                name, variant = key[0], key[1]
+            except (TypeError, IndexError):
+                continue
+            found.append((_renforge_explain_name(name), variant, screen))
+        return found
+
+
+    def _renforge_explain_sort_key(item):
+        return (item.get("file") or "", item.get("line") or 0, item.get("name") or "")
+
+
+    def _renforge_explain_index():
+        labels = []
+        for key, value in _renforge_explain_namemap().items():
+            # Ren'Py keys the namemap by the node itself, which hashes as its name.
+            name = key if isinstance(key, builtins.str) else getattr(value, "name", None)
+            if not isinstance(name, builtins.str) or name.startswith("_"):
+                continue
+            if value.__class__.__name__ != "Label":
+                continue
+            where = _renforge_explain_loc(value) or {}
+            labels.append({"name": name, "file": where.get("file"), "line": where.get("line")})
+        labels.sort(key=_renforge_explain_sort_key)
+        labels_truncated = len(labels) > _RENFORGE_EXPLAIN_MAX_LABELS
+        labels = labels[:_RENFORGE_EXPLAIN_MAX_LABELS]
+
+        layers = list(getattr(renpy.config, "layers", None) or ()) + list(getattr(renpy.config, "top_layers", None) or ())
+        screens = []
+        for name, variant, screen in _renforge_explain_screens():
+            if name.startswith("_"):
+                continue
+            where = _renforge_explain_loc(screen) or {}
+            params = getattr(screen, "parameters", None)
+            shown_on = []
+            for layer in layers:
+                try:
+                    if renpy.get_screen(name, layer=layer) is not None:
+                        shown_on.append(layer)
+                except Exception:
+                    continue
+            screens.append({
+                "name": name,
+                "variant": variant,
+                "file": where.get("file"),
+                "line": where.get("line"),
+                "parameters": _renforge_explain_str(params) if params else None,
+                "shown_on": shown_on,
+            })
+        screens.sort(key=_renforge_explain_sort_key)
+
+        files = {}
+        for item in labels + screens:
+            if item.get("file") is not None:
+                files[item["file"]] = True
+        base = getattr(renpy.config, "basedir", "") or ""
+        file_items = [
+            {"file": name, "on_disk": os.path.exists(os.path.join(base, name))}
+            for name in sorted(files)
+        ]
+        return {
+            "ok": True,
+            "labels": labels,
+            "labels_truncated": labels_truncated,
+            "screens": screens,
+            "files": file_items,
+        }
+
+
+    def _renforge_explain_label(name, limit):
+        node = _renforge_explain_namemap().get(name)
+        if node is None or node.__class__.__name__ != "Label":
+            return {"ok": False, "error": "unknown label"}
+        where = _renforge_explain_loc(node) or {}
+        state = {"entries": [], "limit": limit, "truncated": False}
+        _renforge_explain_label_walk(getattr(node, "block", None), 0, state)
+        return {
+            "ok": True,
+            "label": name,
+            "file": where.get("file"),
+            "line": where.get("line"),
+            "statements": state["entries"],
+            "truncated": state["truncated"],
+        }
+
+
+    def _renforge_explain_sl_text(node):
+        parts = [_renforge_explain_str(item) for item in getattr(node, "positional", None) or ()]
+        text = " ".join(parts)
+        for pair in getattr(node, "keyword", None) or ():
+            key = _renforge_explain_str(pair[0])
+            if key in _RENFORGE_EXPLAIN_KEYWORDS:
+                text += " %s %s" % (key, _renforge_explain_str(pair[1]))
+        return text.strip()
+
+
+    def _renforge_explain_screen_walk(nodes, depth, state):
+        for node in nodes or ():
+            if state["truncated"]:
+                return
+            try:
+                _renforge_explain_screen_node(node, depth, state)
+            except Exception:
+                continue
+
+
+    def _renforge_explain_screen_node(node, depth, state):
+        kind = node.__class__.__name__
+        loc = _renforge_explain_loc(node)
+        emit = _renforge_explain_emit
+        children = getattr(node, "children", None)
+        if kind == "SLDisplayable":
+            name = getattr(node, "name", None)
+            if not isinstance(name, builtins.str):
+                name = getattr(name, "__name__", None) or _renforge_explain_str(name)
+            emit(state, depth, name, loc, _renforge_explain_sl_text(node))
+            _renforge_explain_screen_walk(children, depth + 1, state)
+        elif kind in ("SLIf", "SLShowIf"):
+            first = "showif" if kind == "SLShowIf" else "if"
+            for index, entry in enumerate(getattr(node, "entries", None) or ()):
+                branch, cond_text = _renforge_explain_branch(index, entry[0], first)
+                emit(state, depth, branch, loc, cond_text)
+                _renforge_explain_screen_walk(getattr(entry[1], "children", None), depth + 1, state)
+        elif kind == "SLFor":
+            text = "%s in %s" % (_renforge_explain_str(getattr(node, "variable", None)),
+                                 _renforge_explain_str(getattr(node, "expression", None)))
+            emit(state, depth, "for", loc, text)
+            _renforge_explain_screen_walk(children, depth + 1, state)
+        elif kind == "SLUse":
+            emit(state, depth, "use", loc, _renforge_explain_str(getattr(node, "target", None)))
+            _renforge_explain_screen_walk(getattr(getattr(node, "block", None), "children", None), depth + 1, state)
+        elif kind == "SLPython":
+            emit(state, depth, "python", loc, _renforge_explain_code_text(getattr(node, "code", None)))
+        elif kind == "SLDefault":
+            text = "%s = %s" % (_renforge_explain_str(getattr(node, "variable", None)),
+                                _renforge_explain_str(getattr(node, "expression", None)))
+            emit(state, depth, "default", loc, text)
+        elif kind == "SLBlock" or children is not None:
+            _renforge_explain_screen_walk(children, depth, state)
+        else:
+            emit(state, depth, kind, loc, "")
+
+
+    def _renforge_explain_screen(name, limit):
+        match = None
+        for screen_name, variant, screen in _renforge_explain_screens():
+            if screen_name != name:
+                continue
+            if match is None or (variant is None and match[1] is not None):
+                match = (screen_name, variant, screen)
+        if match is None:
+            return {"ok": False, "error": "unknown screen"}
+        screen_name, variant, screen = match
+        where = _renforge_explain_loc(screen) or {}
+        head = {
+            "ok": True,
+            "screen": screen_name,
+            "variant": variant,
+            "file": where.get("file"),
+            "line": where.get("line"),
+            "parameters": _renforge_explain_str(getattr(screen, "parameters", None)) or None,
+        }
+        ast = getattr(screen, "ast", None)
+        if ast is None:
+            head.update({"nodes": [], "truncated": False, "reason": "screen defined in Python"})
+            return head
+        state = {"entries": [], "limit": limit, "truncated": False}
+        _renforge_explain_screen_walk(getattr(ast, "children", None), 0, state)
+        head.update({"nodes": state["entries"], "truncated": state["truncated"]})
+        return head
+
+
+    def _renforge_explain_branches(node):
+        """``(label, children)`` pairs a screen-language node descends into."""
+        kind = node.__class__.__name__
+        if kind in ("SLIf", "SLShowIf"):
+            branches = []
+            for index, entry in enumerate(getattr(node, "entries", None) or ()):
+                branch, cond_text = _renforge_explain_branch(index, entry[0], "if")
+                label = "%s %s" % (branch, cond_text) if cond_text else branch
+                branches.append((label, getattr(entry[1], "children", None)))
+            return branches
+        if kind == "SLFor":
+            label = "for %s in %s" % (_renforge_explain_str(getattr(node, "variable", None)),
+                                      _renforge_explain_str(getattr(node, "expression", None)))
+            return [(label, getattr(node, "children", None))]
+        if kind == "SLUse":
+            label = "use %s" % _renforge_explain_str(getattr(node, "target", None))
+            return [(label, getattr(getattr(node, "block", None), "children", None))]
+        children = getattr(node, "children", None)
+        return [(None, children)] if children is not None else []
+
+
+    def _renforge_explain_find(nodes, wanted, path):
+        """Depth-first search for the SLDisplayable at ``wanted``; returns (node, conditions)."""
+        for node in nodes or ():
+            try:
+                if (node.__class__.__name__ == "SLDisplayable"
+                        and _renforge_explain_location_tuple(getattr(node, "location", None)) == wanted):
+                    return node, path
+                for label, children in _renforge_explain_branches(node):
+                    next_path = path + [label] if label else path
+                    found = _renforge_explain_find(children, wanted, next_path)
+                    if found is not None:
+                        return found
+            except Exception:
+                continue
+        return None
+
+
+    def _renforge_h_explain_control(control_id):
+        focus, element, error = _renforge_resolve_ui_element({"id": control_id}, "explain")
+        if error:
+            return error
+        widget = getattr(focus, "widget", None)
+        summary = {
+            "id": element.get("id"),
+            "text": element.get("text"),
+            "screen": element.get("screen"),
+            "source": element.get("source"),
+        }
+        wanted = _renforge_source_tuple(widget) if widget is not None else None
+        if wanted is None:
+            return {
+                "ok": True,
+                "control": summary,
+                "statement": None,
+                "reason": "built in Python; no screen-language location",
+            }
+        seen = set()
+        for screen_name, _variant, screen in _renforge_explain_screens():
+            ast = getattr(screen, "ast", None)
+            if ast is None or id(ast) in seen:
+                continue
+            seen.add(id(ast))
+            found = _renforge_explain_find(getattr(ast, "children", None), wanted, [])
+            if found is None:
+                continue
+            node, conditions = found
+            where = _renforge_explain_loc(node) or {}
+            statement = {
+                "kind": _renforge_explain_name(getattr(node, "name", None)),
+                "file": where.get("file"),
+                "line": where.get("line"),
+                "positional": [_renforge_explain_text(item) for item in getattr(node, "positional", None) or ()],
+                "keywords": {
+                    _renforge_explain_str(pair[0]): _renforge_explain_text(pair[1])
+                    for pair in getattr(node, "keyword", None) or ()
+                },
+            }
+            return {
+                "ok": True,
+                "control": summary,
+                "defined_in_screen": screen_name,
+                "statement": statement,
+                "conditions": list(conditions),
+            }
+        return {
+            "ok": True,
+            "control": summary,
+            "statement": None,
+            "reason": "location not found in screen definitions",
+        }
+
+
+    def _renforge_h_explain(payload):
+        payload = payload or {}
+        selectors = [key for key in ("label", "screen", "id") if payload.get(key) is not None]
+        if len(selectors) > 1:
+            return {"ok": False, "error": "pass at most one of label, screen, id"}
+        for key in selectors:
+            if not isinstance(payload.get(key), builtins.str):
+                return {"ok": False, "error": "%s must be a string" % key}
+        try:
+            limit = builtins.int(payload.get("limit", 200))
+        except (TypeError, ValueError):
+            limit = 200
+        limit = max(1, min(2000, limit))
+        if not selectors:
+            return _renforge_explain_index()
+        if selectors[0] == "label":
+            return _renforge_explain_label(payload["label"], limit)
+        if selectors[0] == "screen":
+            return _renforge_explain_screen(payload["screen"], limit)
+        return _renforge_h_explain_control(payload["id"])
+
+
+
     def _renforge_h_observe(payload):
         payload = payload or {}
         return _renforge_observe_raw(bool(payload.get("screenshot")))
@@ -5265,6 +5732,7 @@ init python:
         "set_var": _renforge_h_set_var,
         "screenshot": _renforge_h_screenshot,
         "observe": _renforge_h_observe,
+        "explain": _renforge_h_explain,
         "act": _renforge_h_act,
         "dismiss_if": _renforge_h_dismiss_if,
         "progression": _renforge_h_progression,
