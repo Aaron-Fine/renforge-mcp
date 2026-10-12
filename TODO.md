@@ -17,6 +17,57 @@ section is a historical harness proposal, not the current implementation plan.
 Its unchecked items have broader acceptance criteria; existing observe/action/
 progression tools already implement parts of that proposal.
 
+## Agent play loop simplification (2026-10-12)
+
+Goal: the five-tool loop the playthroughs actually used (`session`, `observe`,
+`act`, `explain`, `mod`), with Ren'Py supplying the facts instead of the bridge.
+
+### Cuts
+
+- [ ] Fold `launch`, `launch_status`, `saves` (save/load/list) and `stop` into
+  one `renforge_session` tool with an `action` argument.
+- [ ] `act`: replace `text`, `value`, `x`, `y`, `drop` with one `value`
+  interpreted by the control's type (typed text for an input, a number for a
+  bar, an x/y pair for a viewport, a target control id for a drag).
+- [ ] `act`: physical keys become pseudo-controls (`key/escape`, `key/tab`);
+  `hold` becomes that control's value. Drop `key`, `hold`, and `submit`
+  (inputs always submit; editing without submitting moves to `value` options
+  only if a game needs it).
+- [ ] Guards: `observation_id` only. Drop `interaction` and `session_id` from
+  `act` and the guarded legacy calls.
+- [ ] Progression: `act` advances to the next decision by default within one
+  time budget. Retire `advance_until` (keep it as an alias for one release),
+  `mode=dismiss`, `max_steps`, and the `observe` flag.
+- [ ] Launch: agent-mode defaults only. Remove `savedir`, `home`,
+  `persistent`, `preferences`, `cleanup_on_stop`, `display`, `audio`, and
+  `timeout` from the agent-facing tool; keep them as server configuration
+  (environment variables) for the rare user who needs them.
+- [ ] Compact observations only. Remove `detail`; `explain(id)` returns a
+  control's full facts on request.
+- [ ] Group upstream's editor, translation, build/distribute, and docs tools
+  into separate toolsets the server enables on request, replacing the
+  fork-only `RENFORGE_TOOLS` filter.
+
+### Related findings
+
+- [ ] One id scheme. `list_ui_elements` and the tools built on it keep
+  upstream's ids while `observe` uses `screen/...` ids; `control_id` links
+  them. Settle on one when upstream agrees.
+- [ ] Perception tools that are views of the same collector as `observe`:
+  `screenshot`, `scene_tree`, `list_ui_elements`, `get_ui_element_bounds`,
+  `get_displayable_bounds`, `hit_test`, `inspect_screen`, `list_choices`,
+  `game_state`, `game_state_compact`. Action tools that duplicate `act`:
+  `advance`, `click_element`, `click_at`, `hover_element`, `select_choice`,
+  `send_input`. Move them to a compatibility toolset.
+- [ ] Still recomputed in the bridge, worth replacing with engine facts:
+  modal blocking for controls outside `focus_list` (rank comparison instead
+  of the engine's focus/hit test); the "not drawn yet" check from render
+  geometry (Ren'Py's `interact_time` says it directly); transition progress
+  from delays (the engine's pause/transition state); host-side text-tag
+  stripping (the bridge already prefers `renpy.text.extras.filter_text_tags`);
+  control roles guessed from class names. Render-tree geometry for things
+  that are not focusable has no engine equivalent and stays.
+
 ## Simplification and documentation review (2026-10-04)
 
 - [x] Remove unused legacy ID/action helpers and obsolete scene placement/
