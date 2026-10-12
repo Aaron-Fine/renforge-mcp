@@ -4663,6 +4663,13 @@ init python:
             if len(candidates) >= 64:
                 unclassified = True
                 break
+            if geometry["visible"] is False:
+                # Kept so agents know the handler exists; it is not on screen.
+                candidates.append({"screen": name, "layer": layer,
+                    "source": _renforge_source_location(node),
+                    "class": "%s.%s" % (type(node).__module__, type(node).__name__),
+                    "visible": False, "bounds": None, "bounds_reason": geometry["bounds_reason"]})
+                continue
             candidates.append({"screen": name, "layer": layer,
                 "source": _renforge_source_location(node),
                 "class": "%s.%s" % (type(node).__module__, type(node).__name__),
@@ -5083,7 +5090,10 @@ init python:
             first = "showif" if kind == "SLShowIf" else "if"
             for index, entry in enumerate(getattr(node, "entries", None) or ()):
                 branch, cond_text = _renforge_explain_branch(index, entry[0], first)
-                emit(state, depth, branch, loc, cond_text)
+                # A branch can set its parent's properties, such as a button's action.
+                keywords = _renforge_explain_sl_text(types.SimpleNamespace(
+                    keyword=getattr(entry[1], "keyword", None)))
+                emit(state, depth, branch, loc, (cond_text + " : " + keywords) if keywords else cond_text)
                 _renforge_explain_screen_walk(getattr(entry[1], "children", None), depth + 1, state)
         elif kind == "SLFor":
             text = "%s in %s" % (_renforge_explain_str(getattr(node, "variable", None)),
@@ -5322,6 +5332,45 @@ init python:
             snippet = text[max(0, at - 60):at + len(needle) + 60]
             matches.append({"kind": kind, "file": where.get("file"), "line": where.get("line"),
                             "label": enclosing, "text": _renforge_explain_text(snippet)})
+        # Screen language: displayable arguments, properties, and conditions.
+        seen = set()
+        for screen_name, _variant, screen in _renforge_explain_screens():
+            ast = getattr(screen, "ast", None)
+            if truncated or ast is None or id(ast) in seen:
+                continue
+            seen.add(id(ast))
+            stack = builtins.list(getattr(ast, "children", None) or ())
+            while stack and not truncated:
+                node = stack.pop()
+                try:
+                    kind = node.__class__.__name__
+                    texts = []
+                    if kind == "SLDisplayable":
+                        texts.append(_renforge_explain_sl_text(types.SimpleNamespace(
+                            positional=getattr(node, "positional", None),
+                            keyword=getattr(node, "keyword", None) or ())))
+                        texts.extend(_renforge_explain_str(pair[1]) for pair in getattr(node, "keyword", None) or ())
+                    elif kind in ("SLIf", "SLShowIf"):
+                        for entry in getattr(node, "entries", None) or ():
+                            texts.append(_renforge_explain_str(entry[0]))
+                            texts.extend(_renforge_explain_str(pair[1]) for pair in getattr(entry[1], "keyword", None) or ())
+                    elif kind == "SLPython":
+                        texts.append(_renforge_explain_pysrc(getattr(node, "code", None)) or "")
+                    hit = next((text for text in texts if wanted in text.casefold()), None)
+                    for _label, children in _renforge_explain_branches(node):
+                        stack.extend(children or ())
+                except Exception:
+                    continue
+                if hit is None:
+                    continue
+                if len(matches) >= limit:
+                    truncated = True
+                    break
+                where = _renforge_explain_loc(node) or {}
+                at = hit.casefold().find(wanted)
+                matches.append({"kind": "screen", "file": where.get("file"), "line": where.get("line"),
+                                "screen": screen_name,
+                                "text": _renforge_explain_text(hit[max(0, at - 60):at + len(needle) + 60])})
         return {"ok": True, "search": needle, "matches": matches, "truncated": truncated}
 
 

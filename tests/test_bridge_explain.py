@@ -481,3 +481,22 @@ def test_label_walk_reads_translate_say(running_bridge):
     _set_script(running_bridge, {"start": label})
     reply = running_bridge.client.explain(label="start")
     assert [(s["kind"], s["text"]) for s in reply["statements"]] == [("say", "mc: Hi.")]
+
+
+def test_screen_outline_shows_properties_set_inside_an_if(running_bridge):
+    f = "game/map.rpy"
+    block = _node("SLBlock", children=[], keyword=[("action", 'Function(teleport, "yard")'), ("xpos", "10")])
+    button = _script_node("SLDisplayable", f, 3, name="button", positional=[], keyword=[], location=(f, 3),
+                          children=[_script_node("SLIf", f, 4, entries=[("not map_yard_locked", block)], location=(f, 4))])
+    _set_screens(running_bridge, {("map", None): _screen((f, 1), ast=_node("SLScreen", children=[button]))})
+    nodes = running_bridge.client.explain(screen="map")["nodes"]
+    assert nodes[1]["text"] == 'not map_yard_locked : action Function(teleport, "yard")'
+
+
+def test_explain_search_covers_screen_language(running_bridge):
+    _set_script(running_bridge, {})
+    running_bridge.renpy.game.script.all_stmts = []
+    _set_screens(running_bridge, {("rf_hub", None): _screen(("game/screens.rpy", 4), ast=_rf_hub_ast())})
+    reply = running_bridge.client.explain(search='jump("rf_room")')
+    assert [(m["kind"], m["line"], m["screen"]) for m in reply["matches"]] == [("screen", 9, "rf_hub")]
+    assert [m["line"] for m in running_bridge.client.explain(search="quest_stage")["matches"]] == [6]
