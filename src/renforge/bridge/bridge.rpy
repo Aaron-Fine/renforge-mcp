@@ -4060,6 +4060,11 @@ init python:
         """
         if not actions:
             return False
+        # FileTakeScreenshot captures the save thumbnail just before a game
+        # opens its menu, even a custom one such as Show("pause_menu").
+        if any(type(action).__name__ == "FileTakeScreenshot" and _renforge_engine_class(type(action))
+               for action in actions):
+            return True
         for action in actions:
             cls = type(action)
             if cls.__name__ not in _RENFORGE_CHROME_ACTIONS:
@@ -4068,12 +4073,16 @@ init python:
             # screens are interface chrome.
             if cls.__name__ == "ShowMenu" and getattr(action, "screen", None) not in _RENFORGE_GAME_MENU_SCREENS:
                 return False
-            code = next((getattr(value, "__code__", None) for value in vars(cls).values()
-                         if getattr(value, "__code__", None) is not None), None)
-            filename = str(getattr(code, "co_filename", "")).replace("\\", "/")
-            if "renpy/common/" not in filename:
+            if not _renforge_engine_class(cls):
                 return False
         return True
+
+
+    def _renforge_engine_class(cls):
+        """True when the class is defined in Ren'Py's common library."""
+        code = next((getattr(value, "__code__", None) for value in vars(cls).values()
+                     if getattr(value, "__code__", None) is not None), None)
+        return "renpy/common/" in str(getattr(code, "co_filename", "")).replace("\\", "/")
 
 
     def _renforge_source_tuple(displayable):

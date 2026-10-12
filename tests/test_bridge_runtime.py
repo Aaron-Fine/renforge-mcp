@@ -6114,3 +6114,23 @@ def test_load_without_invoke_in_main_thread_lets_the_engine_restart(running_brid
             renpy.invoke_in_main_thread = saved
     assert reply["ok"] is True
     assert reply["slot"] == "teams" and reply["restarting"] is True
+
+
+
+def test_an_action_list_that_takes_a_save_screenshot_is_menu_chrome(running_bridge):
+    globs = running_bridge.globs
+
+    class Action:
+        pass
+
+    namespace = {"Action": Action}
+    exec(compile("class FileTakeScreenshot(Action):\n    def __call__(self):\n        return None\n",
+                 "renpy/common/00action_file.rpy", "exec"), namespace)
+
+    class Show(Action):
+        def __call__(self):
+            return None
+
+    chrome = globs["_renforge_engine_chrome_action"]
+    assert chrome([namespace["FileTakeScreenshot"](), Show()]) is True
+    assert chrome([Show()]) is False
