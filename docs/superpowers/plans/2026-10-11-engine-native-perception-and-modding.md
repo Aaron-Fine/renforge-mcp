@@ -149,6 +149,21 @@ Still open: the first launch of a large game can exceed the 90 s startup
 timeout; `act` sometimes returns a settled observation from before a location
 change (a fresh `observe` is correct).
 
+## Follow-up (2026-10-12)
+
+- Stale `act` result: TDI's `change_location` is `show black; pause 0.5;
+  jump`. During the pause the old hub's buttons are still focusable, so the
+  pause looked like a settled hub. A timed pause of 5 s or less now reports
+  `stable=false, unstable_reason="pause"`; four location changes in a row
+  matched a fresh observe, with and without `advance`.
+- Startup timeouts: the "cold start" was most likely a locked screen. Ren'Py's
+  SDL opens an X11 window and waits for it to be mapped, which never happens
+  while the session is locked. Native launches in a Wayland session now use
+  `SDL_VIDEODRIVER=wayland,x11`; 8.1–8.5 start in seconds while locked, 8.0
+  has no Wayland driver and still needs an unlocked screen or Xvfb. The
+  deadline defaults to 180 s, `RENFORGE_STARTUP_TIMEOUT` sets it server-wide,
+  and `renforge_launch(timeout=...)` still overrides it per call.
+
 ## Later, only if needed
 
 - Tighter bounds for custom hotspots (pixel opacity): not needed so far.
