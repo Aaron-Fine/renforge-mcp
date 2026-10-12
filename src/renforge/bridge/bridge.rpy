@@ -5458,6 +5458,22 @@ init python:
     def _renforge_progress_public(operation):
         return {key: operation[key] for key in ("id", "active", "stop", "steps")}
 
+    _RENFORGE_PROGRESS_PERIODIC_MS = 5
+
+
+    def _renforge_periodic_interval(ms=None):
+        """Set the engine's periodic timer; None restores its own interval."""
+        core = getattr(renpy.display, "core", None)
+        event = getattr(core, "PERIODIC", None)
+        timer = getattr(getattr(pygame, "time", None), "set_timer", None)
+        if event is None or not callable(timer):
+            return
+        try:
+            timer(event, int(ms if ms is not None else getattr(core, "PERIODIC_INTERVAL", 50)))
+        except Exception:
+            pass
+
+
     def _renforge_progress_finish(reason):
         bridge = _renforge_runtime.bridge
         operation = bridge.progression if bridge is not None else None
@@ -5465,6 +5481,7 @@ init python:
             return
         operation["active"] = False
         operation["stop"] = reason
+        _renforge_periodic_interval(None)
         # Owned skip never leaks beyond the operation. Native fast mode can
         # bypass interaction checks, so only native slow skip is used here.
         renpy.config.skipping = None
@@ -5567,6 +5584,9 @@ init python:
             prefs.transitions = 0
         if "text_cps" in saved:
             prefs.text_cps = 0
+        # Check each new line within milliseconds instead of at the engine's
+        # 20 Hz periodic rate, which otherwise caps skipping at ~19 lines/s.
+        _renforge_periodic_interval(_RENFORGE_PROGRESS_PERIODIC_MS)
         _renforge_progress_tick()
         return {"ok": True, "progression": _renforge_progress_public(bridge.progression)}
 
