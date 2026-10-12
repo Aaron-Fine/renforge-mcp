@@ -4375,11 +4375,13 @@ init python:
             except Exception:
                 bounds, visible, reason = None, None, "unsupported render geometry"
                 corners = []
+            empty = None
             if visible and not draws(render):
-                # A full-frame canvas that blits nothing is not on screen.
-                bounds, visible, reason = None, False, "renders nothing"
+                # A full-frame canvas that blits nothing is not on screen. The
+                # reason describes this render only; children keep their geometry.
+                bounds, visible, empty = None, False, "renders nothing"
             occurrence = {"bounds": bounds, "visible": visible,
-                          "bounds_reason": reason or (None if visible else "clipped, transparent, or zero-sized"),
+                          "bounds_reason": reason or empty or (None if visible else "clipped, transparent, or zero-sized"),
                           "render_path": builtins.list(path)}
             for widget in getattr(render, "render_of", ()) or ():
                 result["occurrences"].setdefault(id(widget), []).append(dict(occurrence))
