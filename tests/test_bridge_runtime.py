@@ -6090,3 +6090,27 @@ def test_a_hiding_choice_screen_offers_no_menu_entries(running_bridge):
     screen.phase = 2
     snapshot = classify(running_bridge.client.observe(screenshot=False))
     assert [control['text'] for control in snapshot['controls']] == ['Screaming Gophers']
+
+
+
+def test_load_without_invoke_in_main_thread_lets_the_engine_restart(running_bridge):
+    """Ren'Py 8.0/8.1 load by raising RestartTopContext inside the drain."""
+    renpy = running_bridge.renpy
+    RestartTopContext = type("RestartTopContext", (Exception,), {})
+    renpy.game = types.SimpleNamespace(RestartTopContext=RestartTopContext)
+    renpy.can_load = lambda slot: True
+
+    def load(slot):
+        raise RestartTopContext()
+
+    renpy.load = load
+    saved = getattr(renpy, "invoke_in_main_thread", None)
+    if hasattr(renpy, "invoke_in_main_thread"):
+        del renpy.invoke_in_main_thread
+    try:
+        reply = running_bridge.client.load_slot("teams")
+    finally:
+        if saved is not None:
+            renpy.invoke_in_main_thread = saved
+    assert reply["ok"] is True
+    assert reply["slot"] == "teams" and reply["restarting"] is True

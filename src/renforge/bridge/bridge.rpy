@@ -1357,7 +1357,15 @@ init python:
             return {"ok": False, "error": "save loading is unavailable"}
 
         def _do_load():
-            load(slot)
+            try:
+                load(slot)
+            except Exception as exc:
+                if _renforge_is_script_control_flow(exc):
+                    # The engine restarts into the loaded game after the reply.
+                    _renforge_emit_business("load.completed", slot=slot, restored_label=None)
+                    setattr(exc, "renforge_result", {"ok": True, "slot": slot,
+                        "restored_label": None, "restarting": True})
+                raise
 
         _renforge_invoke(_do_load)
         bridge = _renforge_runtime.bridge
@@ -1857,7 +1865,11 @@ init python:
         # Start on the main menu raises JumpOutException, which leaves the
         # menu context and then becomes a JumpException. Swallowing it leaves
         # the game on the menu and reports a failed click.
-        for name in ("JumpException", "JumpOutException", "CallException"):
+        # Loading, restarting, and quitting work by raising these. Before 8.2
+        # there is no invoke_in_main_thread, so a load runs inside the drain.
+        for name in ("JumpException", "JumpOutException", "CallException",
+                     "RestartContext", "RestartTopContext", "FullRestartException",
+                     "UtterRestartException", "QuitException"):
             signal = getattr(game, name, None)
             if isinstance(signal, type) and isinstance(exc, signal):
                 return True
