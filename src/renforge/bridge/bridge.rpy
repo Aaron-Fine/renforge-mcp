@@ -4625,6 +4625,46 @@ init python:
                 return True
         return False
 
+    # A timed pause this short ends by itself; one that is longer is a place
+    # the player waits, and the agent may dismiss it.
+    _RENFORGE_SHORT_PAUSE_SECONDS = 5.0
+
+    def _renforge_short_pause_pending():
+        """True while a short `pause N` interaction has yet to time out.
+
+        interact_core adds a PauseBehavior to the root widget, outside every
+        layer, so look for it in the top of the last drawn frame. Screens on
+        top can still be clickable while the script is about to move on
+        (for example `show black` + `pause 0.5` + `jump`).
+        """
+        render_mod = getattr(getattr(renpy, "display", None), "render", None)
+        root = getattr(render_mod, "screen_render", None)
+        pause_type = getattr(getattr(renpy.display, "behavior", None), "PauseBehavior", None)
+        interface = getattr(renpy.display, "interface", None)
+        started = getattr(interface, "interact_time", None)
+        get_time = getattr(getattr(renpy.display, "core", None), "get_time", None)
+        if root is None or not isinstance(pause_type, type) or not started or not callable(get_time):
+            return False
+        stack = [(root, 0)]
+        while stack:
+            render, depth = stack.pop()
+            for shown in getattr(render, "render_of", ()) or ():
+                if isinstance(shown, pause_type):
+                    delay = getattr(shown, "delay", None)
+                    if (isinstance(delay, (builtins.int, builtins.float)) and not isinstance(delay, bool)
+                            and 0 < delay <= _RENFORGE_SHORT_PAUSE_SECONDS):
+                        try:
+                            if get_time() - started < delay:
+                                return True
+                        except Exception:
+                            pass
+            if depth < 3:
+                for child in getattr(render, "children", ()) or ():
+                    target = child[0] if child else None
+                    if hasattr(target, "render_of"):
+                        stack.append((target, depth + 1))
+        return False
+
     def _renforge_observe_stability():
         transition = _renforge_transition_pending()
         interacting = False
@@ -4639,6 +4679,8 @@ init python:
             return False, "not_ready"
         if not interacting or getattr(renpy.display.interface, "restart_interaction", False):
             return False, "not_ready"
+        if _renforge_short_pause_pending():
+            return False, "pause"
         return True, None
 
 

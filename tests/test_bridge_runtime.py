@@ -826,6 +826,49 @@ def test_finished_layer_transition_does_not_lock_the_interaction(running_bridge)
     assert playing.get("unstable_reason") == "transition"
 
 
+def test_short_timed_pause_is_not_settled_until_it_ends(running_bridge):
+    """`show black` + `pause 0.5` + `jump` leaves the old hub clickable."""
+    renpy = running_bridge.renpy
+
+    class PauseBehavior:
+        def __init__(self, delay):
+            self.delay = delay
+
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(layers={}),
+        )
+    )
+    renpy.display.interface.ongoing_transition = None
+    renpy.get_filename_line = lambda: ("game/script.rpy", 1)
+    renpy.config.overlay_screens = []
+    renpy.get_screen = lambda name: None
+    renpy.display.behavior.PauseBehavior = PauseBehavior
+    clock = {"now": 10.2}
+    renpy.display.core = types.SimpleNamespace(get_time=lambda: clock["now"])
+    renpy.display.interface.interact_time = 10.0
+
+    def frame(delay):
+        pause = _completed_render(0, 0, [PauseBehavior(delay)])
+        root = _completed_render(800, 600, children=[(_completed_render(800, 600), 0, 0, True, True),
+                                                     (pause, 0, 0, True, True)])
+        renpy.display.render = types.SimpleNamespace(screen_render=root)
+
+    frame(0.5)
+    waiting = running_bridge.client.observe(screenshot=False)
+    assert waiting.get("stable") is False
+    assert waiting.get("unstable_reason") == "pause"
+
+    clock["now"] = 10.6
+    assert running_bridge.client.observe(screenshot=False).get("stable") is True
+
+    # A long pause is somewhere the player waits; it stays actionable.
+    clock["now"] = 10.2
+    frame(30)
+    assert running_bridge.client.observe(screenshot=False).get("stable") is True
+
+
 def test_observe_dismiss_guard_and_stale_act(running_bridge):
     """The bridge snapshot and the dismiss/act guards run against a fake interact."""
     import sys

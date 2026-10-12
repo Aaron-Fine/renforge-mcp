@@ -636,6 +636,10 @@ its button; `semantic=true` distinguishes that operation from a pointer hit.
 
 An active screen absent from the completed render returns `stable=false` with
 `unstable_reason="not_ready"`; fetch a fresh observation after it draws.
+A timed `pause` of 5 seconds or less returns `stable=false` with
+`unstable_reason="pause"` until it ends, because the script moves on by
+itself (screens shown under a fade can still be clickable). Longer pauses
+are stable and can be dismissed.
 Boundary stop reasons reflect the settled final observation; step/time budgets
 and failures retain their actual stop reason.
 Geometry comes from the completed frame, with transforms and clipping applied.

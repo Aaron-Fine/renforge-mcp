@@ -536,7 +536,7 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
 
     stable = raw.get("stable") is True
     reason = raw.get("unstable_reason")
-    if reason not in {"transition", "not_ready"}:
+    if reason not in {"transition", "not_ready", "pause"}:
         reason = None
     if stable:
         reason = None
