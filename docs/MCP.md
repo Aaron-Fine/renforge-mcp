@@ -241,6 +241,21 @@ $RENFORGE_STATE_DIR/projects/<name>-<hash>/       # when set
 separate folders. An optional `<project>/.renforge/policy.json` is still read
 from the project, because the project owner writes it.
 
+## Limiting the listed tools (fork-only, for development)
+
+This switch is temporary and will be removed before changes go upstream.
+`RENFORGE_TOOLS` lists the tools the server exposes, as comma-separated names
+(the `renforge_` prefix is optional) or profiles; `RENFORGE_TOOLS_EXCLUDE`
+hides tools afterwards. Unset or `all` lists everything. Unknown names stop the
+server at startup.
+
+```bash
+RENFORGE_TOOLS=play renforge-mcp                  # info, launch, launch_status, observe,
+                                                  # act, advance_until, saves, explain, mod, stop
+RENFORGE_TOOLS=play,screenshot renforge-mcp       # profile plus one tool
+RENFORGE_TOOLS_EXCLUDE=eval,mod renforge-mcp      # everything except these
+```
+
 ## Recommended workflow
 
 ```text

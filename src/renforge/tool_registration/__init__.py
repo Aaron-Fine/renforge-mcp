@@ -32,9 +32,11 @@ def register_all_tools(app: Any) -> None:
         domain.register(registrar, wrappers)
 
     expected = set(TOOL_DEFINITIONS)
-    if set(wrappers) != expected or registrar.registered_names != expected:
-        missing = sorted(expected - registrar.registered_names)
-        extra = sorted(registrar.registered_names - expected)
+    # Tools hidden by the fork-only RENFORGE_TOOLS filter still count as wired.
+    accounted = registrar.registered_names | registrar.hidden_names
+    if set(wrappers) != expected or accounted != expected:
+        missing = sorted(expected - accounted)
+        extra = sorted(accounted - expected)
         orphaned = sorted(set(wrappers) - expected)
         raise RuntimeError(
             f"Tool registration drift: missing={missing} extra={extra} orphaned={orphaned}"
