@@ -1056,3 +1056,20 @@ def test_process_failure_preserves_last_observation_without_confirming_an_end(mo
     assert result['last_observation'] == last
     if exit_code is not None:
         assert result['process']['exit_code'] == exit_code
+
+
+def test_observation_id_alone_guards_act():
+    from renforge.interaction import validate_act_payload
+
+    snapshot = classify(_raw(observation_id="obs-1", session_id="s-1",
+                             elements=[_element(screen="hub", text="Go", action="Jump('x')")]))
+    control = snapshot["controls"][0]["id"]
+
+    assert validate_act_payload({"id": control, "observation_id": "obs-1"}) is None
+    assert validate_act_payload({"id": control}) == "stale"
+    assert guard_act(snapshot, None, control, observation_id="obs-1") is None
+    assert guard_act(snapshot, None, control, observation_id="obs-0") == "stale"
+    assert guard_act(snapshot, None, control) == "stale"
+    # The legacy interaction guard still works on its own.
+    assert guard_act(snapshot, 4, control) is None
+    assert guard_act(snapshot, 3, control, observation_id="obs-1") == "stale"

@@ -481,7 +481,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             'screens, controls, chrome, readout, lifecycle, and forward. lifecycle.phase is playing, main_menu, '
             'ended, or unknown; ending evidence records a root script return confirmed at the engine main menu. '
             'Initial menus and explicit menu restarts are not endings. screenshot=true attaches the PNG whose SHA-256 '
-            'is frame_hash. frame_id guards the source capture; frame is its session/dimension descriptor for clicks on resized images. Pass all three identity fields to renforge_act to reject observations from '
+            'is frame_hash (omitted in compact detail, where it equals frame_id). frame_id guards the source capture; frame is its dimension descriptor for clicks on resized images. Pass observation_id to renforge_act to reject observations from '
             'another launch or rebuilt controls. Controls use widget ids or menu indices, then drag names, '
             'action summaries, image basenames, or synthetic ordinals. Action summaries include targets and '
             'arguments, including for unlabeled buttons. operations lists the supported adapters for that '
@@ -502,14 +502,15 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         parameters={
             "project_path": "Project root of the running live session.",
             "screenshot": "Attach the current PNG when true. The snapshot is still returned when false.",
+            "detail": "compact (default) drops null/false defaults, render paths, and repeats, and reduces chrome to id and text; full returns every field.",
         },
-        parameter_schemas={"screenshot": {"type": "boolean"}},
+        parameter_schemas={"screenshot": {"type": "boolean"}, "detail": _enum("compact", "full")},
     ),
     "renforge_act": ToolDefinition(
         description=(
-            'Activate one observed control or post one physical key. Pass interaction plus session_id and '
-            'observation_id from the same snapshot for full stale-state protection; interaction-only callers '
-            'retain the legacy guard. Controls use id; keys use key without id. A button runs its action in '
+            'Activate one observed control or post one physical key. Pass observation_id from the snapshot '
+            'you acted on: it covers the interaction and session, so nothing else is needed; interaction-only '
+            'callers retain the legacy guard. Controls use id; keys use key without id. A button runs its action in '
             'its screen context, falling back to a pointer click when it has no action. Inputs replace text '
             'with allow/exclude/length filtering; submit=false edits without Enter. A bar takes value; a '
             'viewport takes x and/or y. All supplied numeric values must be finite and all axes are '
@@ -533,7 +534,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         ),
         parameters={
             "project_path": "Project root of the running live session.",
-            "interaction": "Interaction number from the observe snapshot this action belongs to.",
+            "interaction": "Optional with observation_id; the interaction number of the snapshot this action belongs to.",
             "id": "Control or chrome id from that same snapshot. Omit it when posting a key.",
             "text": "Full replacement for an input control. Omit it for a click or a key.",
             "key": "Physical key to post: a-z, up, down, left, right, escape, return, space, or tab.",
@@ -551,9 +552,11 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "max_steps": "Maximum narrative interaction advances when advance=true, from 1 to 200.",
             "timeout": "Total action and observation/progression budget in seconds, from 0.1 to 120.",
             "mode": "Progression mode: skip (default, bounded native skip) or dismiss (guarded events).",
+            "detail": "compact (default) drops null/false defaults, render paths, and repeats, and reduces chrome to id and text; full returns every field.",
         },
         parameter_schemas={
             "mode": _enum("skip", "dismiss"),
+            "detail": _enum("compact", "full"),
             "interaction": {"type": "integer"},
             "value": {"type": "number"},
             "x": {"type": "number"},
@@ -593,9 +596,11 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "timeout": "Wall-clock budget including cleanup in seconds, from 0.1 to 120.",
             "screenshot": "Attach a size-bounded PNG of the final observation (default true).",
             "mode": "skip (default) uses bounded native skip; dismiss posts guarded dismiss events.",
+            "detail": "compact (default) drops null/false defaults, render paths, and repeats, and reduces chrome to id and text; full returns every field.",
         },
         parameter_schemas={
             "mode": _enum("skip", "dismiss"),
+            "detail": _enum("compact", "full"),
             "screenshot": {"type": "boolean"},
             "max_steps": {"minimum": 1, "maximum": 200},
             "timeout": {"minimum": 0.1, "maximum": 120},

@@ -1024,7 +1024,7 @@
     }
   },
   "renforge_observe": {
-    "description": "Read one interaction snapshot: session_id, observation_id, interaction, stability, dialogue, screens, controls, chrome, readout, lifecycle, and forward. lifecycle.phase is playing, main_menu, ended, or unknown; ending evidence records a root script return confirmed at the engine main menu. Initial menus and explicit menu restarts are not endings. screenshot=true attaches the PNG whose SHA-256 is frame_hash. frame_id guards the source capture; frame is its session/dimension descriptor for clicks on resized images. Pass all three identity fields to renforge_act to reject observations from another launch or rebuilt controls. Controls use widget ids or menu indices, then drag names, action summaries, image basenames, or synthetic ordinals. Action summaries include targets and arguments, including for unlabeled buttons. operations lists the supported adapters for that widget; adjustment reports bar values or viewport axes; draggable and droppable describe drag eligibility. Inputs outside focus_list are still inventoried. Dialogue and readout remove text tags while retaining literal braces and paragraph breaks. Only quick_menu and injected _renforge_ screens are chrome; custom overlay hubs remain gameplay controls. forward is dismiss, choose, wait, or none. An unstable snapshot is not an action token. omitted reports focus, traversal, and readout limits; input_candidates reports unsupported custom event regions with unknown eligibility. Both progression modes stop on incomplete input discovery. Keyboard shortcuts are not fully inventoried.",
+    "description": "Read one interaction snapshot: session_id, observation_id, interaction, stability, dialogue, screens, controls, chrome, readout, lifecycle, and forward. lifecycle.phase is playing, main_menu, ended, or unknown; ending evidence records a root script return confirmed at the engine main menu. Initial menus and explicit menu restarts are not endings. screenshot=true attaches the PNG whose SHA-256 is frame_hash (omitted in compact detail, where it equals frame_id). frame_id guards the source capture; frame is its dimension descriptor for clicks on resized images. Pass observation_id to renforge_act to reject observations from another launch or rebuilt controls. Controls use widget ids or menu indices, then drag names, action summaries, image basenames, or synthetic ordinals. Action summaries include targets and arguments, including for unlabeled buttons. operations lists the supported adapters for that widget; adjustment reports bar values or viewport axes; draggable and droppable describe drag eligibility. Inputs outside focus_list are still inventoried. Dialogue and readout remove text tags while retaining literal braces and paragraph breaks. Only quick_menu and injected _renforge_ screens are chrome; custom overlay hubs remain gameplay controls. forward is dismiss, choose, wait, or none. An unstable snapshot is not an action token. omitted reports focus, traversal, and readout limits; input_candidates reports unsupported custom event regions with unknown eligibility. Both progression modes stop on incomplete input discovery. Keyboard shortcuts are not fully inventoried.",
     "annotations": {
       "readOnlyHint": true,
       "idempotentHint": true,
@@ -1042,6 +1042,15 @@
           "default": true,
           "description": "Attach the current PNG when true. The snapshot is still returned when false.",
           "type": "boolean"
+        },
+        "detail": {
+          "default": "compact",
+          "description": "compact (default) drops null/false defaults, render paths, and repeats, and reduces chrome to id and text; full returns every field.",
+          "enum": [
+            "compact",
+            "full"
+          ],
+          "type": "string"
         }
       },
       "required": [
@@ -1051,7 +1060,7 @@
     }
   },
   "renforge_act": {
-    "description": "Activate one observed control or post one physical key. Pass interaction plus session_id and observation_id from the same snapshot for full stale-state protection; interaction-only callers retain the legacy guard. Controls use id; keys use key without id. A button runs its action in its screen context, falling back to a pointer click when it has no action. Inputs replace text with allow/exclude/length filtering; submit=false edits without Enter. A bar takes value; a viewport takes x and/or y. All supplied numeric values must be finite and all axes are validated before mutation. A draggable control takes drop as an eligible droppable drag id, or an empty string for release on nothing; omit drop to click when supported. Drop runs callbacks, not a pointer trajectory. key accepts a-z, arrows, escape, return, space, or tab; omit hold for a tap, true holds, false releases. A held key can be released after its interaction changes, within its owning session. The bridge rechecks identity, stability, availability, and widget operations before mutation. By default return the next stable observation and optional PNG. observe=false returns only the action result. advance=true uses bounded native skip to the next decision or ending with max_steps and timeout budgets, returning progress and the final observation. progress.stop=end identifies a confirmed script return; main_menu is a menu without ending evidence. ok reports a known action outcome; action_outcome=unknown and retry_safe=false mark a lost input reply. observation_status separately reports ready, timeout, transport_error, or crash. Never repeat a successful or uncertain action solely because observation failed. Native skip temporarily allows unseen narrative and restores preferences; mode=dismiss retains guarded dismiss progression.",
+    "description": "Activate one observed control or post one physical key. Pass observation_id from the snapshot you acted on: it covers the interaction and session, so nothing else is needed; interaction-only callers retain the legacy guard. Controls use id; keys use key without id. A button runs its action in its screen context, falling back to a pointer click when it has no action. Inputs replace text with allow/exclude/length filtering; submit=false edits without Enter. A bar takes value; a viewport takes x and/or y. All supplied numeric values must be finite and all axes are validated before mutation. A draggable control takes drop as an eligible droppable drag id, or an empty string for release on nothing; omit drop to click when supported. Drop runs callbacks, not a pointer trajectory. key accepts a-z, arrows, escape, return, space, or tab; omit hold for a tap, true holds, false releases. A held key can be released after its interaction changes, within its owning session. The bridge rechecks identity, stability, availability, and widget operations before mutation. By default return the next stable observation and optional PNG. observe=false returns only the action result. advance=true uses bounded native skip to the next decision or ending with max_steps and timeout budgets, returning progress and the final observation. progress.stop=end identifies a confirmed script return; main_menu is a menu without ending evidence. ok reports a known action outcome; action_outcome=unknown and retry_safe=false mark a lost input reply. observation_status separately reports ready, timeout, transport_error, or crash. Never repeat a successful or uncertain action solely because observation failed. Native skip temporarily allows unseen narrative and restores preferences; mode=dismiss retains guarded dismiss progression.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -1066,7 +1075,16 @@
           "type": "string"
         },
         "interaction": {
-          "description": "Interaction number from the observe snapshot this action belongs to.",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional with observation_id; the interaction number of the snapshot this action belongs to.",
           "type": "integer"
         },
         "id": {
@@ -1243,11 +1261,19 @@
             "dismiss"
           ],
           "type": "string"
+        },
+        "detail": {
+          "default": "compact",
+          "description": "compact (default) drops null/false defaults, render paths, and repeats, and reduces chrome to id and text; full returns every field.",
+          "enum": [
+            "compact",
+            "full"
+          ],
+          "type": "string"
         }
       },
       "required": [
-        "project_path",
-        "interaction"
+        "project_path"
       ],
       "type": "object"
     }
@@ -1292,6 +1318,15 @@
           "enum": [
             "skip",
             "dismiss"
+          ],
+          "type": "string"
+        },
+        "detail": {
+          "default": "compact",
+          "description": "compact (default) drops null/false defaults, render paths, and repeats, and reduces chrome to id and text; full returns every field.",
+          "enum": [
+            "compact",
+            "full"
           ],
           "type": "string"
         }

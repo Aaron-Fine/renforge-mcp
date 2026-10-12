@@ -278,7 +278,7 @@ class BridgeClient:
     def act(
         self,
         *,
-        interaction: int,
+        interaction: int | None = None,
         control_id: str | None = None,
         text: str | None = None,
         key: str | None = None,
@@ -293,7 +293,7 @@ class BridgeClient:
         deadline: float | None = None,
     ) -> dict:
         """Activate one control id, or post one physical key, on this interaction."""
-        payload: dict[str, Any] = {"interaction": interaction}
+        payload: dict[str, Any] = {} if interaction is None else {"interaction": interaction}
         if session_id is not None:
             payload["session_id"] = session_id
         if observation_id is not None:

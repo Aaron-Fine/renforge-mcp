@@ -608,7 +608,11 @@ def _find_control(snapshot: Mapping[str, Any], control_id: str) -> dict[str, Any
 
 def validate_act_payload(payload: Mapping[str, Any]) -> str | None:
     """Validate every supplied field before the bridge can mutate anything."""
-    if _interaction(payload.get("interaction")) is None:
+    # observation_id alone is enough: it already covers interaction and session.
+    if payload.get("interaction") is None:
+        if payload.get("observation_id") is None:
+            return "stale"
+    elif _interaction(payload.get("interaction")) is None:
         return "stale"
     has_id = isinstance(payload.get("id"), str) and bool(payload.get("id"))
     has_key = payload.get("key") is not None
@@ -641,6 +645,8 @@ def guard_identity(snapshot: Mapping[str, Any], interaction: Any, *,
         return "stale"
     if snapshot.get("stable") is not True:
         return "unstable"
+    if interaction is None and observation_id is not None:
+        return None
     if _interaction(interaction) is None or snapshot.get("interaction") != interaction:
         return "stale"
     return None

@@ -1108,7 +1108,7 @@ def observe(project_path: str, *, screenshot: bool = True) -> dict:
 
 def act(
     project_path: str,
-    interaction: int,
+    interaction: int | None = None,
     control_id: str | None = None,
     text: str | None = None,
     key: str | None = None,
