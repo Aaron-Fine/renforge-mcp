@@ -1844,8 +1844,7 @@ def test_live_explain_reads_rpyc_only_game(sdk, tmp_path: Path) -> None:
         labels = {item["name"]: item for item in index["labels"]}
         assert {"start", "rf_room"} <= set(labels), index
         assert labels["start"]["file"] == "game/script.rpy", labels["start"]
-        files = {item["file"]: item["on_disk"] for item in index["files"]}
-        assert files.get("game/script.rpy") is False, index["files"]
+        assert index["files"]["on_disk"] == 0, index["files"]
         assert any(item["name"] == "rf_hub" for item in index["screens"]), index["screens"]
 
         # Wait for the start menu to appear, then explain the label.
