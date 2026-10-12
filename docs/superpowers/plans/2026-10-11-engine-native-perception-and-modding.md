@@ -125,6 +125,30 @@ weekday classes.
   `stop=none, steps=0` on a transition frame; a drawn full-screen
   `NullAction()` overlay still counts as unknown input.
 
+## More games (2026-10-11, third trial)
+
+- Divine Intervention (8.4.1): new game to its engine-confirmed ending in about
+  eight progression calls, no errors.
+- The Darkness Within (8.5.3): played through chapter 1's choices; a bad-ending
+  retry loop was my autoplay script's fault, not the tools'.
+- Total Degeneracy Island (8.1.2): cabins exterior, four cabin interiors, the
+  map, meeting all 22 campers, advancing time, and a 31-piece drag-and-drop
+  minigame solved with `act(drop=...)`.
+- A House in the Rift (7.6.1): refused cleanly with UNSUPPORTED_RENPY_VERSION,
+  by policy. Only RenForge's own activity log was written, then removed.
+- Stranded in Space (8.1.1): first cold launch exceeded the 90 s startup
+  window; a warm launch was ready in 9 s. Played through day 1's dialogue.
+
+Fixes from this round: screens in the HIDE/OLD phase take no input (a
+lingering choice screen froze progression); loads and restarts on 8.0/8.1
+reach the engine (they were swallowed without `invoke_in_main_thread`); an
+action list containing FileTakeScreenshot opens a game menu and is chrome;
+skipping runs about 2.5x faster (5 ms periodic timer during an operation).
+
+Still open: the first launch of a large game can exceed the 90 s startup
+timeout; `act` sometimes returns a settled observation from before a location
+change (a fresh `observe` is correct).
+
 ## Later, only if needed
 
 - Tighter bounds for custom hotspots (pixel opacity): not needed so far.
