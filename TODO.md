@@ -54,6 +54,14 @@ toolsets rather than being removed; `advance_until` (fork-only) was retired.
 
 ### Related findings
 
+- [ ] Test overlap in upstream-owned files (left alone so merges stay clean;
+  raise with upstream): tool-definition substring and schema checks already
+  pinned by the contract snapshot (`test_tool_definitions.py`); the vbar/
+  slider/bar editor lock matrices (`test_editor_source.py`) and the
+  say-who/say-what mirror files; per-widget `test_editor_*_live.py` files that
+  share one template; demo live tests that could share launches (screen
+  introspection, scene-tree ids, hover/modal fixtures, editor overlay).
+
 - [ ] One id scheme. `list_ui_elements` and the tools built on it keep
   upstream's ids while `observe` uses `screen/...` ids; `control_id` links
   them. Settle on one when upstream agrees.

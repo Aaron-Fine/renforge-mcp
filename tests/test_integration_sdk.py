@@ -225,80 +225,6 @@ def test_live_bridge_ping_state_and_screenshot(sdk, demo_copy: Path) -> None:
 
 
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
-def test_live_advance_until_stops_on_village_gate_choices(sdk, demo_copy: Path) -> None:
-    """Kinetic advance crosses say lines and stops on the modal gate screen.
-
-    A stale act must not change the label. editor stays off so injected editor
-    screens are not part of the choice.
-    """
-    import hashlib
-
-    from renforge.bridge.launcher import launch_with_bridge
-    from renforge.project import RenpyProject
-    from renforge.tools.live import act, advance_until
-
-    with launch_with_bridge(
-        sdk,
-        RenpyProject(demo_copy),
-        startup_timeout=90,
-        editor=False,
-    ) as session:
-        assert session.client.ping().get("pong") is True
-        result = advance_until(str(demo_copy), max_steps=8, timeout=45)
-        observation = result.get("observation") or {}
-        assert result.get("stop") == "choose", result
-        assert result.get("steps", 0) >= 1, result
-        assert observation.get("label") == "village_gate", observation
-        crossed = result.get("crossed")
-        assert isinstance(crossed, list) and crossed, result
-        assert any(
-            item.get("type") == "say"
-            and item.get("what") == "The village of Emberfall sleeps under a bruised dawn sky."
-            and item.get("who") is None
-            for item in crossed
-        ), crossed
-        assert any(
-            item.get("type") == "say" and item.get("who") == "Wisp" for item in crossed
-        ), crossed
-        assert any(
-            item.get("type") == "label" and item.get("label") == "village_gate" for item in crossed
-        ), crossed
-        village = next(i for i, item in enumerate(crossed) if item.get("label") == "village_gate")
-        ember = next(
-            i
-            for i, item in enumerate(crossed)
-            if item.get("what") == "The village of Emberfall sleeps under a bruised dawn sky."
-        )
-        assert ember < village, crossed
-        assert all(
-            not str(item.get("label", "")).startswith("_")
-            for item in crossed
-            if item.get("type") == "label"
-        ), crossed
-        control_ids = {item.get("id") for item in observation.get("controls") or []}
-        assert {
-            "village_gate_choices/demo_lantern_take",
-            "village_gate_choices/demo_lantern_decline",
-            "village_gate_choices/demo_locked_expr",
-        } <= control_ids, observation
-        assert all(item.get("screen") != "quick_menu" for item in observation.get("controls") or [])
-        png = result.get("_png")
-        assert isinstance(png, bytes) and png.startswith(b"\x89PNG"), result.keys()
-        assert hashlib.sha256(png).hexdigest() == observation.get("frame_hash")
-
-        state = session.client.get_state()
-        label_before = state.get("current_label")
-        stale = act(
-            str(demo_copy),
-            int(observation["interaction"]) - 1,
-            "village_gate_choices/demo_lantern_take",
-        )
-        assert stale.get("ok") is False, stale
-        assert stale.get("error") == "stale", stale
-        assert session.client.get_state().get("current_label") == label_before
-
-
-@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
 def test_live_reload_script_keeps_bridge_responsive(sdk, demo_copy: Path) -> None:
     """reload_script restores renpy.config from backup, wiping the bridge's
     registered callbacks; the re-run init block must re-register them on the
@@ -1880,60 +1806,67 @@ def test_live_explain_reads_rpyc_only_game(sdk, tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
-def test_live_replayed_lines_are_marked_seen(sdk, demo_copy: Path) -> None:
-    """A line read again after loading an earlier save is flagged as a repeat."""
-    from renforge.bridge.launcher import launch_with_bridge
-    from renforge.project import RenpyProject
-    from renforge.tools.live import advance_until, observe
+def test_live_play_loop_reaches_the_gate_refuses_stale_marks_repeats_and_chooses(sdk, demo_copy: Path) -> None:
+    """The canonical loop on the demo, in one launch.
 
-    with launch_with_bridge(sdk, RenpyProject(demo_copy), startup_timeout=90, editor=False) as session:
-        for _ in range(100):
-            first = observe(str(demo_copy), screenshot=False)
-            if first.get("stable") and first.get("dialogue"):
-                break
-            time.sleep(0.1)
-        assert first["seen"] is False, first
-        assert session.client.save_slot("seen-start")["ok"]
-        once = advance_until(str(demo_copy), max_steps=8, timeout=45, screenshot=False)
-        assert once["stop"] == "choose", once
-        assert not any(note.get("seen") for note in once["crossed"]), once["crossed"]
+    observe; act with no id crosses the narration and stops on the modal gate;
+    an old observation is refused; replaying from a save marks lines seen; a
+    choice takes its branch. editor stays off so its screens are not choices.
+    """
+    import hashlib
 
-        session.client.load_slot("seen-start")
-        for _ in range(100):
-            again = observe(str(demo_copy), screenshot=False)
-            if again.get("stable") and again.get("dialogue"):
-                break
-            time.sleep(0.1)
-        twice = advance_until(str(demo_copy), max_steps=8, timeout=45, screenshot=False)
-        assert twice["stop"] == "choose", twice
-        repeats = [note for note in twice["crossed"] if note["type"] == "say"]
-        assert repeats and all(note.get("seen") is True for note in repeats), twice["crossed"]
-
-
-@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
-def test_live_play_loop_continues_refuses_stale_and_chooses(sdk, demo_copy: Path) -> None:
-    """observe, then act with no id (continue) and with a control id."""
     from renforge.bridge.launcher import launch_with_bridge
     from renforge.project import RenpyProject
     from renforge.tools.live import observe, play
 
-    with launch_with_bridge(sdk, RenpyProject(demo_copy), startup_timeout=90, editor=False) as session:
+    def first_line():
         for _ in range(100):
-            first = observe(str(demo_copy), screenshot=False)
-            if first.get("stable") and first.get("dialogue"):
-                break
+            snapshot = observe(str(demo_copy), screenshot=False)
+            if snapshot.get("stable") and snapshot.get("dialogue"):
+                return snapshot
             time.sleep(0.1)
-        gate = play(str(demo_copy), first["observation_id"], screenshot=False)
-        assert gate["ok"] and gate["action_outcome"] == "none", gate
-        assert gate["progress"]["stop"] == "choose", gate
-        assert gate["observation"]["label"] == "village_gate"
+        raise AssertionError(snapshot)
 
-        stale = play(str(demo_copy), first["observation_id"], screenshot=False)
+    with launch_with_bridge(sdk, RenpyProject(demo_copy), startup_timeout=90, editor=False) as session:
+        first = first_line()
+        assert first["seen"] is False, first
+        assert session.client.save_slot("start")["ok"]
+
+        gate = play(str(demo_copy), first["observation_id"])
+        assert gate["ok"] and gate["action_outcome"] == "none", gate
+        progress, observation = gate["progress"], gate["observation"]
+        assert progress["stop"] == "choose" and progress["steps"] >= 1, progress
+        assert observation["label"] == "village_gate", observation
+        # The observed first line is not repeated; the transcript starts after it.
+        assert first["dialogue"]["what"] == "The village of Emberfall sleeps under a bruised dawn sky."
+        crossed = progress["crossed"]
+        wisp = next(i for i, item in enumerate(crossed) if item.get("who") == "Wisp")
+        village = next(i for i, item in enumerate(crossed) if item.get("label") == "village_gate")
+        assert wisp < village, crossed
+        assert not any(str(item.get("label", "")).startswith("_") for item in crossed), crossed
+        assert not any(item.get("seen") for item in crossed), crossed
+        control_ids = {item["id"] for item in observation["controls"]}
+        assert {"village_gate_choices/demo_lantern_take", "village_gate_choices/demo_lantern_decline",
+                "village_gate_choices/demo_locked_expr"} <= control_ids, observation
+        assert all(item.get("screen") != "quick_menu" for item in observation["controls"])
+        png = gate.get("_png")
+        assert isinstance(png, bytes) and png.startswith(b"\x89PNG"), gate.keys()
+        assert hashlib.sha256(png).hexdigest() == observation["frame_hash"]
+
+        label_before = session.client.get_state().get("current_label")
+        stale = play(str(demo_copy), first["observation_id"], "village_gate_choices/demo_lantern_take",
+                     screenshot=False)
         assert stale["ok"] is False and stale["error"] == "stale", stale
+        assert session.client.get_state().get("current_label") == label_before
         assert session.client.get_var("courage") == 0
 
-        chose = play(str(demo_copy), gate["observation"]["observation_id"],
+        session.client.load_slot("start")
+        again = play(str(demo_copy), first_line()["observation_id"], screenshot=False)
+        assert again["progress"]["stop"] == "choose", again
+        repeats = [item for item in again["progress"]["crossed"] if item["type"] == "say"]
+        assert repeats and all(item.get("seen") is True for item in repeats), again["progress"]["crossed"]
+
+        chose = play(str(demo_copy), again["observation"]["observation_id"],
                      "village_gate_choices/demo_lantern_take", screenshot=False)
         assert chose["ok"] and chose["action_outcome"] == "succeeded", chose
         assert session.client.get_var("courage") == 1
-        assert any(note.get("type") == "say" for note in chose["progress"]["crossed"]), chose
