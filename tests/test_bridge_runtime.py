@@ -6230,3 +6230,18 @@ def test_native_skip_does_not_hold_lines_and_restores_skip_delay(running_bridge,
     assert renpy.config.skip_delay == 0
     running_bridge.client.progression("stop", "owner", reason="cancelled")
     assert renpy.config.skip_delay == 150
+
+
+def test_observe_reports_whether_the_statement_was_seen(running_bridge):
+    renpy = running_bridge.renpy
+    seen = {"value": False}
+    renpy.game = types.SimpleNamespace(context=lambda: types.SimpleNamespace(
+        interacting=True, scene_lists=types.SimpleNamespace(layers={}),
+        seen_current=lambda ever: seen["value"] if ever is False else None))
+    renpy.display.interface.ongoing_transition = None
+    renpy.get_filename_line = lambda: ("game/script.rpy", 1)
+    renpy.config.overlay_screens = []
+    renpy.get_screen = lambda name: None
+    assert running_bridge.client.observe(screenshot=False)["seen"] is False
+    seen["value"] = True
+    assert running_bridge.client.observe(screenshot=False)["seen"] is True

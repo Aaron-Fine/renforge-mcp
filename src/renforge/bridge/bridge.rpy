@@ -4745,6 +4745,17 @@ init python:
                         stack.append((target, depth + 1))
         return False
 
+    def _renforge_seen_current():
+        """Whether the current statement already finished once since launch.
+
+        Ren'Py marks a statement seen when it completes (seen_session), so a
+        repeated line, menu, or hub reads true; loading a save does not reset it.
+        """
+        try:
+            return bool(renpy.game.context().seen_current(False))
+        except Exception:
+            return None
+
     def _renforge_observe_stability():
         transition = _renforge_transition_pending()
         interacting = False
@@ -4909,6 +4920,7 @@ init python:
         }
         reply["session_id"] = bridge.session_id if bridge is not None else None
         reply["say_id"] = getattr(bridge, "say_id", None)
+        reply["seen"] = _renforge_seen_current()
         if bridge is not None and bridge.progression is not None:
             reply["progression"] = _renforge_progress_public(bridge.progression)
         identity = {
@@ -7493,7 +7505,8 @@ init python:
                 if not isinstance(who, builtins.str):
                     who = None
                 bridge.last_who = who
-                bridge.push_event("say", {"what": what, "who": who, "say_id": bridge.say_id})
+                bridge.push_event("say", {"what": what, "who": who, "say_id": bridge.say_id,
+                                          "seen": _renforge_seen_current()})
                 try:
                     prefs = getattr(renpy.store, "_preferences", None)
                     afm = bool(getattr(prefs, "afm_enable", False)) if prefs is not None else False

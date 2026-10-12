@@ -1073,3 +1073,20 @@ def test_observation_id_alone_guards_act():
     # The legacy interaction guard still works on its own.
     assert guard_act(snapshot, 4, control) is None
     assert guard_act(snapshot, 3, control, observation_id="obs-1") == "stale"
+
+
+def test_seen_marks_repeated_statements_and_lines():
+    assert classify(_raw(seen=True))["seen"] is True
+    assert classify(_raw(seen=False))["seen"] is False
+    assert classify(_raw())["seen"] is None
+
+    events = [
+        {"seq": 1, "type": "say", "who": "Elder", "what": "Attack?", "say_id": 1, "seen": False},
+        {"seq": 2, "type": "say", "who": "Elder", "what": "You fell.", "say_id": 2, "seen": False},
+        {"seq": 3, "type": "say", "who": "Elder", "what": "Attack?", "say_id": 3, "seen": True},
+    ]
+    assert crossed_transcript(events, []) == [
+        {"type": "say", "who": "Elder", "what": "Attack?"},
+        {"type": "say", "who": "Elder", "what": "You fell."},
+        {"type": "say", "who": "Elder", "what": "Attack?", "seen": True},
+    ]

@@ -474,11 +474,17 @@ remain identical.
 
 `renforge_observe` returns one bounded snapshot with `session_id`,
 `observation_id`, `interaction`, stability, dialogue, controls, readout, and
-an optional screenshot. Pass all three identity fields when acting: the
-session guards against another launch, and the observation guards against
-rebuilt or changed controls within the same interaction. Interaction-only
-callers retain the older, weaker guard. An unstable snapshot cannot authorize
-input.
+an optional screenshot. Pass `observation_id` when acting: it guards against
+another launch and against rebuilt or changed controls within the same
+interaction. Interaction-only callers retain the older, weaker guard. An
+unstable snapshot cannot authorize input. By default the snapshot is compact
+(`detail="full"` returns every field).
+
+`seen` is true when the current statement (a line, menu, or hub) already
+finished once since the game launched; loading a save does not reset it. Lines
+in `advance_until`'s `crossed` transcript carry `seen: true` when they repeat.
+Together they show when a playthrough is going in circles, for example a
+retry loop after a bad ending.
 
 `forward` describes progression:
 

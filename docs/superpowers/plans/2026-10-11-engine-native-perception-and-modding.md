@@ -193,6 +193,11 @@ change (a fresh `observe` is correct).
 - Isolated sessions start with transitions off (`RENFORGE_TRANSITIONS=on`).
 - list_ui_elements and related upstream tools have upstream ids again; an
   earlier branch commit had broken the live demo acceptance tests.
-- Still open: a "seen before" marker for revisited lines; lighter per-line
-  checks while skipping; task-app readout; NullAction overlay as unknown
-  input; menu `source` in transformed viewports.
+- Upstream 0.7.3 merged. Skipping is about 7x faster (vsync off for
+  launched games, `config.skip_delay` 0 during an operation, one check per
+  line, status polling, plain containers in the geometry walk): 19 ms a line
+  on the demo GUI, ~15 ms in Stranded in Space. Observations and crossed
+  lines report `seen` for statements already finished since launch.
+- Still open: task-app readout; NullAction overlay as unknown input; menu
+  `source` in transformed viewports; the CI artifact change waits on branch
+  `ci/state-folder-artifacts` (needs a token with `workflow` scope).

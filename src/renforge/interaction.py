@@ -390,7 +390,8 @@ def crossed_transcript(events: list[Any], frames: list[Any]) -> list[dict[str, A
         last_label = name
         notes.append({"type": "label", "label": name})
 
-    def emit_say(who: Any, what: Any, *, occurrence: Any = None, event: bool = False) -> None:
+    def emit_say(who: Any, what: Any, *, occurrence: Any = None, event: bool = False,
+                 seen: Any = None) -> None:
         nonlocal last_say
         if not isinstance(what, str):
             return
@@ -411,7 +412,10 @@ def crossed_transcript(events: list[Any], frames: list[Any]) -> list[dict[str, A
         elif not event and key == last_say:
             return
         last_say = key
-        notes.append({"type": "say", "who": speaker, "what": text})
+        note = {"type": "say", "who": speaker, "what": text}
+        if seen is True:
+            note["seen"] = True  # already read once since launch: a repeat
+        notes.append(note)
 
     def drain(through: int) -> None:
         nonlocal index
@@ -424,7 +428,8 @@ def crossed_transcript(events: list[Any], frames: list[Any]) -> list[dict[str, A
             if event.get("type") == "label":
                 emit_label(event.get("label"))
             else:
-                emit_say(event.get("who"), event.get("what"), occurrence=event.get("say_id"), event=True)
+                emit_say(event.get("who"), event.get("what"), occurrence=event.get("say_id"), event=True,
+                         seen=event.get("seen"))
 
     for frame in frames:
         if not isinstance(frame, Mapping):
@@ -562,6 +567,8 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
         "unstable_reason": reason,
         "statement": _statement(raw),
         "label": label,
+        # True when this statement already finished once since launch.
+        "seen": raw.get("seen") if isinstance(raw.get("seen"), bool) else None,
         "lifecycle": {"phase": phase, "ending": ending},
         "dialogue": _dialogue(raw),
         "text_revealing": raw.get("text_revealing"),

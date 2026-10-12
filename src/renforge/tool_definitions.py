@@ -478,7 +478,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     "renforge_observe": ToolDefinition(
         description=(
             'Read one interaction snapshot: session_id, observation_id, interaction, stability, dialogue, '
-            'screens, controls, chrome, readout, lifecycle, and forward. lifecycle.phase is playing, main_menu, '
+            'screens, controls, chrome, readout, lifecycle, and forward. seen is true when the current statement '
+            '(a line, menu, or hub) already finished once since launch, so the agent is repeating itself. lifecycle.phase is playing, main_menu, '
             'ended, or unknown; ending evidence records a root script return confirmed at the engine main menu. '
             'Initial menus and explicit menu restarts are not endings. screenshot=true attaches the PNG whose SHA-256 '
             'is frame_hash (omitted in compact detail, where it equals frame_id). frame_id guards the source capture; frame is its dimension descriptor for clicks on resized images. Pass observation_id to renforge_act to reject observations from '
@@ -580,7 +581,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "reason, and statement. Initial menus and explicit restarts stop at main_menu with ending=null. "
             "Verified runtime exceptions and nonzero owned process exits are crashes; frame timeouts and lost connections are distinct. "
             "If no final frame settles, observation is null and last_observation is explicitly historical. "
-            "Events are collected throughout progression; crossed preserves repeated occurrences and "
+            "Events are collected throughout progression; crossed preserves repeated occurrences, marks a line "
+            "already read once since launch with seen=true (a loop), and "
             "crossed_truncated reports retrieval gaps. screenshot=false omits the PNG; returned images "
             "are size-bounded and frame_hash hashes the returned PNG. Use observation.frame for guarded screenshot-pixel clicks. Verified owned process exits report exited or crash without confirming an ending."
         ),

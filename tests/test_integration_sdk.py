@@ -1875,3 +1875,34 @@ def test_live_explain_reads_rpyc_only_game(sdk, tmp_path: Path) -> None:
         assert traced["ok"] is True, traced
         assert traced["statement"]["keywords"]["action"] == 'Jump("rf_room")', traced
         assert traced["conditions"] == ["if rf_gate"], traced
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
+def test_live_replayed_lines_are_marked_seen(sdk, demo_copy: Path) -> None:
+    """A line read again after loading an earlier save is flagged as a repeat."""
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.tools.live import advance_until, observe
+
+    with launch_with_bridge(sdk, RenpyProject(demo_copy), startup_timeout=90, editor=False) as session:
+        for _ in range(100):
+            first = observe(str(demo_copy), screenshot=False)
+            if first.get("stable") and first.get("dialogue"):
+                break
+            time.sleep(0.1)
+        assert first["seen"] is False, first
+        assert session.client.save_slot("seen-start")["ok"]
+        once = advance_until(str(demo_copy), max_steps=8, timeout=45, screenshot=False)
+        assert once["stop"] == "choose", once
+        assert not any(note.get("seen") for note in once["crossed"]), once["crossed"]
+
+        session.client.load_slot("seen-start")
+        for _ in range(100):
+            again = observe(str(demo_copy), screenshot=False)
+            if again.get("stable") and again.get("dialogue"):
+                break
+            time.sleep(0.1)
+        twice = advance_until(str(demo_copy), max_steps=8, timeout=45, screenshot=False)
+        assert twice["stop"] == "choose", twice
+        repeats = [note for note in twice["crossed"] if note["type"] == "say"]
+        assert repeats and all(note.get("seen") is True for note in repeats), twice["crossed"]
