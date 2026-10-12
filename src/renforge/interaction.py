@@ -313,6 +313,7 @@ def _screens(raw: Mapping[str, Any], overlay_screens: set[str]) -> list[dict[str
                 "layer": layer,
                 "modal": item.get("modal") is True,
                 "overlay": name in overlay_screens or name.startswith("_renforge_"),
+                "kept_up": item.get("kept_up") is True,
             }
         )
     return screens
@@ -322,8 +323,7 @@ def strip_text_tags(value: str) -> str:
     """Remove Ren'Py say tags, leaving the words the player would read.
 
     ``{p}`` becomes a newline. ``{{`` and ``}}`` stay as literal braces.
-    The bridge applies the same rules, using ``renpy.text.extras.filter_text_tags``
-    when that function is available.
+    The injected bridge runs this same module, so host and game strip alike.
     """
     if not isinstance(value, str) or not value:
         return ""
@@ -527,6 +527,14 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
     say_dismiss = normalize_say_dismiss(raw.get("say_dismiss"))
     modal = any(screen["modal"] for screen in screens)
     decisions = [control for control in controls if _is_decision(control)]
+    if say_dismiss == "dismiss" and not modal and _dialogue(raw) is not None:
+        # Ren'Py ends this line on a plain click. Buttons on screens kept up
+        # from earlier lines (a phone or codex HUD) are not what this line
+        # waits for, so they stay controls rather than a choice. Screens that
+        # belong to this moment (shown with the line, or the interaction's
+        # own) still stop it.
+        kept_up = {screen["name"] for screen in screens if screen["kept_up"]}
+        decisions = [control for control in decisions if control.get("screen") not in kept_up]
     omitted = raw.get("omitted") if isinstance(raw.get("omitted"), Mapping) else {}
     if modal or decisions:
         forward = "choose"
@@ -722,7 +730,8 @@ def guard_act(
 
 
 def guard_dismiss(snapshot: Mapping[str, Any], interaction: Any, *,
-                  session_id: str | None = None, observation_id: str | None = None) -> str | None:
+                  session_id: str | None = None, observation_id: str | None = None,
+                  past_optional_controls: bool = False) -> str | None:
     """Return a refusal, or None when ``queue_event('dismiss')`` is legal."""
     refusal = guard_identity(snapshot, interaction, session_id=session_id, observation_id=observation_id)
     if refusal:
@@ -736,6 +745,9 @@ def guard_dismiss(snapshot: Mapping[str, Any], interaction: Any, *,
     )
     if snapshot.get("say_dismiss") != "dismiss" or modal:
         return "not_dismiss"
+    if past_optional_controls:
+        # The line accepts a plain click; menus and inputs never do.
+        return None
     for control in snapshot.get("controls") or []:
         if not isinstance(control, Mapping):
             continue

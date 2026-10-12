@@ -1258,9 +1258,27 @@ def play(
         # decision from wherever the game is, so a stale observation is safe
         # here (a line that moves on by itself often makes it stale).
         stale = current.get("observation_id") != observation_id
+        clicked_past = None
+        if current.get("forward") == "choose" and current.get("say_dismiss") == "dismiss":
+            # A line with optional buttons beside it: continuing clicks past
+            # the line as a reader would. Menus and inputs never accept this.
+            def _dismiss(client: BridgeClient) -> dict:
+                return client.dismiss_if(interaction=current["interaction"],
+                                         observation_id=current["observation_id"],
+                                         past_optional_controls=True)
+            clicked_past = _with_client(project_path, _dismiss)
+            if clicked_past.get("ok"):
+                # The dismiss is queued; let the line end before progressing.
+                until = time.monotonic() + min(2.0, timeout / 2)
+                while time.monotonic() < until:
+                    now = observe(project_path, screenshot=False)
+                    if now.get("ok") is False or now.get("interaction") != current["interaction"]:
+                        break
+                    time.sleep(0.02)
         progress = advance_until(project_path, max_steps=200, timeout=timeout, screenshot=screenshot)
         result = {"ok": progress.get("ok", True), "action_outcome": "none",
                   **({"continued_from_newer_state": True} if stale else {}),
+                  **({"clicked_past_line": bool(clicked_past.get("ok"))} if clicked_past else {}),
                   "observation": progress.pop("observation", None),
                   "observation_status": progress.get("observation_status")}
         png = progress.pop("_png", None)

@@ -6442,3 +6442,36 @@ def test_progression_skips_through_a_pause_without_judging_the_screens_behind_it
     running_bridge.globs["_renforge_progress_tick"]()
     assert bridge.progression["active"] is True
     assert renpy.config.skipping == "slow"
+
+
+def test_progression_hands_back_when_it_comes_round_to_a_line_again(running_bridge, monkeypatch):
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    raw["statement"], raw["label"] = {"file": "game/map.rpy", "line": 12}, "where_to"
+    bridge.progression["max_steps"] = 10
+    for _ in range(2):
+        renpy.config.start_interact_callbacks[0]()  # the next interaction
+        raw["interaction"] = bridge.observe_generation
+        running_bridge.globs["_renforge_progress_tick"]()
+    assert bridge.progression["active"] is False
+    assert bridge.progression["stop"] == "loop"
+
+
+def test_a_shown_screen_counts_as_kept_up_from_the_next_interaction(running_bridge):
+    import sys
+
+    class ScreenDisplayable:
+        def __init__(self, name, transient):
+            self.screen_name, self.transient, self.layer, self.modal = (name, None), transient, "screens", False
+
+    bridge = sys.modules["_renforge_runtime"].bridge
+    collect = running_bridge.globs["_renforge_collect_interaction"]
+    hud, say = ScreenDisplayable("phone_button", False), ScreenDisplayable("say", True)
+
+    def kept_up(*nodes):
+        inventory = {"nodes": [(node, "screens", None, None, ()) for node in nodes], "truncated": False}
+        return {screen["name"]: screen["kept_up"] for screen in collect(inventory)[0]}
+
+    bridge.observe_generation = 5
+    assert kept_up(hud, say) == {"phone_button": False, "say": False}  # shown with this line
+    bridge.observe_generation = 6
+    assert kept_up(hud, ScreenDisplayable("say", True)) == {"phone_button": True, "say": False}

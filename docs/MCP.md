@@ -515,7 +515,12 @@ result carries the next observation, so the loop is observe once, then act
 repeatedly. Acting on a control in a changed game refuses with
 `error="stale"` and returns the current observation. Continuing (no `id`) is
 never refused: it cannot choose anything, so it proceeds from the current state
-and reports `continued_from_newer_state`. An unstable snapshot cannot authorize
+and reports `continued_from_newer_state`. On a line the player could click past
+that stopped only for optional buttons (a hotspot or a photo beside the line),
+continuing clicks past it (`clicked_past_line`). Buttons on screens kept up
+across lines with `show screen` (a phone or codex HUD) never stop such a line,
+and an advance that comes round to a line it already passed stops with
+`stop="loop"` so the agent can break the loop. An unstable snapshot cannot authorize
 input on a control.
 
 The earlier `live` toolset still offers `renforge_advance`, `renforge_click_element`,

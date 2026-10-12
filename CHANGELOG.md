@@ -42,6 +42,11 @@ versioning.
   `interaction`, `session_id`, `text`, `key`, `hold`, `x`, `y`, `drop`,
   `submit`, `observe`, `advance`, `max_steps`, `mode`, and `detail` options
   are gone; the `live` toolset keeps every earlier upstream tool.
+- Play sessions keep their saves across launches in the project's RenForge
+  state folder. Continuing skips through pauses, clicks past a line that only
+  has optional buttons beside it, ignores HUD buttons on `show screen` screens
+  during clickable lines, and stops with `stop="loop"` on a line it already
+  passed; a time-budget stop is no longer reported as a failure.
 - `RENFORGE_TOOLSETS` lists only chosen tool groups (`play`, `live`, `debug`,
   `editor`, `project`, `translation`, `build`, `docs`); it replaces the
   fork-only `RENFORGE_TOOLS` filter.

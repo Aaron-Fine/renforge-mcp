@@ -4626,7 +4626,7 @@ init python:
             inventory = _renforge_scene_inventory()
         screens = []
         screen_nodes = []
-        seen_screens = {}
+        layers = []
         dismiss = []
         for node, layer, _name, _screen, _parents in inventory["nodes"]:
             class_name = node.__class__.__name__
@@ -4634,12 +4634,26 @@ init python:
                 for attr in ("dismiss", "dismiss_unfocused"):
                     dismiss.extend(_renforge_observe_event_names(getattr(node, attr, None)))
             if class_name == "ScreenDisplayable":
-                _renforge_observe_record_screen(node, layer, screens, seen_screens)
                 screen_nodes.append(node)
+                layers.append(layer)
+        # The interaction each shown screen object first appeared in. One
+        # Ren'Py still shows from an earlier interaction, and that is not
+        # this interaction's own (say, menu, call screen), was kept up across
+        # lines: a HUD such as a phone or codex button.
+        bridge = _renforge_runtime.bridge
+        generation = getattr(bridge, "observe_generation", 0) if bridge is not None else 0
+        before = getattr(bridge, "screen_first_seen", None) or {}
+        first_seen = {id(node): before.get(id(node), generation) for node in screen_nodes}
+        if bridge is not None:
+            bridge.screen_first_seen = first_seen
+        seen_screens = {}
+        for node, layer in zip(screen_nodes, layers):
+            kept_up = (getattr(node, "transient", None) is False and first_seen[id(node)] < generation)
+            _renforge_observe_record_screen(node, layer, screens, seen_screens, kept_up)
         say_dismiss = _renforge_runtime.interaction.normalize_say_dismiss(dismiss)
         return screens, say_dismiss, inventory["truncated"], screen_nodes
 
-    def _renforge_observe_record_screen(node, layer_name, screens, seen_screens):
+    def _renforge_observe_record_screen(node, layer_name, screens, seen_screens, kept_up=False):
         name = getattr(node, "screen_name", None)
         if _renforge_observe_is_sequence(name):
             name = name[0] if name else None
@@ -4657,6 +4671,7 @@ init python:
             "name": name,
             "layer": layer,
             "modal": modal is True and not callable(modal),
+            "kept_up": bool(kept_up),
         })
 
 
@@ -5627,7 +5642,8 @@ init python:
         snapshot = _renforge_runtime.interaction.classify(raw)
         refusal = _renforge_runtime.interaction.guard_dismiss(
             snapshot, payload.get("interaction"), session_id=payload.get("session_id"),
-            observation_id=payload.get("observation_id"))
+            observation_id=payload.get("observation_id"),
+            past_optional_controls=payload.get("past_optional_controls") is True)
         if refusal:
             return {"ok": False, "error": refusal, "interaction": raw["interaction"]}
         renpy.exports.queue_event("dismiss")
@@ -5716,6 +5732,19 @@ init python:
             if not getattr(renpy.config, "allow_skipping", True) or not getattr(renpy.store, "_skipping", True):
                 _renforge_progress_finish("unsupported")
                 return
+            # Reaching a line already passed in this operation is a loop the
+            # player must break (a prompt over a map, a retry after a bad
+            # ending): hand control back instead of going round again.
+            # The same statement showing the same words; a scripted loop that
+            # counts ("Line [n].") moves on by itself and is not one.
+            where = raw.get("statement") or {}
+            words = raw.get("dialogue") or {}
+            spot = (where.get("file"), where.get("line"), raw.get("label"), words.get("who"), words.get("what"))
+            if where.get("file") is not None:
+                if spot in operation["visited"]:
+                    _renforge_progress_finish("loop")
+                    return
+                operation["visited"].add(spot)
             operation["enabled_generation"] = bridge.observe_generation
             # Save the rendered copy before the engine moves to another line.
             dialogue = raw.get("dialogue")
@@ -5783,6 +5812,7 @@ init python:
             "deadline": _renforge_time.monotonic() + timeout, "max_steps": max_steps,
             "preferences": prefs, "saved_preferences": saved, "enabled_generation": None,
             "skip_delay": getattr(renpy.config, "skip_delay", None),
+            "visited": builtins.set(),
         }
         # Games may hold each skipped line on screen (Stranded in Space uses
         # 150 ms); each line is already checked after it draws.

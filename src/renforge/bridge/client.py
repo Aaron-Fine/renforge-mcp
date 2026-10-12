@@ -330,9 +330,16 @@ class BridgeClient:
             return {**reply, "ok": False, "action_outcome": "unknown", "retry_safe": False}
         return self._normalize_error_reply(reply)
 
-    def dismiss_if(self, *, interaction: int, session_id: str | None = None, observation_id: str | None = None, deadline: float | None = None) -> dict:
-        """Post dismiss only when this interaction still listens for it."""
+    def dismiss_if(self, *, interaction: int, session_id: str | None = None, observation_id: str | None = None,
+                   past_optional_controls: bool = False, deadline: float | None = None) -> dict:
+        """Post dismiss only when this interaction still listens for it.
+
+        ``past_optional_controls`` dismisses a line even when buttons are shown
+        beside it, as a reader clicking the line would.
+        """
         payload: dict[str, Any] = {"interaction": interaction}
+        if past_optional_controls:
+            payload["past_optional_controls"] = True
         if session_id is not None:
             payload["session_id"] = session_id
         if observation_id is not None:

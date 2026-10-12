@@ -1090,3 +1090,29 @@ def test_seen_marks_repeated_statements_and_lines():
         {"type": "say", "who": "Elder", "what": "You fell."},
         {"type": "say", "who": "Elder", "what": "Attack?", "seen": True},
     ]
+
+
+def test_hud_buttons_kept_up_from_earlier_lines_do_not_hold_a_clickable_line():
+    hud = [_element(screen="phone_button", action="Show('Phone')", text="Phone")]
+    screens = [{"name": "say", "layer": "screens", "modal": False},
+               {"name": "phone_button", "layer": "screens", "modal": False, "kept_up": True}]
+    line = classify(_raw(elements=hud, screens=screens))
+    assert line["forward"] == "dismiss"
+    assert [c["id"] for c in line["controls"]] == ["phone_button/Show('Phone')"]  # still usable
+
+    # Screens of this moment, a hard pause, or no line: a choice.
+    called = [dict(s, kept_up=False) for s in screens]
+    assert classify(_raw(elements=hud, screens=called))["forward"] == "choose"
+    assert classify(_raw(elements=hud, screens=screens, say_dismiss="dismiss_hard_pause"))["forward"] == "choose"
+    assert classify(_raw(elements=hud, screens=screens, dialogue=None))["forward"] == "choose"
+
+
+def test_dismiss_past_optional_controls_still_refuses_menus_and_modals():
+    hotspot = [_element(screen="shrine", role="hotspot", widget_id="touch")]
+    line = classify(_raw(elements=hotspot))
+    assert guard_dismiss(line, 4) == "not_dismiss"
+    assert guard_dismiss(line, 4, past_optional_controls=True) is None
+    modal = classify(_raw(elements=hotspot, screens=[{"name": "shrine", "layer": "screens", "modal": True}]))
+    assert guard_dismiss(modal, 4, past_optional_controls=True) == "not_dismiss"
+    menu = classify(_raw(say_dismiss=None, elements=[_element(screen="choice", menu_index=0, text="Go")]))
+    assert guard_dismiss(menu, 4, past_optional_controls=True) == "not_dismiss"
