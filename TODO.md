@@ -63,14 +63,15 @@ toolsets rather than being removed; `advance_until` (fork-only) was retired.
   `game_state`, `game_state_compact`. Action tools that duplicate `act`:
   `advance`, `click_element`, `click_at`, `hover_element`, `select_choice`,
   `send_input`. Move them to a compatibility toolset.
-- [ ] Still recomputed in the bridge, worth replacing with engine facts:
-  modal blocking for controls outside `focus_list` (rank comparison instead
-  of the engine's focus/hit test); the "not drawn yet" check from render
-  geometry (Ren'Py's `interact_time` says it directly); transition progress
-  from delays (the engine's pause/transition state); host-side text-tag
-  stripping (the bridge already prefers `renpy.text.extras.filter_text_tags`);
-  control roles guessed from class names. Render-tree geometry for things
-  that are not focusable has no engine equivalent and stays.
+- [x] Engine facts instead of recomputation (2026-10-12): modal blocking
+  follows `Render.take_focuses` (a modal render hides what was drawn before
+  it; a window modal only inside its rectangle) instead of ranking screens;
+  "not drawn yet" reads `interface.interact_time`; roles come from Ren'Py's
+  widget classes, names only for non-engine displayables. Kept: transition
+  state already reads the engine's `ongoing_transition` and instantiated
+  delays; text-tag stripping is one shared implementation used by host and
+  bridge (not a duplicate); render-tree geometry for non-focusable content
+  has no engine equivalent.
 
 ## Simplification and documentation review (2026-10-04)
 

@@ -5563,6 +5563,16 @@ def test_pending_screen_restart_is_not_an_actionable_observation(running_bridge)
     assert running_bridge.renpy._pygame_events == []
 
 
+def test_an_interaction_is_not_ready_before_its_first_frame(running_bridge):
+    _arm_stable_interaction(running_bridge)
+    interface = running_bridge.renpy.display.interface
+    interface.interact_time = None
+    raw = running_bridge.client.observe()
+    assert raw["stable"] is False and raw["unstable_reason"] == "not_ready"
+    interface.interact_time = 12.5
+    assert running_bridge.client.observe()["stable"] is True
+
+
 def test_drag_target_eligibility_and_target_only_callback(running_bridge):
     adapter = running_bridge.globs["_renforge_act_drop"]
     calls = []
@@ -6158,31 +6168,32 @@ def test_custom_displayables_keeping_actions_under_a_click_attribute_are_control
         del renpy.ui
 
 
-@pytest.mark.parametrize('candidate_layer,blocked', [('below', True), ('above', False)])
-def test_modal_order_preserves_custom_input_above_its_layer(running_bridge, candidate_layer, blocked):
-    renpy = running_bridge.renpy
-    renpy.config.bottom_layers = []
-    renpy.config.layers = ['below', 'screens', 'above']
-    renpy.config.top_layers = []
-
+@pytest.mark.parametrize('path,modal,blocked', [
+    ((0, 1), 'full', True),      # drawn before a full modal screen
+    ((2, 0), 'full', False),     # drawn after it, on a higher layer
+    ((1, 0, 3), 'full', False),  # inside the modal screen itself
+    ((0, 1), 'window', True),    # under a window modal, inside its rectangle
+])
+def test_modal_blocking_follows_the_engines_draw_order(running_bridge, path, modal, blocked):
+    """As Render.take_focuses: a modal render hides what was drawn before it."""
     class CustomRegion:
         def event(self, ev, x, y, st):
             raise AssertionError('inspection must not invoke custom input')
 
     node = CustomRegion()
-    screen = types.SimpleNamespace(layer=candidate_layer, zorder=0)
-    modal = types.SimpleNamespace(widget=None,
-        screen=types.SimpleNamespace(layer='screens', zorder=0, modal=True))
+    screen = types.SimpleNamespace(layer='screens', zorder=0)
+    bounds = {'x': 10, 'y': 20, 'width': 40, 'height': 50}
+    inventory = {'nodes': [(node, 'screens', 'region', screen, ())],
+        'geometry': {'available': True,
+                     'modals': [((1,), modal, {'x': 0, 'y': 0, 'width': 100, 'height': 100})],
+                     'occurrences': {id(node): [{'bounds': bounds, 'visible': True,
+                                                 'bounds_reason': None, 'render_path': list(path)}]}}}
     candidate_focus = types.SimpleNamespace(widget=node, screen=screen)
-    record = {'layer': candidate_layer, 'semantic': True, 'enabled': True}
-    pairs = [(modal, {'layer': 'screens'}), (candidate_focus, record)]
-    running_bridge.globs['_renforge_mark_coverage'](pairs)
+    record = {'layer': 'screens', 'semantic': True, 'enabled': True}
+    running_bridge.globs['_renforge_mark_coverage']([(candidate_focus, record)], inventory)
     assert record['covered'] is blocked
     assert record['clickable'] is not blocked
-    inventory = {'nodes': [(node, candidate_layer, 'region', screen, ())],
-        'geometry': {'occurrences': {id(node): [{'bounds': {'x': 10, 'y': 20, 'width': 40, 'height': 50},
-            'visible': True, 'bounds_reason': None}]}}}
-    candidates, unclassified = running_bridge.globs['_renforge_input_candidates'](inventory, pairs[:1])
+    candidates, unclassified = running_bridge.globs['_renforge_input_candidates'](inventory, [])
     assert candidates[0]['modal_blocked'] is blocked
     assert unclassified is not blocked
 
@@ -6401,3 +6412,18 @@ def test_observe_reports_whether_the_statement_was_seen(running_bridge):
     assert running_bridge.client.observe(screenshot=False)["seen"] is False
     seen["value"] = True
     assert running_bridge.client.observe(screenshot=False)["seen"] is True
+
+
+def test_roles_come_from_the_engine_classes_before_names(running_bridge):
+    renpy = running_bridge.renpy
+
+    class Viewport:
+        pass
+
+    class Scroller(Viewport):
+        """A game's own subclass: its name says nothing about its role."""
+
+    renpy.display.viewport = types.SimpleNamespace(Viewport=Viewport)
+    role = running_bridge.globs["_renforge_observe_role"]
+    assert role(None, Scroller()) == "viewport"
+    assert role(None, type("SoundBar", (), {})()) == "bar"  # not the engine's: named fallback

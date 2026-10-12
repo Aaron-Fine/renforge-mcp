@@ -1623,56 +1623,40 @@ init python:
     def _renforge_focus_screen(focus):
         return getattr(focus, "screen", None)
 
-    def _renforge_full_modal(focus):
-        """A screen whose modal flag grabs every point, the way IgnoreLayers does."""
-        screen = _renforge_focus_screen(focus)
-        modal = getattr(screen, "modal", None)
-        if modal is None or callable(modal) or modal == "window":
+    def _renforge_engine_modal_blocked(owner, inventory):
+        """Whether a modal screen hides ``owner``, by Ren'Py's own rule.
+
+        ``Render.take_focuses`` walks renders in draw order; a modal render
+        drops every focus collected before it (a ``"window"`` modal only those
+        inside its rectangle). Apply that to where ``owner`` was drawn. A
+        widget drawn in several places is hidden only if every copy is.
+        Returns None when there is no completed render to judge from.
+        """
+        geometry = inventory["geometry"]
+        if not geometry.get("available"):
+            return None
+        occurrences = geometry["occurrences"].get(id(owner)) or ()
+        if not occurrences:
+            return None
+        modals = geometry.get("modals") or ()
+
+        def inside(inner, outer):
+            return (inner is not None and outer is not None
+                    and inner["x"] >= outer["x"] and inner["y"] >= outer["y"]
+                    and inner["x"] + inner["width"] <= outer["x"] + outer["width"]
+                    and inner["y"] + inner["height"] <= outer["y"] + outer["height"])
+
+        def hidden(occurrence):
+            path = tuple(occurrence.get("render_path") or ())
+            for modal_path, kind, rect in modals:
+                # Drawn before it, an ancestor of it, or inside it: no effect.
+                if modal_path <= path or modal_path[:len(path)] == path:
+                    continue
+                if kind == "full" or inside(occurrence.get("bounds"), rect):
+                    return True
             return False
-        return bool(modal)
 
-    def _renforge_modal_rank(focus, index, element=None):
-        screen = _renforge_focus_screen(focus)
-        zorder = getattr(screen, "zorder", None)
-        try:
-            zorder = int(zorder)
-        except (TypeError, ValueError, OverflowError):
-            zorder = 0
-        layer = (element or {}).get("layer") or getattr(screen, "layer", None)
-        try:
-            layers = builtins.list(renpy.config.bottom_layers) + builtins.list(renpy.config.layers) + builtins.list(renpy.config.top_layers)
-            layer_rank = layers.index(layer) if layer in layers else 0
-        except Exception:
-            layer_rank = 0
-        return (layer_rank, zorder, index)
-
-    def _renforge_same_screen(left, right):
-        left_screen = _renforge_focus_screen(left)
-        right_screen = _renforge_focus_screen(right)
-        if left_screen is not None and right_screen is not None:
-            return left_screen is right_screen
-        left_name = _renforge_screen_name(left)
-        right_name = _renforge_screen_name(right)
-        return bool(left_name) and left_name == right_name
-
-    def _renforge_top_modal(elements):
-        winner = None
-        rank = None
-        for index, (focus, element) in enumerate(elements):
-            if not _renforge_full_modal(focus):
-                continue
-            current = _renforge_modal_rank(focus, index, element)
-            if rank is None or current > rank:
-                rank = current
-                winner = focus
-        return winner
-
-    def _renforge_modal_blocks(focus, modal, elements, element=None):
-        if modal is None or _renforge_same_screen(focus, modal):
-            return False
-        modal_record = next((record for owner, record in elements if owner is modal), None)
-        return (_renforge_modal_rank(focus, 0, element)[:2]
-                <= _renforge_modal_rank(modal, 0, modal_record)[:2])
+        return all(hidden(item) for item in occurrences)
 
     def _renforge_render_hit(x, y):
         """What a real click would focus at this point.
@@ -1721,7 +1705,7 @@ init python:
                 for focus in getattr(focus_module, "focus_list", ()) or ()}
 
 
-    def _renforge_mark_coverage(elements):
+    def _renforge_mark_coverage(elements, inventory=None):
         """Ask the engine's click hit test which controls a click would reach.
 
         ``focus_at_point`` applies layer order, modal screens, and focus masks.
@@ -1729,15 +1713,16 @@ init python:
         controls behind a full modal, is the remaining evidence.
         """
         focusable = _renforge_engine_focus_ids()
-        top_modal = _renforge_top_modal(elements)
         for focus, element in elements:
             widget = getattr(focus, "widget", None)
             enabled = bool(element.get("enabled", True))
             if element.get("semantic"):
                 # Semantic operations bypass the pointer, so a probe cannot
                 # tell whether a modal screen above blocks them.
-                blocked = _renforge_modal_blocks(focus, top_modal, elements, element)
-                element["covered"] = blocked
+                owner = widget if widget is not None else _renforge_focus_screen(focus)
+                blocked = (_renforge_engine_modal_blocked(owner, inventory)
+                           if inventory is not None and owner is not None else None)
+                element["covered"] = bool(blocked)
                 element["clickable"] = enabled and not blocked
                 continue
             points = _renforge_point_candidates(element.get("bounds"))
@@ -3400,8 +3385,23 @@ init python:
             },
         }
 
+    def _renforge_engine_role(widget):
+        """The role Ren'Py's own widget classes give, subclasses included."""
+        display = getattr(renpy, "display", None)
+        for module, name, role in (("dragdrop", "Drag", "drag"), ("viewport", "Viewport", "viewport"),
+                                   ("behavior", "Input", "input"), ("behavior", "Bar", "bar"),
+                                   ("behavior", "Button", "button")):
+            cls = getattr(getattr(display, module, None), name, None)
+            if isinstance(cls, type) and isinstance(widget, cls):
+                return role
+        return None
+
     def _renforge_observe_role(focus, widget):
-        # Detect the concrete widget; the shared contract normalizes its role.
+        # Ren'Py's classes first; names only for displayables that are not
+        # the engine's. The shared contract normalizes the role.
+        engine_role = _renforge_engine_role(widget) if widget is not None else None
+        if engine_role is not None:
+            return engine_role
         class_name = ""
         try:
             if widget is not None:
@@ -4380,7 +4380,7 @@ init python:
                 "action": action.__class__.__name__, "operations": ["click"],
                 "source": _renforge_source_location(button) if button is not None else None,
                 "coordinate_space": "logical"}))
-        _renforge_mark_coverage(pairs)
+        _renforge_mark_coverage(pairs, inventory)
         truncated = focus_truncated or len(pairs) > 400 or inventory.get("menu_truncated", False) or inventory["geometry"]["truncated"]
         pairs = pairs[:400]
         assigned = _renforge_runtime.interaction.assign_control_ids([record for _focus, record in pairs])
@@ -4416,7 +4416,8 @@ init python:
         render_mod = getattr(getattr(renpy, "display", None), "render", None)
         root = getattr(render_mod, "screen_render", None)
         width, height = _renforge_scene_window()
-        result = builtins.dict(occurrences=builtins.dict(), renders=builtins.dict(), available=root is not None, truncated=False)
+        result = builtins.dict(occurrences=builtins.dict(), renders=builtins.dict(), modals=builtins.list(),
+                               available=root is not None, truncated=False)
         if root is None:
             return result
         math = _renforge_runtime.interaction.math
@@ -4520,6 +4521,10 @@ init python:
             occurrence = builtins.dict(bounds=bounds, visible=visible,
                           bounds_reason=reason or empty or (None if visible else "clipped, transparent, or zero-sized"),
                           render_path=builtins.list(path))
+            modal = getattr(render, "modal", False)
+            if modal and not callable(modal):
+                # Render.take_focuses: this hides focus drawn before it.
+                result["modals"].append((tuple(path), "window" if modal == "window" else "full", bounds))
             for widget in getattr(render, "render_of", ()) or ():
                 result["occurrences"].setdefault(id(widget), builtins.list()).append(builtins.dict(occurrence))
                 result["renders"].setdefault(id(widget), builtins.list()).append((render, matrix, occurrence))
@@ -4811,6 +4816,11 @@ init python:
             return False, "not_ready"
         if not interacting or getattr(renpy.display.interface, "restart_interaction", False):
             return False, "not_ready"
+        # Ren'Py sets interact_time on an interaction's first drawn frame and
+        # clears it when the interaction ends. Before that frame the capture
+        # and geometry still show the previous interaction.
+        if getattr(renpy.display.interface, "interact_time", True) is None:
+            return False, "not_ready"
         if _renforge_short_pause_pending():
             return False, "pause"
         return True, None
@@ -4840,7 +4850,6 @@ init python:
     def _renforge_input_candidates(inventory, pairs):
         """Report opaque event implementations without interpreting game code."""
         handled = {id(getattr(focus, "widget", None)) for focus, record in pairs if record.get("operations")}
-        top_modal = _renforge_top_modal(pairs)
         behavior = getattr(renpy.display, "behavior", None)
         known = tuple(cls for cls in (getattr(behavior, "Button", None),
             getattr(behavior, "Input", None), getattr(behavior, "Bar", None),
@@ -4857,8 +4866,7 @@ init python:
             if not callable(vars(owner)["event"]):
                 continue
             geometry = _renforge_widget_geometry(node, inventory)
-            blocked = _renforge_modal_blocks(types.SimpleNamespace(screen=screen),
-                top_modal, pairs, {"layer": layer})
+            blocked = bool(_renforge_engine_modal_blocked(node, inventory))
             # A handler that draws at most one pixel cannot be pointed at: it
             # listens for keys, and dialogue still advances past it.
             bounds = geometry["bounds"] or {}
@@ -4897,11 +4905,6 @@ init python:
         stable, reason = _renforge_observe_stability()
         inventory = _renforge_scene_inventory()
         screens, say_dismiss, walk_truncated, screen_nodes = _renforge_collect_interaction(inventory)
-        # An interaction can start before its first draw. Never attach the
-        # previous screen's capture/geometry to a new actionable observation.
-        if inventory["geometry"]["available"] and any(
-                id(screen) not in inventory["geometry"]["occurrences"] for screen in screen_nodes):
-            stable, reason = False, "not_ready"
         dialogue = _renforge_observe_dialogue(screen_nodes, say_dismiss)
         reveal_flags = [getattr(node.widgets.get("what"), "slow", None)
                         for node in screen_nodes
