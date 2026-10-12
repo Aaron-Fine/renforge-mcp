@@ -1289,6 +1289,8 @@ def play(
         if png is not None:
             result["_png"] = png
         result["progress"] = progress
+        if progress.get("stop") == "choose" and not progress.get("steps") and not clicked_past:
+            result["hint"] = "Nothing to continue: the game is waiting for one of its controls."
         return result
     if not isinstance(control_id, str) or not control_id:
         return {"ok": False, "error": "id must be a control id or key/<name>"}

@@ -42,6 +42,12 @@ versioning.
   `interaction`, `session_id`, `text`, `key`, `hold`, `x`, `y`, `drop`,
   `submit`, `observe`, `advance`, `max_steps`, `mode`, and `detail` options
   are gone; the `live` toolset keeps every earlier upstream tool.
+- Acting with an observation that is slightly out of date is accepted when
+  only unrelated parts of the screen changed (a notification closing) and the
+  target control is unchanged. Menu captions are read without text tags,
+  `show text` and other image-referenced text reaches readout, inputs report
+  their typed `value`, and state-only actions (`SensitiveIf`, `SelectedIf`)
+  no longer keep menu buttons out of chrome.
 - `renforge_session(action="launch", label=...)` starts the story at a label
   for testing and modding, also in archive-only games; observations carry
   `started_at_label` because earlier story state never ran.

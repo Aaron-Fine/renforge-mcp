@@ -1369,6 +1369,8 @@ label start:
                      submit=False, screenshot=False, timeout=10)
         assert edited["ok"] and edited["observation_status"] == "ready", edited
         assert edited["submitted"] is False
+        typed = next(c for c in edited["observation"]["controls"] if c["id"] == inputs[0]["id"])
+        assert typed["value"] == "Alex", typed  # the input reports what is typed so far
         current = edited["observation"]
         assert current["forward"] == "choose"
         assert any(item["role"] == "input" for item in current["controls"])

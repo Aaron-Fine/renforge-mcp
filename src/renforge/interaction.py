@@ -256,6 +256,8 @@ def _public_control(control: Mapping[str, Any]) -> dict[str, Any]:
         "hovered": hovered or None,
         "selected": selected,
         "adjustment": _public_adjustment(control.get("adjustment")),
+        # An input field's current text.
+        "value": control.get("value") if isinstance(control.get("value"), str) else None,
         "draggable": control.get("draggable"),
         "droppable": control.get("droppable"),
         "operations": list(control.get("operations") or []),

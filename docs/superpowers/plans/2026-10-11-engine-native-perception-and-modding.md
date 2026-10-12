@@ -229,3 +229,12 @@ Gaps noted: the play loop cannot start at a label (only `renforge_jump` in the
 `live` toolset); text drawn into images (Fleeting Memories' intro) has no
 readout; a copied save from another folder triggers Ren'Py's "trust this
 device" prompts, which the agent answers like a player.
+
+Second play-toolset trial: Business of Loving (8.5.0) through the intro,
+naming, and free roam of the house (rooms, talking to Lorraine, chores, bed);
+MurMur (8.3.7) through a custom naming screen, the prologue, a hard-pause POV
+button, and into chapter 1. Fixes: act tolerates unrelated screen changes when
+its target control is unchanged (a closing notification made the hub stale);
+menu captions drop text tags; readout follows ImageReference targets
+(`show text`); inputs report `value`; SensitiveIf/SelectedIf do not block
+chrome; continuing that cannot progress says why.

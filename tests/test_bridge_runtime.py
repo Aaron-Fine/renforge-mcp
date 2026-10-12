@@ -6512,3 +6512,48 @@ def test_session_can_start_the_story_at_a_label(running_bridge, monkeypatch, pha
         start()
     assert left.value.args[0] == (expected, "chapter2")
     start()  # only once
+
+
+def test_an_action_from_a_recent_observation_stands_while_its_control_is_unchanged(running_bridge):
+    import sys
+
+    bridge = sys.modules["_renforge_runtime"].bridge
+    fingerprints = running_bridge.globs["_renforge_control_fingerprints"]
+    accept = running_bridge.globs["_renforge_accept_unchanged_control"]
+    door, go = object(), object()
+    pairs = [(types.SimpleNamespace(widget=door, action=go), {"id": "hall/door", "enabled": True})]
+    bridge.recent_observations = {"old": ("s1", 3, fingerprints(pairs))}
+    raw = {"observation_id": "new", "session_id": "s1", "interaction": 3}
+
+    # Only something else changed (a notification closed): the action stands.
+    assert accept({"id": "hall/door", "observation_id": "old"}, raw, pairs)["observation_id"] == "new"
+    # The control itself changed, or the interaction moved on: still stale.
+    changed = [(types.SimpleNamespace(widget=door, action=object()), {"id": "hall/door", "enabled": True})]
+    assert accept({"id": "hall/door", "observation_id": "old"}, raw, changed)["observation_id"] == "old"
+    later = dict(raw, interaction=4)
+    assert accept({"id": "hall/door", "observation_id": "old"}, later, pairs)["observation_id"] == "old"
+    assert accept({"id": "hall/door", "observation_id": "unknown"}, raw, pairs)["observation_id"] == "unknown"
+
+
+def test_readout_follows_image_references_to_shown_text(running_bridge):
+    """'show text "..."' is an ImageReference whose target is the Text."""
+    renpy = running_bridge.renpy
+
+    class Text:
+        def __init__(self, text):
+            self.text = text
+
+        def render(self, *args):
+            return None
+
+    class ImageReference:
+        def __init__(self, target):
+            self.target = target
+
+    shown = Text("Do you want to name your character Kai?")
+    reference = ImageReference(shown)
+    renpy.game = types.SimpleNamespace(context=lambda: types.SimpleNamespace(
+        interacting=True,
+        scene_lists=types.SimpleNamespace(layers={"master": [types.SimpleNamespace(displayable=reference)]})))
+    nodes = running_bridge.globs["_renforge_scene_inventory"]()["nodes"]
+    assert any(node is shown for node, *_rest in nodes)

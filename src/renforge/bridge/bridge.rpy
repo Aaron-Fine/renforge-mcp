@@ -4118,7 +4118,8 @@ init python:
                         caption = substitute(caption)[0]
                 except Exception:
                     pass
-                entries.append((screen, index, str(caption), action))
+                # Read as the player sees it: "{size=60}No.{/size}" is "No.".
+                entries.append((screen, index, _renforge_strip_say_tags(str(caption)) or str(caption), action))
                 index += 1
         return entries
 
@@ -4158,6 +4159,13 @@ init python:
         if any(type(action).__name__ == "FileTakeScreenshot" and _renforge_engine_class(type(action))
                for action in actions):
             return True
+        # SensitiveIf/SelectedIf only set a button's state; running them does
+        # nothing, so they do not make a menu button a story decision.
+        actions = [action for action in actions
+                   if not (type(action).__name__ in ("SensitiveIf", "SelectedIf")
+                           and _renforge_engine_class(type(action)))]
+        if not actions:
+            return False
         for action in actions:
             cls = type(action)
             if cls.__name__ not in _RENFORGE_CHROME_ACTIONS:
@@ -4610,9 +4618,11 @@ init python:
             sequence = getattr(node, "children", None)
             if _renforge_observe_is_sequence(sequence):
                 children.extend(sequence)
-            for attr in ("child", "raw_child"):
+            # ImageReference and DynamicImage keep what they draw in target
+            # ("show text ..." is one), so follow it too.
+            for attr in ("child", "raw_child", "target"):
                 child = getattr(node, attr, None)
-                if child is not None:
+                if child is not None and (attr != "target" or hasattr(child, "render")):
                     children.append(child)
             children.extend(extra_widgets)
             lineage = parents + (id(node),)
@@ -5004,6 +5014,16 @@ init python:
         reply["observation_id"] = hashlib.sha256(
             json.dumps(identity, sort_keys=True, default=lambda value: None).encode("utf-8")
         ).hexdigest()
+        if bridge is not None:
+            # A few recent observations, so an action chosen from one stays
+            # valid while its own control is unchanged (see act).
+            recent = getattr(bridge, "recent_observations", None) or builtins.dict()
+            recent.pop(reply["observation_id"], None)
+            recent[reply["observation_id"]] = (reply["session_id"], interaction,
+                                               _renforge_control_fingerprints(pairs))
+            while len(recent) > 16:
+                recent.pop(next(iter(recent)))
+            bridge.recent_observations = recent
         if screenshot:
             try:
                 data = renpy.screenshot_to_bytes(None)
@@ -5847,6 +5867,10 @@ init python:
         record["adjustment"] = facts.get("adjustment")
         role = _renforge_observe_normalize_role(record.get("role"))
         operations = _renforge_observe_operations(role)
+        if role == "input":
+            # What is typed so far, as Ren'Py's Input holds it.
+            content = getattr(widget, "content", None)
+            record["value"] = content if isinstance(content, builtins.str) else None
         if role == "bar":
             adjustment = getattr(widget, "adjustment", None)
             operations = ["value"] if callable(getattr(adjustment, "change", None)) and getattr(adjustment, "adjustable", True) is not False else []
@@ -6124,6 +6148,34 @@ init python:
         return result
 
 
+    def _renforge_control_fingerprints(pairs):
+        """What makes a control the same one: widget, action, and availability."""
+        return builtins.dict(
+            (record.get("id"), (id(getattr(focus, "widget", None)), id(_renforge_focus_action_value(focus)),
+                                bool(record.get("enabled", True))))
+            for focus, record in pairs if record.get("id"))
+
+    def _renforge_accept_unchanged_control(payload, raw, pairs):
+        """Let an action chosen from a recent observation through when only
+        unrelated parts of the screen changed since (a notification closing,
+        a HUD animating). Same session and interaction, and the target
+        control is the same widget with the same action and availability.
+        Anything else stays stale."""
+        wanted = payload.get("observation_id")
+        control = payload.get("id")
+        if not wanted or not control or wanted == raw.get("observation_id"):
+            return payload
+        bridge = _renforge_runtime.bridge
+        old = (getattr(bridge, "recent_observations", None) or {}).get(wanted)
+        if old is None or old[0] != raw.get("session_id") or old[1] != raw.get("interaction"):
+            return payload
+        before = old[2].get(control)
+        if before is None or before != _renforge_control_fingerprints(pairs).get(control):
+            return payload
+        payload = builtins.dict(payload)
+        payload["observation_id"] = raw["observation_id"]
+        return payload
+
     def _renforge_expand_act_input(payload, pairs):
         """Turn act's single ``input`` into what the control takes.
 
@@ -6161,6 +6213,7 @@ init python:
         payload = payload or {}
         contract = _renforge_runtime.interaction
         raw, pairs = _renforge_observe_raw(False, with_pairs=True, include_readout=False)
+        payload = _renforge_accept_unchanged_control(payload, raw, pairs)
         payload, refusal = _renforge_expand_act_input(payload, pairs)
         if refusal is None:
             refusal = contract.validate_act_payload(payload)
