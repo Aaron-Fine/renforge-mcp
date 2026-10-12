@@ -208,3 +208,24 @@ change (a fresh `observe` is correct).
   `source`.
 - Still open: the CI artifact change waits on local branch
   `ci/state-folder-artifacts` (needs a token with `workflow` scope).
+
+## Play-toolset trial (2026-10-12, evening)
+
+Server limited to `RENFORGE_TOOLSETS=play` (info, session, observe, act,
+explain, mod). Games: Scions of the Divine (8.4.1), Fleeting Memories (8.3.2),
+Dawnfall (8.5.0), plus re-checks of Total Degeneracy Island and Academy34.
+Little Green Hill chapter 2 cannot start on its own (it continues a chapter 1
+save), and Fleeting Memories needed eight decompiled loose `.rpy` files removed
+from the copy (they duplicated the archive and stopped Ren'Py at a parse error).
+
+Fixed from the trial: progression skips through pauses and transitions
+(lines with `with diss` ran at ~170 ms each); a time-budget stop is ok;
+continuing is never refused as stale; session saves persist in the project
+state folder; HUD screens kept up from earlier lines do not stop a clickable
+line; continuing clicks past a line held only by optional buttons; an advance
+that repeats a line stops with `stop="loop"`.
+
+Gaps noted: the play loop cannot start at a label (only `renforge_jump` in the
+`live` toolset); text drawn into images (Fleeting Memories' intro) has no
+readout; a copied save from another folder triggers Ren'Py's "trust this
+device" prompts, which the agent answers like a player.
