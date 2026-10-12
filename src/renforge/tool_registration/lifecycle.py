@@ -194,7 +194,7 @@ def build_wrappers(context):
         if needed) to use the user's files, or set RENFORGE_ISOLATION=existing
         as a server-wide default; that requires authorize=true when
         RENFORGE_POLICY=enforce. timeout controls the background startup
-        deadline, not the MCP call.
+        deadline, not the MCP call (default 180 s, or RENFORGE_STARTUP_TIMEOUT).
         """
         kwargs: dict[str, Any] = {
             "version": version,

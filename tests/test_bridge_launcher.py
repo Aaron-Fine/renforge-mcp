@@ -2057,3 +2057,15 @@ def test_pipe_reader_handles_split_chunk_stream() -> None:
     finally:
         os.close(w_fd)
         r_file.close()
+
+
+def test_startup_timeout_defaults_and_reads_the_environment(monkeypatch):
+    from renforge.bridge import launcher
+
+    monkeypatch.delenv(launcher.STARTUP_TIMEOUT_ENV, raising=False)
+    assert launcher.default_startup_timeout() == 180.0
+    monkeypatch.setenv(launcher.STARTUP_TIMEOUT_ENV, "420")
+    assert launcher.default_startup_timeout() == 420.0
+    for bad in ("", "soon", "0", "-5", "inf", "nan"):
+        monkeypatch.setenv(launcher.STARTUP_TIMEOUT_ENV, bad)
+        assert launcher.default_startup_timeout() == 180.0

@@ -54,7 +54,7 @@ def autopilot(
     max_runs: int = 16,
     max_steps: int = 60,
     settle: float = 0.4,
-    startup_timeout: float = 90.0,
+    startup_timeout: float | None = None,
     progress_callback: Callable[[dict], None] | None = None,
 ) -> dict[str, Any]:
     """Explore the game and return a coverage/crash report.

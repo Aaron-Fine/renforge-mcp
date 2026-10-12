@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import errno
 import json
+import math
 import os
 import secrets
 import shutil
@@ -51,6 +52,21 @@ _EDITOR_SUPPORTED_LANGUAGES: tuple[str, ...] = ("en", "zh-CN")
 _EDITOR_CJK_LANGUAGES: frozenset[str] = frozenset({"zh-CN"})
 
 _BRIDGE_STARTUP_ERROR_PREFIX: str = "RENFORGE_BRIDGE_STARTUP_ERROR="
+STARTUP_TIMEOUT_ENV: str = "RENFORGE_STARTUP_TIMEOUT"
+# Launch runs in the background and a process that exits fails at once, so
+# this only bounds a game that hangs. The first run of a large game can spend
+# well over a minute building caches.
+DEFAULT_STARTUP_TIMEOUT: float = 180.0
+
+
+def default_startup_timeout() -> float:
+    """Server-wide startup deadline: ``RENFORGE_STARTUP_TIMEOUT`` seconds, or 180."""
+    raw = os.environ.get(STARTUP_TIMEOUT_ENV, "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_STARTUP_TIMEOUT
+    return value if math.isfinite(value) and value > 0 else DEFAULT_STARTUP_TIMEOUT
 _BRIDGE_STARTUP_ERROR_CODES: frozenset[str] = frozenset(
     {
         "BRIDGE_MANIFEST_PUBLICATION_FAILED",
@@ -801,7 +817,7 @@ def _launch_after_project_lock(
     token: str | None = None,
     port: int = 0,
     warp: str | None = None,
-    startup_timeout: float = 90.0,
+    startup_timeout: float | None = None,
     cancel_event: threading.Event | None = None,
     extra_env: dict[str, str] | None = None,
     display: str = "auto",
@@ -1006,6 +1022,8 @@ def _launch_after_project_lock(
         startup_event=startup_event,
         startup_code=startup_code,
     )
+    if startup_timeout is None:
+        startup_timeout = default_startup_timeout()
     deadline = time.time() + startup_timeout
     _phase("waiting_for_bridge", port=port or None)
 
@@ -1119,7 +1137,12 @@ def _launch_after_project_lock(
         "BRIDGE_CONNECTION_TIMEOUT",
         f"Bridge did not come up within {startup_timeout}s",
         phase="waiting_for_bridge",
-        suggested_fix="Increase timeout, check the project launches manually, or inspect log.txt.",
+        suggested_fix=(
+            "Increase timeout, check the project launches manually, or inspect log.txt. "
+            "If log.txt ends at 'Windowed mode.', the window could not open: an X11 "
+            "window never opens while the screen is locked (Ren'Py 8.0 has no Wayland "
+            "support), so unlock the screen or use display='xvfb'."
+        ),
         details={"phases": phases, "environment": capabilities.to_dict()},
     )
 
@@ -1132,7 +1155,7 @@ def launch_with_bridge(
     token: str | None = None,
     port: int = 0,
     warp: str | None = None,
-    startup_timeout: float = 90.0,
+    startup_timeout: float | None = None,
     cancel_event: threading.Event | None = None,
     extra_env: dict[str, str] | None = None,
     display: str = "auto",
@@ -1146,6 +1169,8 @@ def launch_with_bridge(
 ) -> BridgeSession:
     """Launch a bridge while exclusively owning this project's artifacts."""
     require_supported_runtime(sdk.version, project_root=project.abs_root)
+    if startup_timeout is None:
+        startup_timeout = default_startup_timeout()
     project_lock = ProjectBridgeLock(project.root)
     project_lock.acquire()
     editor_coordinator: EditorCoordinator | None = None

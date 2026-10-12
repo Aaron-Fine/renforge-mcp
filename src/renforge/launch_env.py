@@ -54,6 +54,8 @@ class EnvironmentCapabilities:
     display: str | None = None
     wayland_display: str | None = None
     notes: list[str] = field(default_factory=list)
+    # SDL_VIDEODRIVER the user already chose; RenForge never overrides it.
+    video_driver: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,6 +67,7 @@ class EnvironmentCapabilities:
             "audio_available": self.audio_available,
             "display": self.display,
             "wayland_display": self.wayland_display,
+            "video_driver": self.video_driver,
             "notes": list(self.notes),
         }
 
@@ -127,7 +130,22 @@ def detect_environment(env: dict[str, str] | None = None) -> EnvironmentCapabili
         display=display,
         wayland_display=wayland,
         notes=notes,
+        video_driver=(source.get("SDL_VIDEODRIVER") or "").strip() or None,
     )
+
+
+def _native_video_env(capabilities: EnvironmentCapabilities) -> dict[str, str]:
+    """Prefer SDL's Wayland driver in a Wayland session.
+
+    Ren'Py's SDL picks X11 first. Under XWayland, opening the window waits for
+    the window to be mapped, which never happens while the screen is locked,
+    so the game hangs before its first frame. Native Wayland windows start.
+    The SDL in Ren'Py 8.0 has no Wayland driver and falls back to X11.
+    """
+    if (capabilities.platform.startswith("linux") and capabilities.wayland_available
+            and not capabilities.video_driver):
+        return {"SDL_VIDEODRIVER": "wayland,x11"}
+    return {}
 
 
 def resolve_display_strategy(
@@ -159,7 +177,7 @@ def resolve_display_strategy(
                 phase="detecting_environment",
                 suggested_fix="Use display='auto' or install xvfb.",
             )
-        return "native", {}
+        return "native", _native_video_env(capabilities)
 
     if strategy == "xvfb":
         if not capabilities.xvfb_available:
@@ -181,7 +199,7 @@ def resolve_display_strategy(
 
     # auto
     if capabilities.display_available:
-        return "native", {}
+        return "native", _native_video_env(capabilities)
     if capabilities.xvfb_available:
         return "xvfb", {}
     raise LaunchError(
