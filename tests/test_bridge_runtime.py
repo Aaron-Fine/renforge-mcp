@@ -860,7 +860,10 @@ def test_short_timed_pause_is_not_settled_until_it_ends(running_bridge):
     assert waiting.get("stable") is False
     assert waiting.get("unstable_reason") == "pause"
 
+    # It returns on the first frame drawn after its delay, so allow a grace.
     clock["now"] = 10.6
+    assert running_bridge.client.observe(screenshot=False).get("unstable_reason") == "pause"
+    clock["now"] = 11.6
     assert running_bridge.client.observe(screenshot=False).get("stable") is True
 
     # A long pause is somewhere the player waits; it stays actionable.

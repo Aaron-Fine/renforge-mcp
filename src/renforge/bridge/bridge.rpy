@@ -4628,9 +4628,13 @@ init python:
     # A timed pause this short ends by itself; one that is longer is a place
     # the player waits, and the agent may dismiss it.
     _RENFORGE_SHORT_PAUSE_SECONDS = 5.0
+    # A pause returns only on a frame drawn after its delay, so it can outlive
+    # its delay a little (`with dissolve` at startup); a modal screen can hold
+    # it indefinitely, so stop waiting after this grace.
+    _RENFORGE_PAUSE_GRACE_SECONDS = 1.0
 
     def _renforge_short_pause_pending():
-        """True while a short `pause N` interaction has yet to time out.
+        """True while a short `pause N` or `with` interaction has yet to end.
 
         interact_core adds a PauseBehavior to the root widget, outside every
         layer, so look for it in the top of the last drawn frame. Screens on
@@ -4654,7 +4658,7 @@ init python:
                     if (isinstance(delay, (builtins.int, builtins.float)) and not isinstance(delay, bool)
                             and 0 < delay <= _RENFORGE_SHORT_PAUSE_SECONDS):
                         try:
-                            if get_time() - started < delay:
+                            if get_time() - started < delay + _RENFORGE_PAUSE_GRACE_SECONDS:
                                 return True
                         except Exception:
                             pass
