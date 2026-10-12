@@ -193,6 +193,7 @@ class BridgeClient:
         id: str | None = None,
         source: str | None = None,
         query: str | None = None,
+        search: str | None = None,
         limit: int | None = None,
     ) -> dict:
         """Explain game content from the loaded syntax trees, without evaluating it.
@@ -212,6 +213,8 @@ class BridgeClient:
             payload["source"] = source
         if query is not None:
             payload["query"] = query
+        if search is not None:
+            payload["search"] = search
         if limit is not None:
             payload["limit"] = limit
         return self.request("explain", payload)

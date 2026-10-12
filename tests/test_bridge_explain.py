@@ -46,7 +46,7 @@ def _rows(reply):
 def test_explain_rejects_more_than_one_selector(running_bridge):
     reply = running_bridge.client.explain(label="start", screen="rf_hub")
 
-    assert reply == {"ok": False, "error": "pass at most one of label, screen, id, source"}
+    assert reply == {"ok": False, "error": "pass at most one of label, screen, id, source, search"}
 
 
 def test_explain_rejects_non_string_selector(running_bridge):
@@ -439,3 +439,24 @@ def test_explain_source_traces_a_file_line_from_observe(running_bridge):
 
 def test_explain_text_collapses_whitespace(running_bridge):
     assert running_bridge.globs["_renforge_explain_text"]("A(\n    key='x',\n)") == "A( key='x', )"
+
+
+def test_explain_search_finds_text_with_its_enclosing_label(running_bridge):
+    f = "game/script.rpy"
+    _set_script(running_bridge, {
+        "start": _script_node("Label", f, 1),
+        "gate": _script_node("Label", f, 10),
+    })
+    code = types.SimpleNamespace(source="if not explored:\n    say('Explore at least a little')")
+    running_bridge.renpy.game.script.all_stmts = [
+        _script_node("Say", f, 2, who=None, what="Hello."),
+        _script_node("Python", f, 12, code=code),
+        _script_node("If", f, 14, entries=[("explored", [])]),
+    ]
+
+    reply = running_bridge.client.explain(search="EXPLORE")
+
+    assert reply["ok"] is True and reply["truncated"] is False
+    assert [(m["kind"], m["line"], m["label"]) for m in reply["matches"]] == [
+        ("python", 12, "gate"), ("if", 14, "gate")]
+    assert running_bridge.client.explain(search=" ")["ok"] is False

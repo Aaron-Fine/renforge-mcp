@@ -431,6 +431,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "flattened depth-first with file, line and text. `screen` returns the displayable tree of a screen. "
             "`id` (a control id from renforge_observe) or `source` (a file:line from a control or input candidate) "
             "returns the statement there, its keyword arguments, and the if/for/use conditions enclosing it. "
+            "`search` finds text in every loaded statement (dialogue, Python source, conditions, menu choices, "
+            "jump targets) and returns file:line with the enclosing label, e.g. to find what gates a message. "
             "Output is bounded by `limit`."
         ),
         annotations=_ann(
@@ -446,6 +448,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "id": "Control id from renforge_observe to trace back to its screen-language statement.",
             "source": "A `file:line` reported as `source` by renforge_observe controls or input candidates.",
             "query": "Index only: case-insensitive substring to filter label and screen names.",
+            "search": "Case-insensitive text to find in all loaded statements, including Python source.",
             "limit": "Maximum statements, nodes, or index entries to return (1-2000, default 200).",
         },
         parameter_schemas={
@@ -454,6 +457,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "id": {"type": "string"},
             "source": {"type": "string"},
             "query": {"type": "string"},
+            "search": {"type": "string"},
             "limit": _limits(1, 2000),
         },
     ),

@@ -2684,7 +2684,7 @@
     }
   },
   "renforge_explain": {
-    "description": "Explain where game content is defined and what it does, read from the running game's loaded syntax trees without evaluating anything. Works for games that ship only .rpa/.rpyc files. With no selector it returns labels and screens with file:line, filtered by a case-insensitive `query` name substring, plus file counts showing how many sources exist on disk. `label` returns the statements of a label, flattened depth-first with file, line and text. `screen` returns the displayable tree of a screen. `id` (a control id from renforge_observe) or `source` (a file:line from a control or input candidate) returns the statement there, its keyword arguments, and the if/for/use conditions enclosing it. Output is bounded by `limit`.",
+    "description": "Explain where game content is defined and what it does, read from the running game's loaded syntax trees without evaluating anything. Works for games that ship only .rpa/.rpyc files. With no selector it returns labels and screens with file:line, filtered by a case-insensitive `query` name substring, plus file counts showing how many sources exist on disk. `label` returns the statements of a label, flattened depth-first with file, line and text. `screen` returns the displayable tree of a screen. `id` (a control id from renforge_observe) or `source` (a file:line from a control or input candidate) returns the statement there, its keyword arguments, and the if/for/use conditions enclosing it. `search` finds text in every loaded statement (dialogue, Python source, conditions, menu choices, jump targets) and returns file:line with the enclosing label, e.g. to find what gates a message. Output is bounded by `limit`.",
     "annotations": {
       "readOnlyHint": true,
       "idempotentHint": true,
@@ -2728,6 +2728,11 @@
         "query": {
           "default": "",
           "description": "Index only: case-insensitive substring to filter label and screen names.",
+          "type": "string"
+        },
+        "search": {
+          "default": "",
+          "description": "Case-insensitive text to find in all loaded statements, including Python source.",
           "type": "string"
         }
       },

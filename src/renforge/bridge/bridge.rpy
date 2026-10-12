@@ -5236,11 +5236,77 @@ init python:
         return dict(_renforge_explain_statement(wanted), ok=True, source=source)
 
 
+    def _renforge_explain_node_texts(node):
+        """Searchable text a script statement carries: dialogue, Python, conditions, captions."""
+        kind = node.__class__.__name__
+        texts = []
+        what = getattr(node, "what", None)
+        if isinstance(what, builtins.str):
+            texts.append(("say", what))
+        source = _renforge_explain_pysrc(getattr(node, "code", None))
+        if source:
+            texts.append(("python", source))
+        if kind == "If":
+            for entry in getattr(node, "entries", None) or ():
+                if isinstance(entry[0], builtins.str):
+                    texts.append(("if", entry[0]))
+        elif kind == "Menu":
+            for item in getattr(node, "items", None) or ():
+                caption = item[0] if isinstance(item[0], builtins.str) else ""
+                condition = item[1] if isinstance(item[1], builtins.str) else ""
+                texts.append(("choice", "%s if %s" % (caption, condition) if condition not in ("", "True") else caption))
+        elif kind in ("Jump", "Call"):
+            target = getattr(node, "target", None) if kind == "Jump" else getattr(node, "label", None)
+            if isinstance(target, builtins.str):
+                texts.append((kind.lower(), target))
+        return texts
+
+
+    def _renforge_explain_search(needle, limit):
+        """Every loaded statement whose text contains ``needle``, with its enclosing label."""
+        wanted = needle.casefold()
+        labels = {}
+        for key, value in _renforge_explain_namemap().items():
+            if value.__class__.__name__ == "Label":
+                where = _renforge_explain_loc(value)
+                name = key if isinstance(key, builtins.str) else getattr(value, "name", None)
+                if where and isinstance(name, builtins.str):
+                    labels.setdefault(where["file"], []).append((where["line"], name))
+        for entries in labels.values():
+            entries.sort()
+        script = getattr(getattr(renpy, "game", None), "script", None)
+        matches = []
+        truncated = False
+        for node in getattr(script, "all_stmts", None) or ():
+            try:
+                found = [(kind, text) for kind, text in _renforge_explain_node_texts(node)
+                         if wanted in text.casefold()]
+            except Exception:
+                continue
+            if not found:
+                continue
+            if len(matches) >= limit:
+                truncated = True
+                break
+            where = _renforge_explain_loc(node) or {}
+            enclosing = None
+            for line, name in labels.get(where.get("file"), ()):
+                if line > (where.get("line") or 0):
+                    break
+                enclosing = name
+            kind, text = found[0]
+            at = text.casefold().find(wanted)
+            snippet = text[max(0, at - 60):at + len(needle) + 60]
+            matches.append({"kind": kind, "file": where.get("file"), "line": where.get("line"),
+                            "label": enclosing, "text": _renforge_explain_text(snippet)})
+        return {"ok": True, "search": needle, "matches": matches, "truncated": truncated}
+
+
     def _renforge_h_explain(payload):
         payload = payload or {}
-        selectors = [key for key in ("label", "screen", "id", "source") if payload.get(key) is not None]
+        selectors = [key for key in ("label", "screen", "id", "source", "search") if payload.get(key) is not None]
         if len(selectors) > 1:
-            return {"ok": False, "error": "pass at most one of label, screen, id, source"}
+            return {"ok": False, "error": "pass at most one of label, screen, id, source, search"}
         for key in selectors:
             if not isinstance(payload.get(key), builtins.str):
                 return {"ok": False, "error": "%s must be a string" % key}
@@ -5260,6 +5326,10 @@ init python:
             return _renforge_explain_screen(payload["screen"], limit)
         if selectors[0] == "source":
             return _renforge_h_explain_source(payload["source"])
+        if selectors[0] == "search":
+            if not payload["search"].strip():
+                return {"ok": False, "error": "search must not be empty"}
+            return _renforge_explain_search(payload["search"], limit)
         return _renforge_h_explain_control(payload["id"])
 
 

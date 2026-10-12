@@ -139,6 +139,7 @@ def build_wrappers(context):
         limit: int = 200,
         source: str = "",
         query: str = "",
+        search: str = "",
     ) -> dict:
         """Explain where game content is defined and what it does, without evaluating it.
 
@@ -159,6 +160,7 @@ def build_wrappers(context):
                 "limit": limit,
                 "source": source,
                 "query": query,
+                "search": search,
             },
             project_root=project_path,
             fn=live.explain,
@@ -169,6 +171,7 @@ def build_wrappers(context):
                 "id": id or None,
                 "source": source or None,
                 "query": query or None,
+                "search": search or None,
                 "limit": limit,
             },
         )
