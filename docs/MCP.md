@@ -250,10 +250,10 @@ hides tools afterwards. Unset or `all` lists everything. Unknown names stop the
 server at startup.
 
 ```bash
-RENFORGE_TOOLS=play renforge-mcp                  # info, launch, launch_status, observe,
+RENFORGE_TOOLS=play renforge serve                 # info, launch, launch_status, observe,
                                                   # act, advance_until, saves, explain, mod, stop
-RENFORGE_TOOLS=play,screenshot renforge-mcp       # profile plus one tool
-RENFORGE_TOOLS_EXCLUDE=eval,mod renforge-mcp      # everything except these
+RENFORGE_TOOLS=play,screenshot renforge serve      # profile plus one tool
+RENFORGE_TOOLS_EXCLUDE=eval,mod renforge serve     # everything except these
 ```
 
 ## Recommended workflow
