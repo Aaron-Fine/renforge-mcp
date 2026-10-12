@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Iterable
 
+import json
 import os
 import re
 import shutil
@@ -214,17 +215,36 @@ def _compatible_sdk_version(installed: str, required: str) -> bool:
     )
 
 
+PROJECT_FILE: Final = "renforge.json"
+
+
+def _declared_project_version(root: Path) -> tuple[int, int, int] | None:
+    """``renpy_version`` from the project's ``renforge.json``, if any.
+
+    Ren'Py never reads this file, so pinning a source project here changes
+    nothing about how the game runs.
+    """
+    try:
+        payload = json.loads((root / PROJECT_FILE).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    version = payload.get("renpy_version") if isinstance(payload, dict) else None
+    return _version_tuple(version) if isinstance(version, str) else None
+
+
 def bundled_engine_version(project_root: Path) -> str | None:
     """Return the ``X.Y.Z`` engine a game was made for, or None.
 
-    A distributed game ships ``renpy/vc_version.py`` (``8.1.2.23090503``
-    becomes ``8.1.2``). Otherwise ``game/script_version.txt``, which Ren'Py
-    writes into builds and reads for compatibility, declares the engine as
-    ``(8, 5, 3)``; a source project can add one to pin its SDK. A project with
-    neither keeps the stable SDK.
+    In order: ``renpy_version`` in the project's ``renforge.json`` (an explicit
+    pin for source projects); the shipped engine's ``renpy/vc_version.py``
+    (``8.1.2.23090503`` becomes ``8.1.2``); then ``game/script_version.txt``
+    (``(8, 5, 2)``), which Ren'Py writes into builds. Adding a
+    ``script_version.txt`` to a source project is not a neutral pin: Ren'Py
+    turns developer mode off when it exists. A project with none of these keeps
+    the stable SDK.
     """
     root = Path(project_root)
-    triple = _version_tuple(_sdk_internal_version(root) or "")
+    triple = _declared_project_version(root) or _version_tuple(_sdk_internal_version(root) or "")
     if triple is None:
         try:
             declared = (root / "game" / "script_version.txt").read_text(encoding="utf-8")

@@ -4608,13 +4608,20 @@ init python:
             geometry = _renforge_widget_geometry(node, inventory)
             blocked = _renforge_modal_blocks(types.SimpleNamespace(screen=screen),
                 top_modal, pairs, {"layer": layer})
-            relevant = geometry["visible"] is not False and not blocked
+            # A handler that draws at most one pixel cannot be pointed at: it
+            # listens for keys, and dialogue still advances past it.
+            bounds = geometry["bounds"] or {}
+            pointer = not (geometry["visible"] is True and
+                           bounds.get("width", 0) * bounds.get("height", 0) <= 1)
+            relevant = geometry["visible"] is not False and not blocked and pointer
             unclassified = unclassified or relevant
             if len(candidates) >= 64:
                 unclassified = True
                 break
             candidates.append({"screen": name, "layer": layer,
                 "source": _renforge_source_location(node),
+                "class": "%s.%s" % (type(node).__module__, type(node).__name__),
+                "pointer": pointer,
                 "reason": "custom event handler; input semantics and eligibility unknown",
                 "bounds": geometry["bounds"], "bounds_reason": geometry["bounds_reason"],
                 "visible": geometry["visible"], "modal_blocked": blocked,

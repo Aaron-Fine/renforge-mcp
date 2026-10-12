@@ -5849,6 +5849,39 @@ def test_custom_input_candidates_keep_eligibility_unknown_and_block_dismiss(runn
     assert running_bridge.client.dismiss_if(interaction=8)['ok'] is False
 
 
+def test_one_pixel_custom_handler_is_a_key_listener_not_unclassified_input(running_bridge):
+    from renforge.observe import classify
+    renpy = running_bridge.renpy
+
+    class KeyListener:
+        def event(self, ev, x, y, st):
+            raise AssertionError('inspection must not invoke custom input')
+
+    class ScreenDisplayable:
+        screen_name = ('say', None)
+        layer = 'screens'
+        modal = False
+        hiding = False
+        widgets = {}
+        scope = {}
+
+    listener = KeyListener()
+    screen = ScreenDisplayable()
+    screen.children = [listener]
+    _arm_stable_interaction(running_bridge, generation=10)
+    renpy.game.context = lambda: types.SimpleNamespace(interacting=True,
+        scene_lists=types.SimpleNamespace(layers={'screens': [types.SimpleNamespace(displayable=screen)]}))
+    renpy.config.screen_width, renpy.config.screen_height = 800, 600
+    renpy.display.focus.focus_list[:] = []
+    renpy.display.render = types.SimpleNamespace(screen_render=_completed_render(800, 600, [screen],
+        children=[(_completed_render(1, 1, [listener]), 0, 0, True, True)]))
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    assert snapshot['omitted']['unclassified'] is False
+    [candidate] = snapshot['input_candidates']
+    assert candidate['pointer'] is False
+    assert candidate['class'].endswith('.KeyListener')
+
+
 def test_custom_displayables_holding_renpy_actions_are_controls(running_bridge):
     """A game displayable with a Ren'Py Action in ``action`` is a button; interface actions are chrome."""
     from renforge.observe import classify

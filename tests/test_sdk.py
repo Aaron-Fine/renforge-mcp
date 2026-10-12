@@ -475,6 +475,17 @@ def test_bundled_engine_wins_over_script_version(tmp_path: Path) -> None:
     assert sdk.bundled_engine_version(tmp_path) == "8.1.2"
 
 
-def test_demo_game_pins_its_engine() -> None:
+def test_renforge_json_pin_wins_and_leaves_ren_py_files_alone(tmp_path: Path) -> None:
+    (tmp_path / "game").mkdir()
+    (tmp_path / "game" / "script_version.txt").write_text("(8, 1, 0)\n", encoding="utf-8")
+    (tmp_path / "renforge.json").write_text('{"renpy_version": "8.5.3"}', encoding="utf-8")
+    assert sdk.bundled_engine_version(tmp_path) == "8.5.3"
+    (tmp_path / "renforge.json").write_text("not json", encoding="utf-8")
+    assert sdk.bundled_engine_version(tmp_path) == "8.1.0"
+
+
+def test_demo_game_pins_its_engine_without_script_version() -> None:
     demo = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
+    # script_version.txt would switch Ren'Py's developer mode off.
+    assert not (demo / "game" / "script_version.txt").exists()
     assert sdk.bundled_engine_version(demo) == "8.5.3"
