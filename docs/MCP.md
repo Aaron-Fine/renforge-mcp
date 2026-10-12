@@ -556,8 +556,15 @@ progression. Custom displayables and keyboard shortcuts are not fully
 inventoried; `omitted` reports focus/traversal limits, unclassified custom input,
 and readout truncation. Readout truncation alone does not block progression.
 
-A play session starts with `renforge_session(action="launch")` (isolated saves
-and preferences, no Live Editor); poll `action="status"` until ready.
+A play session starts with `renforge_session(action="launch")` (saves and
+preferences kept apart from the player's, no Live Editor); poll
+`action="status"` until ready. For testing and modding, `label="..."` starts
+the story at that label instead: the game leaves its splash screen or main
+menu for it, which works for games shipped only as archives. Nothing the
+story did before the label has happened (variables keep their defaults, and a
+label normally reached with `call` ends the run when it returns), so every
+observation carries `started_at_label`; an unknown label is reported as
+`start_label_error`. Play from saves when the earlier state matters.
 
 ```python
 snapshot = renforge_observe(project_path=project)

@@ -1870,3 +1870,23 @@ def test_live_play_loop_reaches_the_gate_refuses_stale_marks_repeats_and_chooses
                      "village_gate_choices/demo_lantern_take", screenshot=False)
         assert chose["ok"] and chose["action_outcome"] == "succeeded", chose
         assert session.client.get_var("courage") == 1
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
+def test_live_session_starts_the_story_at_a_label(sdk, demo_copy: Path) -> None:
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.tools.live import observe, play
+
+    env = {"RENFORGE_BRIDGE_START_LABEL": "village_gate"}
+    with launch_with_bridge(sdk, RenpyProject(demo_copy), startup_timeout=90, editor=False, extra_env=env):
+        for _ in range(100):
+            snapshot = observe(str(demo_copy), screenshot=False)
+            if snapshot.get("stable") and snapshot.get("label") == "village_gate":
+                break
+            time.sleep(0.1)
+        assert snapshot["label"] == "village_gate", snapshot
+        assert snapshot["started_at_label"] == "village_gate"
+        gate = play(str(demo_copy), snapshot["observation_id"], screenshot=False)
+        assert gate["progress"]["stop"] == "choose", gate
+        assert gate["observation"]["started_at_label"] == "village_gate"

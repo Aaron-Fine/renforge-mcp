@@ -369,7 +369,12 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "(saves and preferences in the project's RenForge state folder, apart from the player's and kept "
             "across launches; isolated HOME; no Live Editor; transitions and vsync off) and returns "
             "status=starting or ready; poll action=status until ready or failed. save and load take a slot "
-            "name; list shows the session's slots; stop ends the game and cleans up. Server environment "
+            "name; list shows the session's slots; stop ends the game and cleans up. launch with label starts "
+            "the story at that label (for testing and modding): the game leaves its splash screen or main menu "
+            "for it, and every observation then carries started_at_label, because nothing the story did "
+            "before the label has happened (a label normally reached with call ends the run when it returns); "
+            "play from saves instead when the earlier state matters. An "
+            "unknown label is reported as start_label_error. Server environment "
             "variables cover the rare launch settings (RENFORGE_STARTUP_TIMEOUT, RENFORGE_ISOLATION, ...). "
             "load requires authorize=true when RENFORGE_POLICY=enforce."
         ),
@@ -383,6 +388,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "project_path": "Project root of the game.",
             "action": "launch, status, save, load, list, or stop.",
             "slot": "Slot name for save and load.",
+            "label": "With launch: start the story at this label (testing and modding).",
             "authorize": "Explicitly approve load when RENFORGE_POLICY=enforce.",
         },
         parameter_schemas={"action": _enum("launch", "status", "save", "load", "list", "stop")},

@@ -42,6 +42,9 @@ versioning.
   `interaction`, `session_id`, `text`, `key`, `hold`, `x`, `y`, `drop`,
   `submit`, `observe`, `advance`, `max_steps`, `mode`, and `detail` options
   are gone; the `live` toolset keeps every earlier upstream tool.
+- `renforge_session(action="launch", label=...)` starts the story at a label
+  for testing and modding, also in archive-only games; observations carry
+  `started_at_label` because earlier story state never ran.
 - Play sessions keep their saves across launches in the project's RenForge
   state folder. Continuing skips through pauses, clicks past a line that only
   has optional buttons beside it, ignores HUD buttons on `show screen` screens

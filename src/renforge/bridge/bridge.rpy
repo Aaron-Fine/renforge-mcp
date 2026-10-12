@@ -4981,6 +4981,13 @@ init python:
         }
         reply["session_id"] = bridge.session_id if bridge is not None else None
         reply["say_id"] = getattr(bridge, "say_id", None)
+        start = getattr(bridge, "start_label_state", None) if bridge is not None else None
+        if start:
+            # Kept for the session: what came before the label never ran.
+            if start.get("error"):
+                reply["start_label_error"] = "%s: %s" % (start["error"], start["label"])
+            else:
+                reply["started_at_label"] = start["label"]
         reply["seen"] = _renforge_seen_current()
         if bridge is not None and bridge.progression is not None:
             reply["progression"] = _renforge_progress_public(bridge.progression)
@@ -6428,6 +6435,36 @@ init python:
         if history is not None:
             bridge.prev_history_index = history
 
+    def _renforge_start_at_label():
+        """Leave for RENFORGE_BRIDGE_START_LABEL once, as the main menu's Start does.
+
+        Waits for a real interaction past Ren'Py's own startup labels. From the
+        main menu it leaves that context like ``Start(label)``; from a splash
+        screen it jumps. Nothing the story did before the label has happened.
+        """
+        import os as _os  # a reload_script store wipe removes module globals
+
+        bridge = _renforge_runtime.bridge
+        label = _os.environ.get("RENFORGE_BRIDGE_START_LABEL", "").strip()
+        if bridge is None or not label or getattr(bridge, "start_label_state", None) is not None:
+            return
+        try:
+            if not renpy.game.context().interacting:
+                return
+        except Exception:
+            return
+        phase = _renforge_game_lifecycle()["phase"]
+        current = bridge.current_label if isinstance(bridge.current_label, builtins.str) else ""
+        if phase != "main_menu" and (not current or current.startswith("_")):
+            return
+        if not renpy.has_label(label):
+            bridge.start_label_state = {"label": label, "error": "unknown label"}
+            return
+        bridge.start_label_state = {"label": label}
+        if phase == "main_menu":
+            renpy.jump_out_of_context(label)
+        renpy.jump(label)
+
     def renforge_drain_bridge():
         # Runs on the MAIN thread via config.periodic_callbacks.
         bridge = _renforge_runtime.bridge
@@ -6440,6 +6477,7 @@ init python:
             return
         if _renforge_pointer_tick():
             return
+        _renforge_start_at_label()
         _renforge_progress_tick()
         _renforge_watch_runtime_effects()
         while True:
@@ -7671,7 +7709,8 @@ init python:
                 # Preferences exist by the first interaction. The launcher asks
                 # for this only when the session's preferences are isolated.
                 bridge.transitions_applied = True
-                if os.environ.get("RENFORGE_BRIDGE_TRANSITIONS") == "off":
+                import os as _os
+                if _os.environ.get("RENFORGE_BRIDGE_TRANSITIONS") == "off":
                     prefs = getattr(renpy.store, "_preferences", None)
                     if prefs is not None and hasattr(prefs, "transitions"):
                         prefs.transitions = 0

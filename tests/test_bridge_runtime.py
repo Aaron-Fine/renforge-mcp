@@ -6475,3 +6475,40 @@ def test_a_shown_screen_counts_as_kept_up_from_the_next_interaction(running_brid
     assert kept_up(hud, say) == {"phone_button": False, "say": False}  # shown with this line
     bridge.observe_generation = 6
     assert kept_up(hud, ScreenDisplayable("say", True)) == {"phone_button": True, "say": False}
+
+
+@pytest.mark.parametrize("phase_main_menu,label,expected", [
+    (True, "chapter2", "out_of_context"),
+    (False, "chapter2", "jump"),
+    (False, "nowhere", None),
+])
+def test_session_can_start_the_story_at_a_label(running_bridge, monkeypatch, phase_main_menu, label, expected):
+    import sys
+
+    renpy = running_bridge.renpy
+    bridge = sys.modules["_renforge_runtime"].bridge
+    bridge.current_label = "splashscreen"
+    monkeypatch.setenv("RENFORGE_BRIDGE_START_LABEL", label)
+    renpy.game = types.SimpleNamespace(context=lambda: types.SimpleNamespace(interacting=True))
+    monkeypatch.setitem(running_bridge.globs, "_renforge_game_lifecycle",
+                        lambda: {"phase": "main_menu" if phase_main_menu else "playing", "ending": None})
+    renpy.has_label = lambda name: name == "chapter2"
+
+    class Left(Exception):
+        pass
+
+    def leave(kind):
+        def go(name):
+            raise Left((kind, name))
+        return go
+
+    renpy.jump_out_of_context, renpy.jump = leave("out_of_context"), leave("jump")
+    start = running_bridge.globs["_renforge_start_at_label"]
+    if expected is None:
+        start()
+        assert bridge.start_label_state == {"label": "nowhere", "error": "unknown label"}
+        return
+    with pytest.raises(Left) as left:
+        start()
+    assert left.value.args[0] == (expected, "chapter2")
+    start()  # only once

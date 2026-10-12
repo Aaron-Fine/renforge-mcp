@@ -490,6 +490,7 @@ def launch_game(
     cancel_event: threading.Event | None = None,
     home: str | None = None,
     preferences: str | None = None,
+    start_label: str | None = None,
 ) -> dict:
     """Launch the project with the bridge injected, or reuse a live session.
 
@@ -650,6 +651,9 @@ def launch_game(
         if warp is not None:
             launch_kwargs["warp"] = warp
         launch_kwargs["savedir"] = savedir
+        if start_label:
+            # The bridge leaves for this label at the first safe interaction.
+            launch_kwargs["extra_env"] = {"RENFORGE_BRIDGE_START_LABEL": start_label}
         if timeout is not None:
             launch_kwargs["startup_timeout"] = float(timeout)
         launch_signature = inspect.signature(launch_with_bridge)

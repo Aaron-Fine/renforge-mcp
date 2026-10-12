@@ -117,6 +117,7 @@ def launch_game(
     timeout: float | None = None,
     home: str | None = None,
     preferences: str | None = None,
+    start_label: str | None = None,
 ) -> dict[str, Any] | None:
     """Launch through the matching dashboard, or return ``None`` when none is registered."""
     body: dict[str, Any] = {
@@ -133,6 +134,8 @@ def launch_game(
     }
     if timeout is not None:
         body["timeout"] = timeout
+    if start_label:
+        body["start_label"] = start_label
     return _request(
         project_path,
         "api/live/launch",

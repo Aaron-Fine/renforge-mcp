@@ -38,6 +38,7 @@ def build_wrappers(context):
         cancel_event: threading.Event | None = None,
         home: str | None = None,
         preferences: str | None = None,
+        start_label: str | None = None,
     ) -> dict:
         from ..dashboard_client import (
             launch_game as launch_via_dashboard,
@@ -80,6 +81,7 @@ def build_wrappers(context):
             timeout=timeout,
             home=effective_home,
             preferences=effective_preferences,
+            start_label=start_label,
         )
         if delegated is not None:
             if cancel_event is not None and cancel_event.is_set():
@@ -130,6 +132,7 @@ def build_wrappers(context):
             cancel_event=cancel_event,
             home=effective_home,
             preferences=effective_preferences,
+            start_label=start_label,
         )
 
 
@@ -360,7 +363,7 @@ def build_wrappers(context):
 
 
     def renforge_session(project_path: str, action: str, slot: str | None = None,
-                         authorize: bool = False) -> dict:
+                         label: str | None = None, authorize: bool = False) -> dict:
         """Start, check, save, load, list saves of, or stop a play session.
 
         The canonical lifecycle for agents. ``launch`` uses agent-mode
@@ -372,11 +375,19 @@ def build_wrappers(context):
         def _session() -> dict:
             if action not in SESSION_ACTIONS:
                 return {"ok": False, "error": "action must be one of: " + ", ".join(SESSION_ACTIONS)}
+            if label is not None and action != "launch":
+                return {"ok": False, "error": "label is only for action=launch"}
+            if label is not None and not (isinstance(label, str) and label.strip()):
+                return {"ok": False, "error": "label must be a label name"}
             if action == "launch":
                 # Saves stay apart from the player's own but survive relaunches.
                 from ..state import project_state_dir
                 saves = project_state_dir(project_path) / "saves"
-                return _start_launch(project_path, editor=False, savedir=str(saves))
+                result = _start_launch(project_path, editor=False, savedir=str(saves),
+                                       start_label=label.strip() if label else None)
+                if label and isinstance(result, dict):
+                    result["start_label"] = label.strip()
+                return result
             if action == "status":
                 return _launch_status(project_path)
             if action == "stop":
@@ -388,7 +399,7 @@ def build_wrappers(context):
         return _log_tool_call(
             name="renforge_session",
             params={"project_path": project_path, "action": action, "slot": slot,
-                    "authorize": authorize},
+                    "label": label, "authorize": authorize},
             project_root=project_path,
             fn=_session,
             args=(),

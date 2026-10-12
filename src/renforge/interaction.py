@@ -577,6 +577,9 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
         "label": label,
         # True when this statement already finished once since launch.
         "seen": raw.get("seen") if isinstance(raw.get("seen"), bool) else None,
+        # Set when the session started at a label: earlier story never ran.
+        "started_at_label": raw.get("started_at_label") if isinstance(raw.get("started_at_label"), str) else None,
+        "start_label_error": raw.get("start_label_error") if isinstance(raw.get("start_label_error"), str) else None,
         "lifecycle": {"phase": phase, "ending": ending},
         "dialogue": _dialogue(raw),
         "text_revealing": raw.get("text_revealing"),
