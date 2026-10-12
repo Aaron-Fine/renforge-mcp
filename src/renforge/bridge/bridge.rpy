@@ -7438,6 +7438,14 @@ init python:
                 if operation["steps"] >= operation["max_steps"]:
                     _renforge_progress_finish("max_steps")
             bridge.observe_generation = int(getattr(bridge, "observe_generation", 0)) + 1
+            if not getattr(bridge, "transitions_applied", False):
+                # Preferences exist by the first interaction. The launcher asks
+                # for this only when the session's preferences are isolated.
+                bridge.transitions_applied = True
+                if os.environ.get("RENFORGE_BRIDGE_TRANSITIONS") == "off":
+                    prefs = getattr(renpy.store, "_preferences", None)
+                    if prefs is not None and hasattr(prefs, "transitions"):
+                        prefs.transitions = 0
             # A handler whose action opened a nested interaction (ShowMenu
             # outside the game menu, call_in_new_context) would not return
             # until that interaction ends. Reply now; observe shows its state.

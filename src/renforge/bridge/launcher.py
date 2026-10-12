@@ -1,7 +1,7 @@
 """Launch a Ren'Py project with the RenForge bridge injected.
 
 Injects ``bridge.rpy`` into ``<project>/game/``, starts the game, waits for the
-bridge to publish ready metadata under ``<project>/.renforge/control/bridge.json``,
+bridge to publish ready metadata under ``<project state>/control/bridge.json``,
 and returns a connected :class:`~renforge.bridge.client.BridgeClient`. Closing the
 session force-kills the game and removes owned control metadata and injected files.
 """
@@ -54,6 +54,7 @@ _EDITOR_CJK_LANGUAGES: frozenset[str] = frozenset({"zh-CN"})
 
 _BRIDGE_STARTUP_ERROR_PREFIX: str = "RENFORGE_BRIDGE_STARTUP_ERROR="
 STARTUP_TIMEOUT_ENV: str = "RENFORGE_STARTUP_TIMEOUT"
+TRANSITIONS_ENV: str = "RENFORGE_TRANSITIONS"
 # Launch runs in the background and a process that exits fails at once, so
 # this only bounds a game that hangs. The first run of a large game can spend
 # well over a minute building caches.
@@ -105,7 +106,7 @@ class ProjectBridgeLock:
                 "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
                 exc.message,
                 phase="preparing_control_directory",
-                suggested_fix="Remove unsafe paths under .renforge/control and retry.",
+                suggested_fix="Remove unsafe paths in the project's RenForge control folder and retry.",
             ) from exc
 
         try:
@@ -115,14 +116,14 @@ class ProjectBridgeLock:
                 "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
                 str(exc),
                 phase="preparing_control_directory",
-                suggested_fix="Remove unsafe paths under .renforge/control and retry.",
+                suggested_fix="Remove unsafe paths in the project's RenForge control folder and retry.",
             ) from exc
         except OSError as exc:
             raise LaunchError(
                 "BRIDGE_PROJECT_LOCK_FAILED",
                 f"Could not open the project bridge lock: {exc}",
                 phase="acquiring_project_lock",
-                suggested_fix="Check write permissions under .renforge/control/.",
+                suggested_fix="Check write permissions in the project's RenForge control folder.",
             ) from exc
 
         try:
@@ -145,7 +146,7 @@ class ProjectBridgeLock:
                 "BRIDGE_PROJECT_LOCK_FAILED",
                 f"Could not lock the project bridge: {exc}",
                 phase="acquiring_project_lock",
-                suggested_fix="Check write permissions under .renforge/control/.",
+                suggested_fix="Check write permissions in the project's RenForge control folder.",
             ) from exc
         self._file = lock_file
 
@@ -937,21 +938,21 @@ def _launch_after_project_lock(
             "BRIDGE_INFO_CONFLICT",
             "Bridge metadata conflicted with the reserved launch identity.",
             phase="reserving_bridge_metadata",
-            suggested_fix="Remove the conflicting .renforge/control/bridge.json and retry.",
+            suggested_fix="Remove the conflicting bridge.json from the project's RenForge control folder and retry.",
         ) from exc
     except PrivatePathError as exc:
         raise LaunchError(
             "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
             "Bridge metadata path is unsafe and was left untouched.",
             phase="reserving_bridge_metadata",
-            suggested_fix="Remove unsafe paths under .renforge/control and retry.",
+            suggested_fix="Remove unsafe paths in the project's RenForge control folder and retry.",
         ) from exc
     except Exception as exc:
         raise LaunchError(
             "BRIDGE_MANIFEST_PUBLICATION_FAILED",
             f"Could not reserve starting bridge metadata: {exc}",
             phase="reserving_bridge_metadata",
-            suggested_fix="Check write permissions under .renforge/control/.",
+            suggested_fix="Check write permissions in the project's RenForge control folder.",
         ) from exc
     project_lock.owned_session_id = session_id
 
@@ -960,6 +961,11 @@ def _launch_after_project_lock(
     env["RENFORGE_BRIDGE_PROJECT_ROOT"] = str(project.root)
     env["RENFORGE_BRIDGE_CONTROL_DIR"] = str(control_dir(project.root))
     env["RENFORGE_BRIDGE_PORT"] = str(port)
+    # Transitions only slow an agent down and leave half-drawn frames to wait
+    # out. Turn them off when the session's preferences are its own, so the
+    # change never reaches the player's real preferences.
+    if isolation.preferences_mode == "empty" and env.get(TRANSITIONS_ENV, "").strip().lower() != "on":
+        env["RENFORGE_BRIDGE_TRANSITIONS"] = "off"
     if editor_endpoint is not None:
         env.update(
             _editor_environment(

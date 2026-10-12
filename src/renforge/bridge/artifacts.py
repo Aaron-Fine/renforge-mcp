@@ -1,4 +1,4 @@
-"""Schema-3 session artifact ownership under ``.renforge/control/artifacts.json``."""
+"""Schema-3 session artifact ownership under ``<project state>/control/artifacts.json``."""
 
 from __future__ import annotations
 
@@ -429,7 +429,7 @@ def _publish_intent(project_root: Path, manifest: Mapping[str, Any]) -> None:
             "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
             exc.message,
             phase="publishing_artifact_intent",
-            suggested_fix="Remove unsafe paths under .renforge/control and retry.",
+            suggested_fix="Remove unsafe paths in the project's RenForge control folder and retry.",
         ) from exc
     fsync_directory(path.parent)
 
@@ -774,7 +774,7 @@ def _validate_owned_bridge_info(
             "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
             "Bridge metadata path is a symlink and was left untouched.",
             phase="cleaning_bridge_artifacts",
-            suggested_fix="Remove unsafe paths under .renforge/control and retry.",
+            suggested_fix="Remove unsafe paths in the project's RenForge control folder and retry.",
         )
     try:
         read_bridge_info(
@@ -789,7 +789,7 @@ def _validate_owned_bridge_info(
             "BRIDGE_INFO_CONFLICT",
             "Bridge metadata failed validation and was left untouched.",
             phase="cleaning_bridge_artifacts",
-            suggested_fix="Remove the conflicting .renforge/control/bridge.json and retry.",
+            suggested_fix="Remove the conflicting bridge.json from the project's RenForge control folder and retry.",
         ) from exc
     return info_path
 

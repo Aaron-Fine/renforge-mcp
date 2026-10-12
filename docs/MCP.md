@@ -218,6 +218,11 @@ can read and write host saves. When `RENFORGE_POLICY=enforce`, pass
 `authorize=true`. The same isolation knobs exist on `renforge_jump` and
 `renforge_new_game`.
 
+Sessions with isolated preferences (the default) also start with scene
+transitions turned off, so dissolves and fades never leave half-drawn frames
+to wait out. Set `RENFORGE_TRANSITIONS=on` on the server to keep them. A
+session using the player's own preferences is never changed.
+
 ## Where RenForge keeps its files
 
 RenForge never writes into a game's folder except for the bridge script it

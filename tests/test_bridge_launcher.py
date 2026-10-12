@@ -202,6 +202,9 @@ def test_launch_with_bridge_builds_run_command(monkeypatch, tmp_path: Path, warp
     assert len(env["RENFORGE_BRIDGE_TOKEN"]) == 64
     assert all(ch in "0123456789abcdef" for ch in env["RENFORGE_BRIDGE_TOKEN"])
     assert env["RENFORGE_BRIDGE_PROJECT_ROOT"] == str(project_root.resolve())
+    assert env["RENFORGE_BRIDGE_CONTROL_DIR"] == str(control_dir(project_root))
+    # Isolated preferences: transitions are turned off for the agent.
+    assert env["RENFORGE_BRIDGE_TRANSITIONS"] == "off"
     starting = control_dir(project_root) / "bridge.json"
     # reserved before spawn; fake popen overwrote it to ready for the ping path
     assert starting.exists()

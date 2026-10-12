@@ -6186,3 +6186,17 @@ def test_an_action_list_that_takes_a_save_screenshot_is_menu_chrome(running_brid
     chrome = globs["_renforge_engine_chrome_action"]
     assert chrome([namespace["FileTakeScreenshot"](), Show()]) is True
     assert chrome([Show()]) is False
+
+
+def test_isolated_session_turns_transitions_off_once(running_bridge, monkeypatch):
+    renpy = running_bridge.renpy
+    renpy.store._preferences = types.SimpleNamespace(transitions=2)
+    monkeypatch.setenv("RENFORGE_BRIDGE_TRANSITIONS", "off")
+
+    renpy.config.start_interact_callbacks[0]()
+    assert renpy.store._preferences.transitions == 0
+
+    # Applied once: a player (or agent) may turn them back on afterwards.
+    renpy.store._preferences.transitions = 2
+    renpy.config.start_interact_callbacks[0]()
+    assert renpy.store._preferences.transitions == 2

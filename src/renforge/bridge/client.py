@@ -58,7 +58,7 @@ class BridgeClient:
         """Build a client from private control-directory bridge metadata.
 
         The running bridge publishes host/port/token under
-        ``<project_root>/.renforge/control/bridge.json`` on startup.
+        ``<project state>/control/bridge.json`` on startup.
         """
         # Local import avoids the cycle: control.py imports BridgeProtocolError.
         from renforge.bridge.control import read_bridge_info

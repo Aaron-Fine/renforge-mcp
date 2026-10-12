@@ -13,6 +13,10 @@ versioning.
 - Launches in a Wayland session use `SDL_VIDEODRIVER=wayland,x11` so games
   start while the screen is locked. The startup deadline defaults to 180 s and
   reads `RENFORGE_STARTUP_TIMEOUT`.
+- Sessions with isolated preferences start with transitions off
+  (`RENFORGE_TRANSITIONS=on` keeps them). `observe`, `act`, and
+  `advance_until` return a compact observation by default (`detail=full` for
+  every field), and `act` accepts `observation_id` alone as its guard.
 
 ### Added
 
