@@ -108,6 +108,7 @@ init python:
             self.progression = None
             self.pointer_click = None
             self.current_request = None
+            self.nested_reply_request = None
             self.say_ended_generation = None
             self.pending_ending = None
             self.ending = None
@@ -4005,6 +4006,13 @@ init python:
                 caption = getattr(item, "caption", None)
                 if action is None or caption is None:
                     continue
+                # Show the caption as the screen does, with [variables] substituted.
+                substitute = getattr(getattr(renpy, "substitutions", None), "substitute", None)
+                try:
+                    if callable(substitute) and isinstance(caption, builtins.str):
+                        caption = substitute(caption)[0]
+                except Exception:
+                    pass
                 entries.append((screen, index, str(caption), action))
                 index += 1
         return entries
@@ -4018,6 +4026,11 @@ init python:
         "QuickSave", "QuickLoad", "FileSave", "FileLoad", "FileDelete",
         "Help", "Quit", "MainMenu", "Screenshot", "OpenURL",
         "SetMute", "ToggleMute", "SetMixer",
+    ))
+
+
+    _RENFORGE_GAME_MENU_SCREENS = frozenset((
+        None, "game_menu", "save", "load", "preferences", "history", "help", "about",
     ))
 
 
@@ -4038,6 +4051,10 @@ init python:
         for action in actions:
             cls = type(action)
             if cls.__name__ not in _RENFORGE_CHROME_ACTIONS:
+                return False
+            # ShowMenu("map") is gameplay; only Ren'Py's standard game-menu
+            # screens are interface chrome.
+            if cls.__name__ == "ShowMenu" and getattr(action, "screen", None) not in _RENFORGE_GAME_MENU_SCREENS:
                 return False
             code = next((getattr(value, "__code__", None) for value in vars(cls).values()
                          if getattr(value, "__code__", None) is not None), None)
@@ -5956,7 +5973,12 @@ init python:
                         correlation = "%s-%s" % (req.command, bridge.interaction_counter)
                     bridge.current_correlation_id = correlation
                     bridge.current_request = req
-                    result = handler(req.payload)
+                    outer_nested = getattr(bridge, "nested_reply_request", None)
+                    bridge.nested_reply_request = req
+                    try:
+                        result = handler(req.payload)
+                    finally:
+                        bridge.nested_reply_request = outer_nested
                     if (
                         isinstance(result, builtins.dict)
                         and explicit_correlation is not None
@@ -7143,6 +7165,15 @@ init python:
                 if operation["steps"] >= operation["max_steps"]:
                     _renforge_progress_finish("max_steps")
             bridge.observe_generation = int(getattr(bridge, "observe_generation", 0)) + 1
+            # A handler whose action opened a nested interaction (ShowMenu
+            # outside the game menu, call_in_new_context) would not return
+            # until that interaction ends. Reply now; observe shows its state.
+            req = getattr(bridge, "nested_reply_request", None)
+            if req is not None and not req.event.is_set():
+                bridge.nested_reply_request = None
+                req.result = {"ok": True, "nested_interaction": True, "command": req.command,
+                              "note": "the action opened a nested interaction; observe to see it"}
+                req.event.set()
 
         # 8.1+ runs the list. 8.0 runs the single ``label_callback`` and has
         # no list; assigning one would not be called.

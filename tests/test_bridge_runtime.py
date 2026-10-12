@@ -6019,3 +6019,25 @@ def test_unfocused_menu_actions_are_sensitive_distinct_and_guarded(running_bridg
     clicked = running_bridge.client.click_element(id='branch_picker/item/0')
     assert clicked['ok'] and clicked['via'] == 'action'
     assert calls == [22, 1]
+
+
+def test_nested_interaction_replies_before_the_handler_returns(running_bridge):
+    """ShowMenu outside the game menu runs a nested interaction inside the handler."""
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    release = threading.Event()
+
+    def handler(payload):
+        for callback in list(renpy.config.start_interact_callbacks):
+            callback()
+        release.wait(5)
+        return {"ok": True, "late": True}
+
+    globs["_RENFORGE_HANDLERS"]["rf_nested"] = handler
+    try:
+        reply = running_bridge.client.request("rf_nested", {})
+    finally:
+        release.set()
+        del globs["_RENFORGE_HANDLERS"]["rf_nested"]
+    assert reply["ok"] is True
+    assert reply["nested_interaction"] is True
