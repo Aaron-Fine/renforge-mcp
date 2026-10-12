@@ -3988,7 +3988,7 @@ init python:
                 seen.add(id(screen))
         for focus in getattr(getattr(renpy.display, "focus", None), "focus_list", ()):
             screen = getattr(focus, "screen", None)
-            if screen is not None and id(screen) not in seen:
+            if screen is not None and id(screen) not in seen and not _renforge_screen_leaving(screen):
                 screens.append(screen)
                 seen.add(id(screen))
         entries = []
@@ -4430,6 +4430,12 @@ init python:
             "bounds_reason": "not in completed render", "render_path": None})
 
 
+    def _renforge_screen_leaving(screen):
+        """True for a screen that is hiding (HIDE) or the old side of a transition (OLD)."""
+        screen_module = getattr(renpy.display, "screen", None)
+        return getattr(screen, "phase", None) in (getattr(screen_module, "HIDE", 3), getattr(screen_module, "OLD", 4))
+
+
     def _renforge_scene_inventory():
         nodes = []
         seen = set()
@@ -4444,6 +4450,11 @@ init python:
             children = []
             extra_widgets = []
             if class_name == "ScreenDisplayable":
+                # Like ScreenDisplayable.find_focusable: a screen that is hiding
+                # (HIDE) or the old side of a transition (OLD) takes no input,
+                # even when a lingering hide transform keeps it drawn.
+                if _renforge_screen_leaving(node):
+                    continue
                 screen_node = node
                 screen_name = _renforge_observe_screen_node_name(node) or screen_name
                 widgets = getattr(node, "widgets", None)

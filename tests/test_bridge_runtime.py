@@ -6060,3 +6060,33 @@ def test_a_canvas_that_blits_nothing_is_not_visible(running_bridge):
     assert hidden['visible'] is False and hidden['bounds_reason'] == 'renders nothing'
     [shown] = geometry['occurrences'][id(drawn)]
     assert shown['visible'] is True
+
+
+
+def test_a_hiding_choice_screen_offers_no_menu_entries(running_bridge):
+    """A lingering hide transform keeps the screen drawn, but it takes no input."""
+    from renforge.observe import classify
+    renpy = running_bridge.renpy
+
+    class ScreenDisplayable:
+        screen_name = ('choice', None)
+        layer = 'screens'
+        modal = False
+        hiding = False
+        widgets = {}
+
+    item = types.SimpleNamespace(caption="Screaming Gophers", action=object())
+    screen = ScreenDisplayable()
+    screen.scope = {"items": [item]}
+    screen.children = []
+    screen.phase = 3
+    _arm_stable_interaction(running_bridge, generation=11)
+    renpy.game.context = lambda: types.SimpleNamespace(interacting=True,
+        scene_lists=types.SimpleNamespace(layers={'screens': [types.SimpleNamespace(displayable=screen)]}))
+    renpy.display.focus.focus_list[:] = []
+    renpy.display.render = types.SimpleNamespace(screen_render=_completed_render(800, 600, [screen]))
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    assert snapshot['controls'] == []
+    screen.phase = 2
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    assert [control['text'] for control in snapshot['controls']] == ['Screaming Gophers']
