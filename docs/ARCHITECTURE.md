@@ -136,7 +136,7 @@ Real-engine fixtures treat `examples/demo_game` as read-only input and copy it
 to pytest-owned temporary directories before RenForge injects bridge/editor
 files or Ren'Py writes caches and saves. CI caches only the SDK. Failure
 artifacts use an explicit allowlist for logs, tracebacks, screenshots, and
-autopilot output; `.renforge/control` is never uploaded because it contains the
+autopilot output; the `control` state folder is never uploaded because it contains the
 session credential.
 
 The SDK test files retain their small local fixtures for this first CI layer.

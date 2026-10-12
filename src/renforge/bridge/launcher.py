@@ -40,6 +40,7 @@ from .client import BridgeClient, BridgeConfig, BridgeProtocolError
 from .control import read_bridge_info, write_starting_bridge_info
 from ..editor import BridgeRuntimeProbe, EditorCoordinator, EditorEndpoint
 from ..util.files import PrivatePathError, ensure_private_directory
+from ..state import control_dir
 
 _BRIDGE_RESOURCE: Path = Path(__file__).parent / "bridge.rpy"
 _EDITOR_RESOURCE: Path = Path(__file__).parent / "editor.rpy"
@@ -83,13 +84,13 @@ class _LockPathUnsafe(Exception):
 class ProjectBridgeLock:
     """A non-blocking, process-wide lock for one project's bridge artifacts.
 
-    Owns ``<canonical-root>/.renforge/control/bridge.lock``. ``acquire()``
+    Owns ``<project state>/control/bridge.lock``. ``acquire()``
     validates/creates the private control directory before touching the lock.
     """
 
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root)
-        self.path = self.project_root / ".renforge" / "control" / "bridge.lock"
+        self.path = control_dir(self.project_root) / "bridge.lock"
         self._file: Any | None = None
         self.is_deferred = False
         self.owned_session_id: str | None = None
@@ -957,6 +958,7 @@ def _launch_after_project_lock(
     env["RENFORGE_BRIDGE_TOKEN"] = token
     env["RENFORGE_BRIDGE_SESSION_ID"] = session_id
     env["RENFORGE_BRIDGE_PROJECT_ROOT"] = str(project.root)
+    env["RENFORGE_BRIDGE_CONTROL_DIR"] = str(control_dir(project.root))
     env["RENFORGE_BRIDGE_PORT"] = str(port)
     if editor_endpoint is not None:
         env.update(

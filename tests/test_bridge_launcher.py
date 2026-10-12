@@ -22,6 +22,7 @@ from renforge.editor.exceptions import EditorError
 from renforge.launch_env import LaunchError
 from renforge.project import RenpyProject
 from renforge.sdk import RenpySdk
+from renforge.state import control_dir, project_state_dir
 
 
 _LAUNCHER_NAME = "renpy.exe" if os.name == "nt" else "renpy.sh"
@@ -37,7 +38,7 @@ def test_legacy_sdk_rejected_before_project_lock_or_artifacts(tmp_path, monkeypa
     with pytest.raises(LaunchError) as exc:
         launch_with_bridge(sdk, RenpyProject(tmp_path))
     assert exc.value.code == "UNSUPPORTED_RENPY_VERSION"
-    assert not (tmp_path / ".renforge" / "control").exists()
+    assert not (control_dir(tmp_path)).exists()
 
 
 class _FakeProcess:
@@ -105,11 +106,11 @@ def _valid_token(label: str = "token") -> str:
 
 
 def _bridge_info_path(project_root: Path) -> Path:
-    return project_root / ".renforge" / "control" / "bridge.json"
+    return control_dir(project_root) / "bridge.json"
 
 
 def _artifacts_path(project_root: Path) -> Path:
-    return project_root / ".renforge" / "control" / "artifacts.json"
+    return control_dir(project_root) / "artifacts.json"
 
 
 def _owned_bridge_rpy(project_root: Path) -> Path:
@@ -201,7 +202,7 @@ def test_launch_with_bridge_builds_run_command(monkeypatch, tmp_path: Path, warp
     assert len(env["RENFORGE_BRIDGE_TOKEN"]) == 64
     assert all(ch in "0123456789abcdef" for ch in env["RENFORGE_BRIDGE_TOKEN"])
     assert env["RENFORGE_BRIDGE_PROJECT_ROOT"] == str(project_root.resolve())
-    starting = project_root / ".renforge" / "control" / "bridge.json"
+    starting = control_dir(project_root) / "bridge.json"
     # reserved before spawn; fake popen overwrote it to ready for the ping path
     assert starting.exists()
     session.close(timeout=0.1)
@@ -376,7 +377,7 @@ def test_remove_bridge_artifacts_deletes_injected_and_runtime_files(tmp_path: Pa
     legacy_inject.write_text("# unowned\n", encoding="utf-8")
     (game / "renforge_bridge.rpyc").write_bytes(b"\x00")
     (tmp_path / "traceback.txt").write_text("boom", encoding="utf-8")
-    renforge = tmp_path / ".renforge"
+    renforge = project_state_dir(tmp_path)
     renforge.mkdir(parents=True, exist_ok=True)
     legacy = renforge / "bridge.json"
     legacy.write_text('{"legacy":true}', encoding="utf-8")
@@ -452,7 +453,7 @@ def test_failed_launch_removes_every_generated_bridge_artifact(monkeypatch, tmp_
 
     assert not list((root / "game").glob("zzrenforge_bridge_*.rpy"))
     assert not list((root / "game").glob("zzrenforge_bridge_*.rpyc"))
-    assert not (root / ".renforge" / "control" / "bridge.json").exists()
+    assert not (control_dir(root) / "bridge.json").exists()
     assert not _artifacts_path(root).exists()
     # Unowned traceback is preserved (schema-3 cleanup never deletes it).
     assert (root / "traceback.txt").read_text(encoding="utf-8") == "preexisting"
@@ -514,7 +515,7 @@ def test_launch_cancellation_stops_process_and_cleans_artifacts(monkeypatch, tmp
     assert getattr(excinfo.value, "code", None) == "LAUNCH_CANCELLED"
     assert process.terminated is True
     assert not list((project_root / "game").glob("zzrenforge_bridge_*.rpy"))
-    assert not (project_root / ".renforge" / "control" / "bridge.json").exists()
+    assert not (control_dir(project_root) / "bridge.json").exists()
 
 
 def test_second_launch_same_project_fails_without_touching_first_session(
@@ -534,7 +535,7 @@ def test_second_launch_same_project_fails_without_touching_first_session(
 
     first = launch_with_bridge(sdk, project, token=_valid_token("first-token"))
     injected_before = _owned_bridge_rpy(project_root).read_bytes()
-    manifest_before = (project_root / ".renforge" / "control" / "bridge.json").read_bytes()
+    manifest_before = (control_dir(project_root) / "bridge.json").read_bytes()
 
     with pytest.raises(LaunchError) as excinfo:
         launch_with_bridge(sdk, project, token=_valid_token("second-token"))
@@ -543,11 +544,11 @@ def test_second_launch_same_project_fails_without_touching_first_session(
     assert getattr(excinfo.value, "phase", None) == "acquiring_project_lock"
     assert popen_calls["count"] == 1
     assert _owned_bridge_rpy(project_root).read_bytes() == injected_before
-    assert (project_root / ".renforge" / "control" / "bridge.json").read_bytes() == manifest_before
+    assert (control_dir(project_root) / "bridge.json").read_bytes() == manifest_before
 
     first.close(timeout=0.1)
-    assert (project_root / ".renforge" / "control" / "bridge.lock").exists()
-    assert not (project_root / ".renforge" / "bridge.lock").exists()
+    assert (control_dir(project_root) / "bridge.lock").exists()
+    assert not (project_state_dir(project_root) / "bridge.lock").exists()
 
 
 def test_sessions_for_different_projects_are_isolated(monkeypatch, tmp_path: Path) -> None:
@@ -567,9 +568,9 @@ def test_sessions_for_different_projects_are_isolated(monkeypatch, tmp_path: Pat
     session_a.close(timeout=0.1)
 
     assert not list((root_a / "game").glob("zzrenforge_bridge_*.rpy"))
-    assert not (root_a / ".renforge" / "control" / "bridge.json").exists()
+    assert not (control_dir(root_a) / "bridge.json").exists()
     assert _owned_bridge_rpy(root_b).exists()
-    assert json.loads((root_b / ".renforge" / "control" / "bridge.json").read_text())["token"] == _valid_token("token-b")
+    assert json.loads((control_dir(root_b) / "bridge.json").read_text())["token"] == _valid_token("token-b")
 
     session_b.close(timeout=0.1)
 
@@ -674,7 +675,7 @@ def test_allowlisted_bridge_startup_error_fails_before_timeout(monkeypatch, tmp_
 
     assert excinfo.value.code == "BRIDGE_INFO_CONFLICT"
     assert excinfo.value.phase == "waiting_for_bridge"
-    assert not (project_root / ".renforge" / "control" / "bridge.json").exists()
+    assert not (control_dir(project_root) / "bridge.json").exists()
 
 
 
@@ -701,7 +702,7 @@ def test_close_keeps_lock_and_artifacts_until_process_exit(
     assert "process_alive" in first_close["failed"]
     assert first.closed is False
     assert _owned_bridge_rpy(project_root).exists()
-    assert (project_root / ".renforge" / "control" / "bridge.json").exists()
+    assert (control_dir(project_root) / "bridge.json").exists()
     with pytest.raises(LaunchError) as excinfo:
         launch_with_bridge(sdk, project, token=_valid_token("blocked-token"))
     assert excinfo.value.code == "BRIDGE_PROJECT_LOCKED"
@@ -712,7 +713,7 @@ def test_close_keeps_lock_and_artifacts_until_process_exit(
     assert retry_close.get("failed") is None
     assert first.closed is True
     assert not list((project_root / "game").glob("zzrenforge_bridge_*.rpy"))
-    assert not (project_root / ".renforge" / "control" / "bridge.json").exists()
+    assert not (control_dir(project_root) / "bridge.json").exists()
 
     second = launch_with_bridge(sdk, project, token=_valid_token("second-token"))
     assert launches["count"] == 2
@@ -782,7 +783,7 @@ def test_lock_file_open_permission_error_is_not_reported_as_contention(
 
 def test_lock_rejects_symlink_without_repair(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
-    control = project_root / ".renforge" / "control"
+    control = control_dir(project_root)
     control.mkdir(parents=True)
     os.chmod(control, 0o700)
     victim = tmp_path / "victim"
@@ -797,7 +798,7 @@ def test_lock_rejects_symlink_without_repair(tmp_path: Path) -> None:
     assert excinfo.value.phase == "preparing_control_directory"
     assert victim.read_bytes() == b"secret-bytes"
     assert lock_path.is_symlink()
-    assert not (project_root / ".renforge" / "bridge.lock").exists()
+    assert not (project_state_dir(project_root) / "bridge.lock").exists()
 
 
 def test_preplanted_unsafe_bridge_info_fails_closed_without_unlink(
@@ -805,7 +806,7 @@ def test_preplanted_unsafe_bridge_info_fails_closed_without_unlink(
 ) -> None:
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)
-    control = project_root / ".renforge" / "control"
+    control = control_dir(project_root)
     control.mkdir(parents=True)
     if os.name != "nt":
         os.chmod(control, 0o700)
@@ -839,7 +840,7 @@ def test_preplanted_unsafe_bridge_info_fails_closed_without_unlink(
 
 def test_lock_rejects_world_writable_control_dir(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
-    control = project_root / ".renforge" / "control"
+    control = control_dir(project_root)
     control.mkdir(parents=True)
     os.chmod(control, 0o777)
 
@@ -1626,7 +1627,7 @@ def test_no_widget_id_is_claimed_by_two_region_screens() -> None:
 def test_private_directory_create_and_validate(tmp_path: Path) -> None:
     from renforge.util.files import ensure_private_directory
 
-    control = tmp_path / ".renforge" / "control"
+    control = control_dir(tmp_path)
     created = ensure_private_directory(control)
     assert created == (control if control.is_absolute() else control.absolute())
     assert created.is_dir()
@@ -1662,18 +1663,19 @@ def test_private_directory_rejects_ancestor_symlink_without_touching_victim(
 ) -> None:
     from renforge.util.files import PrivatePathError, ensure_private_directory
 
-    # project/.renforge is a symlink outside the project; control under it must fail closed.
+    # The project's state folder is a symlink elsewhere; control under it must fail closed.
     project = tmp_path / "project"
     project.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
     marker = outside / "secret.txt"
     marker.write_text("keep-me", encoding="utf-8")
-    renforge_link = project / ".renforge"
+    renforge_link = project_state_dir(project)
+    renforge_link.parent.mkdir(parents=True, exist_ok=True)
     renforge_link.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(PrivatePathError) as exc_info:
-        ensure_private_directory(project / ".renforge" / "control")
+        ensure_private_directory(control_dir(project))
     assert exc_info.value.code == "PRIVATE_DIRECTORY_UNSAFE"
     assert marker.read_text(encoding="utf-8") == "keep-me"
     assert not (outside / "control").exists()

@@ -16,8 +16,9 @@ init python:
     #   RENFORGE_BRIDGE_SESSION_ID   required 32-lowercase-hex session id
     #   RENFORGE_BRIDGE_PROJECT_ROOT required canonical absolute project root
     #   RENFORGE_BRIDGE_PORT         default 0 (an ephemeral port is chosen)
+    #   RENFORGE_BRIDGE_CONTROL_DIR  private control folder, outside the game
     # The launcher reserves starting metadata at
-    #   <project>/.renforge/control/bridge.json
+    #   <control dir>/bridge.json
     # Before serving, the bridge validates that record and publishes ready.
 
     import base64
@@ -6332,13 +6333,17 @@ init python:
                 return False
         return True
 
+    def _renforge_bridge_control_dir(project_root):
+        # RenForge keeps its state outside the game; the launcher says where.
+        import os as _os
+        configured = (_os.environ.get("RENFORGE_BRIDGE_CONTROL_DIR") or "").strip()
+        if configured:
+            return configured
+        return _os.path.join(project_root, ".renforge", "control")
+
     def _renforge_bridge_info_path(project_root):
         import os as _os
-        return _os.path.join(project_root, ".renforge", "control", "bridge.json")
-
-    def _renforge_bridge_control_dir(project_root):
-        import os as _os
-        return _os.path.join(project_root, ".renforge", "control")
+        return _os.path.join(_renforge_bridge_control_dir(project_root), "bridge.json")
 
     def _renforge_bridge_win_create_file(path, access, share_mode, creation_disposition, flags_and_attrs):
         import ctypes as _ctypes
@@ -6866,8 +6871,8 @@ init python:
         import os as _os
         import stat as _stat
 
-        renforge_dir = _os.path.join(project_root, ".renforge")
-        control_dir = _os.path.join(renforge_dir, "control")
+        control_dir = _renforge_bridge_control_dir(project_root)
+        renforge_dir = _os.path.dirname(control_dir)
         # Reject symlink/reparse ancestors before accepting control contents.
         if _renforge_bridge_path_is_symlink(renforge_dir):
             raise OSError("renforge directory must not be a symlink")

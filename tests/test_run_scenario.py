@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from renforge.tools import live
+from renforge.state import project_state_dir
 
 
 def test_run_scenario_set_wait_assert_happy_path(monkeypatch, tmp_path):
@@ -91,8 +92,9 @@ def test_run_scenario_capture_rejects_parent_traversal(monkeypatch, tmp_path):
 def test_run_scenario_capture_rejects_symlinked_capture_directory(monkeypatch, tmp_path):
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
     outside.mkdir()
-    (tmp_path / ".renforge").mkdir()
-    (tmp_path / ".renforge" / "captures").symlink_to(outside, target_is_directory=True)
+    project_state_dir(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+    (project_state_dir(tmp_path)).mkdir()
+    (project_state_dir(tmp_path) / "captures").symlink_to(outside, target_is_directory=True)
     monkeypatch.setattr(live, "screenshot_png", lambda path: b"png")
 
     result = live.run_scenario(
@@ -109,7 +111,7 @@ def test_run_scenario_capture_rejects_symlinked_capture_directory(monkeypatch, t
 def test_run_scenario_capture_overwrites_only_named_file_in_capture_directory(
     monkeypatch, tmp_path
 ):
-    capture_dir = tmp_path / ".renforge" / "captures"
+    capture_dir = project_state_dir(tmp_path) / "captures"
     capture_dir.mkdir(parents=True)
     target = capture_dir / "frame.png"
     target.write_bytes(b"old")
@@ -130,7 +132,7 @@ def test_run_scenario_capture_overwrites_only_named_file_in_capture_directory(
 
 
 def test_run_scenario_capture_rejects_symlinked_destination(monkeypatch, tmp_path):
-    capture_dir = tmp_path / ".renforge" / "captures"
+    capture_dir = project_state_dir(tmp_path) / "captures"
     capture_dir.mkdir(parents=True)
     outside = tmp_path / "outside.png"
     outside.write_bytes(b"keep")

@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from renforge.bridge.client import BridgeClient, BridgeConfig, BridgeProtocolError
+from renforge.state import control_dir, project_state_dir
 
 
 def _load_bridge_body():
@@ -229,6 +230,7 @@ def running_bridge(tmp_path, monkeypatch):
     monkeypatch.setenv("RENFORGE_BRIDGE_SESSION_ID", session_id)
     monkeypatch.setenv("RENFORGE_BRIDGE_PROJECT_ROOT", str(project_root))
     monkeypatch.setenv("RENFORGE_BRIDGE_PORT", "0")
+    monkeypatch.setenv("RENFORGE_BRIDGE_CONTROL_DIR", str(control_dir(project_root)))
 
     store = types.SimpleNamespace(score=7, player_name="Rin", _hidden="x")
 
@@ -302,7 +304,7 @@ def running_bridge(tmp_path, monkeypatch):
     pump_thread.start()
 
     # Wait for the listener to publish ready metadata under the private control path.
-    info_path = project_root / ".renforge" / "control" / "bridge.json"
+    info_path = control_dir(project_root) / "bridge.json"
     ready_info = None
     for _ in range(300):
         try:
@@ -333,7 +335,7 @@ def running_bridge(tmp_path, monkeypatch):
 
         _win_validate_protected_dacl(info_path)
     assert not info_path.is_symlink()
-    assert not (project_root / ".renforge" / "bridge.json").exists()
+    assert not (project_state_dir(project_root) / "bridge.json").exists()
 
     client = BridgeClient(
         BridgeConfig(
@@ -391,6 +393,8 @@ def _exec_bridge_with_env(tmp_path, monkeypatch, *, env: dict[str, str], seed_st
         monkeypatch.setenv("RENFORGE_BRIDGE_PROJECT_ROOT", str(project_root))
     if "RENFORGE_BRIDGE_PORT" not in env:
         monkeypatch.setenv("RENFORGE_BRIDGE_PORT", "0")
+    if "RENFORGE_BRIDGE_CONTROL_DIR" not in env:
+        monkeypatch.setenv("RENFORGE_BRIDGE_CONTROL_DIR", str(control_dir(project_root)))
 
     store = types.SimpleNamespace()
     renpy = _fake_renpy(store)
@@ -412,9 +416,9 @@ def _exec_bridge_with_env(tmp_path, monkeypatch, *, env: dict[str, str], seed_st
 
 
 def test_bridge_publishes_ready_under_private_control_path(running_bridge):
-    info_path = running_bridge.project_root / ".renforge" / "control" / "bridge.json"
+    info_path = control_dir(running_bridge.project_root) / "bridge.json"
     assert info_path.exists()
-    assert not (running_bridge.project_root / ".renforge" / "bridge.json").exists()
+    assert not (project_state_dir(running_bridge.project_root) / "bridge.json").exists()
     assert running_bridge.client.ping().get("pong") is True
 
 
@@ -436,8 +440,8 @@ def test_bridge_startup_emits_info_conflict_when_starting_record_missing(tmp_pat
         time.sleep(0.01)
     assert bridge.stop.is_set()
     assert "RENFORGE_BRIDGE_STARTUP_ERROR=BRIDGE_INFO_CONFLICT\n" in stderr.getvalue()
-    assert not (project_root / ".renforge" / "control" / "bridge.json").exists()
-    assert not (project_root / ".renforge" / "bridge.json").exists()
+    assert not (control_dir(project_root) / "bridge.json").exists()
+    assert not (project_state_dir(project_root) / "bridge.json").exists()
 
 
 def test_bridge_startup_emits_identity_mismatch_when_session_differs(tmp_path, monkeypatch):
@@ -461,7 +465,7 @@ def test_bridge_startup_emits_identity_mismatch_when_session_differs(tmp_path, m
     assert bridge.stop.is_set()
     assert stderr.getvalue() == "RENFORGE_BRIDGE_STARTUP_ERROR=BRIDGE_MANIFEST_IDENTITY_MISMATCH\n"
     # Reserved starting record remains untouched on identity failure.
-    payload = (project_root / ".renforge" / "control" / "bridge.json").read_text(encoding="utf-8")
+    payload = (control_dir(project_root) / "bridge.json").read_text(encoding="utf-8")
     assert '"state":"starting"' in payload or '"state": "starting"' in payload
 
 
@@ -523,7 +527,7 @@ def test_bridge_startup_rejects_non_canonical_project_root(tmp_path, monkeypatch
 
 def test_bridge_startup_emits_info_conflict_when_bridge_info_is_symlink(tmp_path, monkeypatch):
     project_root = tmp_path.resolve(strict=True)
-    control = project_root / ".renforge" / "control"
+    control = control_dir(project_root)
     import os
 
     if os.name == "nt":
@@ -567,7 +571,8 @@ def test_bridge_startup_emits_info_conflict_when_renforge_ancestor_is_symlink(tm
     import os
 
     os.chmod(real_control_parent, 0o700)
-    (project_root / ".renforge").symlink_to(real_control_parent, target_is_directory=True)
+    project_state_dir(project_root).parent.mkdir(parents=True, exist_ok=True)
+    (project_state_dir(project_root)).symlink_to(real_control_parent, target_is_directory=True)
     # Place a control dir under the linked tree so only the .renforge ancestor is the link.
     control = real_control_parent / "control"
     control.mkdir()
@@ -5145,6 +5150,7 @@ def test_bridge_rpy_windows_read_write_adapter_and_version_enforcement(tmp_path:
     import json
     import os
 
+    monkeypatch.setenv("RENFORGE_BRIDGE_CONTROL_DIR", str(control_dir(tmp_path.resolve())))
     store = types.SimpleNamespace()
     renpy = _fake_renpy(store)
     renpy.config.basedir = str(tmp_path)
@@ -5153,18 +5159,18 @@ def test_bridge_rpy_windows_read_write_adapter_and_version_enforcement(tmp_path:
     exec(compile(_load_bridge_body(), "bridge.rpy", "exec"), globs)
 
     project_root = str(tmp_path)
-    control_dir = tmp_path / ".renforge" / "control"
+    control = control_dir(tmp_path)
     if os.name == "nt":
         from renforge.util.files import ensure_private_directory
 
         # Real Windows path: private control must carry the protected DACL.
-        ensure_private_directory(control_dir)
+        ensure_private_directory(control)
     else:
-        control_dir.mkdir(parents=True, exist_ok=True)
+        control.mkdir(parents=True, exist_ok=True)
         if hasattr(os, "chmod"):
-            os.chmod(control_dir, 0o700)
+            os.chmod(control, 0o700)
 
-    bridge_info_file = control_dir / "bridge.json"
+    bridge_info_file = control / "bridge.json"
 
     # Test reading starting info with invalid version types (bool, float, str, None)
     for bad_ver in [True, 1.0, "1", None]:

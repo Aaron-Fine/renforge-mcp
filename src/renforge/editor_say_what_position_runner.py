@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from renforge.state import project_state_dir
 from renforge.bridge.client import BridgeClient, BridgeProtocolError
 
 
@@ -92,7 +93,7 @@ def run_editor_say_what_style_position_live_scenario(
 
     # 1. Verify say screen is active (shown by harness before editor opened)
     # FIRST: Clean any stale transactions from previous runs
-    transaction_root = fixture_path.parent.parent / ".renforge" / "editor-transactions"
+    transaction_root = project_state_dir(fixture_path.parent.parent) / "editor-transactions"
     if transaction_root.exists():
         import shutil
         try:

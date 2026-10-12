@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 import pytest
+from renforge.state import project_state_dir
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("RENFORGE_SDK_TESTS"),
@@ -102,7 +103,7 @@ def _save_capture(project_root: Path, name: str, png: bytes) -> Path:
     import os
     import tempfile
 
-    capture_dir = project_root / ".renforge" / "captures"
+    capture_dir = project_state_dir(project_root) / "captures"
     capture_dir.mkdir(parents=True, exist_ok=True)
     target = (capture_dir / f"{name}.png").resolve()
     target.relative_to(capture_dir.resolve())
@@ -851,7 +852,7 @@ def test_live_imagebutton_hover_bounds_and_capture(sdk, demo_copy: Path) -> None
 
         capture_path = _save_capture(demo_copy, "sdk-idle", client.screenshot())
         assert capture_path.is_file()
-        assert capture_path.parent == demo_copy / ".renforge" / "captures"
+        assert capture_path.parent == project_state_dir(demo_copy) / "captures"
 
         hovered = client.hover_element(id=button["id"])
         assert hovered["ok"] is True, hovered

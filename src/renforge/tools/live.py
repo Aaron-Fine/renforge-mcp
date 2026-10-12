@@ -46,6 +46,7 @@ from ..save_isolation import (
     path_exposes_user_saves,
 )
 from ..sdk import get_or_install_sdk, require_supported_runtime
+from ..state import project_state_dir
 from ..state_compact import (
     apply_serialization_limits,
     compact_state,
@@ -56,6 +57,7 @@ from ..scene_diff import diff_scenes
 from ..scene_measure import measure_geometry
 from ..scene_wireframe import render_wireframe
 from ..util import write_json_atomic
+from ..util.files import PrivatePathError, ensure_nofollow_directory
 
 _SESSIONS: dict[str, BridgeSession] = {}
 _LAUNCH_RESPONSE_WAIT_SECONDS = 20.0
@@ -2598,16 +2600,10 @@ _SCENE_SNAPSHOT_MAX_BYTES = 2_000_000
 
 
 def _scene_snapshot_dir(project_path: str) -> Path:
-    project_root = Path(project_path).expanduser().resolve()
-    directory = project_root
-    for name in (".renforge", "scenes"):
-        directory = directory / name
-        if directory.is_symlink():
-            raise ValueError("scene snapshot directory must not be a symlink: %s" % directory)
-        directory.mkdir(exist_ok=True)
-        if not directory.resolve().is_relative_to(project_root):
-            raise ValueError("scene snapshot directory escapes the project: %s" % directory)
-    return directory
+    try:
+        return ensure_nofollow_directory(project_state_dir(project_path) / "scenes")
+    except PrivatePathError as exc:
+        raise ValueError("scene snapshot directory is unsafe: %s" % exc) from exc
 
 
 def _scene_snapshot_name(name: str) -> str:

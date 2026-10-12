@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from renforge.tools import live
+from renforge.state import control_dir, project_state_dir
 
 
 def _session_id(label: str = "session") -> str:
@@ -27,7 +28,7 @@ def _make_project(tmp_path: Path, *, with_ready_bridge: bool = False, with_legac
     (project / "game").mkdir(parents=True)
     (project / "game" / "script.rpy").write_text("label start:\n    return\n", encoding="utf-8")
     if with_legacy_bridge:
-        renforge = project / ".renforge"
+        renforge = project_state_dir(project)
         renforge.mkdir(parents=True)
         (renforge / "bridge.json").write_text(
             json.dumps({"host": "127.0.0.1", "port": 65123, "token": "t", "pid": 4242}),
@@ -43,7 +44,7 @@ def _make_project(tmp_path: Path, *, with_ready_bridge: bool = False, with_legac
         session_id = _session_id(str(project))
         token = _token(str(project))
         atomic_write_private_json(
-            project / ".renforge" / "control" / "bridge.json",
+            control_dir(project) / "bridge.json",
             {
                 "schema_version": 1,
                 "protocol_version": 1,
@@ -218,7 +219,7 @@ def test_stop_game_ignores_legacy_bridge_metadata_without_live_client(
     result = live.stop_game(str(project))
 
     assert result == {"ok": True, "was_running": False}
-    assert (project / ".renforge" / "bridge.json").exists()
+    assert (project_state_dir(project) / "bridge.json").exists()
     assert (project / "game" / "renforge_bridge.rpy").exists()
     assert (project / "game" / "renforge_bridge.rpyc").exists()
 
@@ -470,7 +471,7 @@ def test_legacy_runtime_rejected_before_sdk_resolution_or_injection(tmp_path, mo
     assert result["code"] == "UNSUPPORTED_RENPY_VERSION", result
     assert result["phase"] == "checking_runtime_compatibility"
     assert result["details"]["minimum_version"] == "8.0.0"
-    assert not (project / ".renforge" / "control").exists()
+    assert not (control_dir(project)).exists()
     assert sorted(path.name for path in (project / "game").iterdir()) == ["script.rpy"]
 
 

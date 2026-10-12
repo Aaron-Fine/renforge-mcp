@@ -6,6 +6,7 @@ import pytest
 
 from renforge import mods, policy
 from renforge.tools import mods as mod_tools
+from renforge.state import project_state_dir
 
 
 def _project(tmp_path: Path) -> Path:
@@ -199,7 +200,7 @@ def test_package_zips_listed_files_without_compiled_or_manifest(tmp_path) -> Non
 
     result = mods.package(root, "demo")
 
-    zip_path = root / ".renforge" / "mods" / "demo.zip"
+    zip_path = project_state_dir(root) / "mods" / "demo.zip"
     assert result == {"ok": True, "path": str(zip_path), "files": ["readme.md", "scripts/intro.rpy"]}
     with zipfile.ZipFile(zip_path) as archive:
         assert sorted(archive.namelist()) == ["game/mods/demo/readme.md", "game/mods/demo/scripts/intro.rpy"]

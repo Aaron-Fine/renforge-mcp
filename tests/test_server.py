@@ -7,6 +7,7 @@ import threading
 import pytest
 
 from renforge.server import _FallbackServer, _register_tools, create_app
+from renforge.state import project_state_dir
 
 
 class _ToolRegistry:
@@ -181,7 +182,7 @@ def test_get_var_logs_activity_because_property_resolution_can_run_user_code(
 
     assert result == {"ok": True, "value": 7}
     entry = json.loads(
-        (tmp_path / ".renforge" / "activity.jsonl").read_text(encoding="utf-8")
+        (project_state_dir(tmp_path) / "activity.jsonl").read_text(encoding="utf-8")
     )
     assert entry["name"] == "renforge_get_var"
     assert entry["params"]["name"] == "score"
@@ -202,7 +203,7 @@ def test_mutable_tool_call_logs_bounded_redacted_activity(tmp_path, monkeypatch)
     result = app.tools["renforge_set_var"](str(tmp_path), "api_token", secret)
 
     assert result["ok"] is True
-    raw = (tmp_path / ".renforge" / "activity.jsonl").read_text(encoding="utf-8")
+    raw = (project_state_dir(tmp_path) / "activity.jsonl").read_text(encoding="utf-8")
     assert len(raw.encode("utf-8")) <= 8192
     assert secret not in raw
     entry = json.loads(raw)

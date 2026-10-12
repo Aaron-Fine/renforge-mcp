@@ -29,6 +29,7 @@ from .graph import build_story_map, resolve_game_file_path, resolve_warp_target
 from .errors import error_response
 from .poller import poll_bridge
 from .ws import WebSocketHub, build_ws_envelope
+from ..state import project_state_dir
 
 
 def _renforge_version() -> str:
@@ -68,7 +69,7 @@ def _as_dict(value: Any) -> dict[str, Any]:
 
 
 def _read_autopilot(project_root: Path) -> dict[str, Any]:
-    path = project_root / ".renforge" / "autopilot.json"
+    path = project_state_dir(project_root) / "autopilot.json"
     if not path.exists():
         return {"ok": False, "error": "coverage file not found"}
     try:

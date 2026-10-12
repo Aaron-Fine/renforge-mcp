@@ -258,7 +258,7 @@
     }
   },
   "renforge_launch": {
-    "description": "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; Runtime control requires Ren'Py 8.0 or newer. Pre-8 bundled games or selected SDKs return UNSUPPORTED_RENPY_VERSION before SDK download, bridge injection, or process launch; an explicit newer SDK does not bypass a legacy game's incompatibility. poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. Saves, preferences, and HOME default to isolated temporary locations so the session does not read or write the user's normal Ren'Py state; the ready payload includes `session_id` and an `isolation` object. It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and publish authenticated ownership/bridge metadata under `.renforge/control/`. `renforge_stop` removes only owned session artifacts. Exposing the user save tree (`savedir=existing`) requires `authorize=true` when `RENFORGE_POLICY=enforce`. Copy selected host slots with `renforge_saves(action=\"import\")` instead of bind-mounting the user tree.",
+    "description": "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; Runtime control requires Ren'Py 8.0 or newer. Pre-8 bundled games or selected SDKs return UNSUPPORTED_RENPY_VERSION before SDK download, bridge injection, or process launch; an explicit newer SDK does not bypass a legacy game's incompatibility. poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. Saves, preferences, and HOME default to isolated temporary locations so the session does not read or write the user's normal Ren'Py state; the ready payload includes `session_id` and an `isolation` object. It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and publish authenticated ownership/bridge metadata under `<state>/control/`, where `<state>` is this project's RenForge folder outside the game (`RENFORGE_STATE_DIR` or `~/.local/state/renforge`, then `projects/<name>-<hash>`). `renforge_stop` removes only owned session artifacts. Exposing the user save tree (`savedir=existing`) requires `authorize=true` when `RENFORGE_POLICY=enforce`. Copy selected host slots with `renforge_saves(action=\"import\")` instead of bind-mounting the user tree.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -2532,7 +2532,7 @@
     }
   },
   "renforge_scene_tree": {
-    "description": "Inspect a bounded scene inventory with completed-frame logical geometry where established. Beyond renforge_list_ui_elements it includes non-focusable nodes and uncertain custom input. Natural text overflow is explicitly unavailable. Use this when semantic selectors are ambiguous. `save_as` or `diff_against` may create `.renforge/scenes/`; `save_as` writes and overwrites the named JSON snapshot. Omit both options for read-only inspection.",
+    "description": "Inspect a bounded scene inventory with completed-frame logical geometry where established. Beyond renforge_list_ui_elements it includes non-focusable nodes and uncertain custom input. Natural text overflow is explicitly unavailable. Use this when semantic selectors are ambiguous. `save_as` or `diff_against` may create `<state>/scenes/`; `save_as` writes and overwrites the named JSON snapshot. Omit both options for read-only inspection.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -2645,13 +2645,13 @@
         },
         "save_as": {
           "default": "",
-          "description": "Optional snapshot name saved under `.renforge/scenes/<name>.json`; reusing a name overwrites it.",
+          "description": "Optional snapshot name saved under `<state>/scenes/<name>.json`; reusing a name overwrites it.",
           "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
           "type": "string"
         },
         "diff_against": {
           "default": "",
-          "description": "Optional snapshot name for diff context; compare against existing `.renforge/scenes/<name>.json` entry.",
+          "description": "Optional snapshot name for diff context; compare against existing `<state>/scenes/<name>.json` entry.",
           "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
           "type": "string"
         },
@@ -2890,7 +2890,7 @@
     }
   },
   "renforge_capture_screenshot": {
-    "description": "Persist the current frame under `.renforge/captures/` and return the output path plus hash. This writes disk and may overwrite an existing name.",
+    "description": "Persist the current frame under `<state>/captures/` and return the output path plus hash. This writes disk and may overwrite an existing name.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -4142,7 +4142,7 @@
     }
   },
   "renforge_autopilot": {
-    "description": "Auto-play branches by stopping any current manual session and launching a fresh session for every replay. It writes incremental progress to `.renforge/autopilot.json` and may download/cache the required SDK. Best for broad checks; not deterministic and potentially expensive.",
+    "description": "Auto-play branches by stopping any current manual session and launching a fresh session for every replay. It writes incremental progress to `<state>/autopilot.json` and may download/cache the required SDK. Best for broad checks; not deterministic and potentially expensive.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -4416,7 +4416,7 @@
     }
   },
   "renforge_mod": {
-    "description": "Write, test, and remove mods under `game/mods/<name>/` with a `renforge-mod.json` manifest. Never modifies game files outside that directory. `write` takes `path` and `content` (`.rpy`, `.txt`, `.json`, or `.md`). `list` reports listed, missing, and unlisted files. `lint` returns project lint diagnostics that point into the mod. `remove` deletes only manifest-listed files, their compiled `.rpyc` siblings, and empty directories; unlisted files are kept and reported. `package` zips the mod into `.renforge/mods/`. `reload` hot-reloads the running game and returns errors and a fresh observation. `guide` returns modding idioms. Mod actions are classified per action by the runtime policy.",
+    "description": "Write, test, and remove mods under `game/mods/<name>/` with a `renforge-mod.json` manifest. Never modifies game files outside that directory. `write` takes `path` and `content` (`.rpy`, `.txt`, `.json`, or `.md`). `list` reports listed, missing, and unlisted files. `lint` returns project lint diagnostics that point into the mod. `remove` deletes only manifest-listed files, their compiled `.rpyc` siblings, and empty directories; unlisted files are kept and reported. `package` zips the mod into `<state>/mods/`. `reload` hot-reloads the running game and returns errors and a fresh observation. `guide` returns modding idioms. Mod actions are classified per action by the runtime policy.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,

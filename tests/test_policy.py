@@ -17,6 +17,7 @@ from renforge.policy import (
     redact_params,
 )
 from renforge.server import create_app
+from renforge.state import project_state_dir
 
 
 def test_classify_observe_act_and_advance_until() -> None:
@@ -239,7 +240,7 @@ def test_denied_eval_never_reaches_implementation(monkeypatch, tmp_path) -> None
     assert payload["policy"]["risk"] == RISK_OPEN_WORLD
     assert "authorize=true" in payload["policy"]["next_step"]
 
-    activity = (tmp_path / ".renforge" / "activity.jsonl").read_text(encoding="utf-8")
+    activity = (project_state_dir(tmp_path) / "activity.jsonl").read_text(encoding="utf-8")
     entry = json.loads(activity.strip().splitlines()[-1])
     assert entry["policy"]["decision"] == "deny"
     assert entry["params"]["expr"] == "[redacted]"

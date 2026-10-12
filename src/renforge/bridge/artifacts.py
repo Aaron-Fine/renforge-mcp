@@ -28,6 +28,7 @@ from renforge.util.files import (
     sha256_bytes,
     write_exclusive_bytes,
 )
+from ..state import control_dir
 
 _ARTIFACTS_NAME: Final[str] = "artifacts.json"
 _ARTIFACTS_SCHEMA: Final[int] = 3
@@ -77,7 +78,7 @@ class MaterializedArtifacts:
 
 
 def artifacts_path(project_root: Path) -> Path:
-    return Path(project_root) / ".renforge" / "control" / _ARTIFACTS_NAME
+    return control_dir(project_root) / _ARTIFACTS_NAME
 
 
 def bridge_basename(session_id: str) -> str:
@@ -763,7 +764,7 @@ def _validate_owned_bridge_info(
     *,
     expected_session_id: str | None,
 ) -> Path | None:
-    info_path = Path(project_root) / ".renforge" / "control" / _BRIDGE_INFO_BASENAME
+    info_path = control_dir(project_root) / _BRIDGE_INFO_BASENAME
     try:
         info_path.lstat()
     except FileNotFoundError:

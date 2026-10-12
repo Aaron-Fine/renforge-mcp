@@ -10,6 +10,7 @@ from typing import Any
 
 from .util import ensure_nofollow_directory
 from .util.files import append_nofollow
+from .state import project_state_dir
 
 
 _MAX_ACTIVITY_BYTES = 8192
@@ -152,7 +153,7 @@ def log_tool_call(
     root = _coerce_project_root(project_root)
     if not root.exists() or not root.is_dir():
         return
-    activity_dir = ensure_nofollow_directory(root / ".renforge")
+    activity_dir = ensure_nofollow_directory(project_state_dir(root))
     path = activity_dir / "activity.jsonl"
 
     encoded = _encode_activity_entry(entry)

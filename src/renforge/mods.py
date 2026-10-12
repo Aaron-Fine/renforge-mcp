@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from .lint import run_lint
 from .util.files import PrivatePathError, ensure_nofollow_directory, write_atomic
+from .state import project_state_dir
 
 MANIFEST_NAME = "renforge-mod.json"
 ALLOWED_SUFFIXES = (".rpy", ".txt", ".json", ".md")
@@ -278,7 +279,7 @@ def remove(project_root: str | Path, name: str) -> dict[str, Any]:
 
 
 def package(project_root: str | Path, name: str) -> dict[str, Any]:
-    """Zip a mod's listed files into ``<project>/.renforge/mods/<name>.zip``."""
+    """Zip a mod's listed files into ``<project state>/mods/<name>.zip``."""
     _check_name(name)
     mod_dir = _mod_dir(project_root, name)
     manifest = _load_manifest(mod_dir) if mod_dir.is_dir() else None
@@ -288,7 +289,7 @@ def package(project_root: str | Path, name: str) -> dict[str, Any]:
     candidates = sorted(
         rel for rel in manifest["files"] if not rel.endswith(".rpyc") and rel != MANIFEST_NAME
     )
-    out_dir = Path(project_root).expanduser() / ".renforge" / "mods"
+    out_dir = project_state_dir(project_root) / "mods"
     out_dir.mkdir(parents=True, exist_ok=True)
     zip_path = out_dir / f"{name}.zip"
     fd, tmp = tempfile.mkstemp(dir=str(out_dir), prefix=f".{name}.", suffix=".zip.tmp")

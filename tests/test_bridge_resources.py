@@ -12,7 +12,7 @@ def test_bridge_rpy_exposes_expected_symbols() -> None:
         "label_callbacks",
         "screenshot_to_bytes",
         "getsockname",
-        ".renforge/control",
+        "RENFORGE_BRIDGE_CONTROL_DIR",
         "bridge.json",
         "RENFORGE_BRIDGE_TOKEN",
         "RENFORGE_BRIDGE_SESSION_ID",
@@ -51,7 +51,7 @@ def test_bridge_rpy_exposes_expected_symbols() -> None:
         assert token not in content, f"legacy or unsafe symbol still present: {token!r}"
 
     # Ready publication must target the private control path only.
-    assert 'join(project_root, ".renforge", "control", "bridge.json")' in content
+    assert 'join(_renforge_bridge_control_dir(project_root), "bridge.json")' in content
     # Invalid identity must emit the mismatch marker rather than return silently.
     assert "_RENFORGE_BRIDGE_STARTUP_IDENTITY_MISMATCH" in content
     assert "identity_ok" in content

@@ -218,6 +218,24 @@ can read and write host saves. When `RENFORGE_POLICY=enforce`, pass
 `authorize=true`. The same isolation knobs exist on `renforge_jump` and
 `renforge_new_game`.
 
+## Where RenForge keeps its files
+
+RenForge never writes into a game's folder except for the bridge script it
+injects under `game/` while a session runs (removed on stop) and mods written
+on purpose under `game/mods/`. Everything else (activity log, bridge control
+files, captures, scene snapshots, autopilot coverage, packaged mods, editor
+transactions) goes to a per-project state folder, `<state>`:
+
+```
+$RENFORGE_STATE_DIR/projects/<name>-<hash>/       # when set
+~/.local/state/renforge/projects/<name>-<hash>/   # default ($XDG_STATE_HOME)
+%LOCALAPPDATA%\renforge\projects\<name>-<hash>\   # Windows
+```
+
+`<hash>` comes from the project's resolved path, so two copies of a game get
+separate folders. An optional `<project>/.renforge/policy.json` is still read
+from the project, because the project owner writes it.
+
 ## Recommended workflow
 
 ```text
@@ -429,7 +447,7 @@ renforge_list_ui_elements(project_path)
 renforge_get_ui_element_bounds(project_path, element_id=id)
   -> focus_bounds, painted_bounds (idle), state="idle"
 renforge_capture_screenshot(project_path, name="idle")
-  -> path under .renforge/captures/
+  -> path under <state>/captures/
 renforge_list_ui_elements(project_path)
   -> current source frame_id
 renforge_hover_element(project_path, element_id=id, expected_frame_id=frame_id)
@@ -685,7 +703,7 @@ renforge_observe(project_path=project)                                  # check 
 renforge_mod(project_path=project, action="remove", name="demo")        # listed files, .rpyc siblings, empty dirs
 ```
 
-`package` zips the mod into `.renforge/mods/<name>.zip`. `list` shows each
+`package` zips the mod into `<state>/mods/<name>.zip`. `list` shows each
 mod's files plus any `missing` (listed but gone) or `unlisted` files. Paths must
 be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 1,000,000 UTF-8 bytes. Symlinks under `game/` are refused. `guide` returns modding idioms
@@ -744,7 +762,7 @@ be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 | `renforge_editor` | Public Live Editor: `status`, `select` (overlay hit path), and `save` (reload + attest). Locked targets return the lock code. Never call private `editor_task0_*` handlers. |
 | `renforge_click_at` | Click logical or source-capture pixels; pass `expected_frame_id=observation.frame` to map and guard pixels from a delivered gameplay image. Also accepts `expected_state`. |
 | `renforge_hit_test` | Inspect the interactive focus stack at a point (`topmost` + `underneath`) to diagnose overlays that intercept clicks. |
-| `renforge_capture_screenshot` | Persist the current frame as a named PNG under `<project>/.renforge/captures/` and return `path`, `relative_path`, SHA-256, and dimensions for later diff/translation tools. |
+| `renforge_capture_screenshot` | Persist the current frame as a named PNG under `<state>/captures/` and return `path`, `relative_path`, SHA-256, and dimensions for later diff/translation tools. |
 | `renforge_estimate_translation` | Estimate `dx`/`dy` between two saved PNGs with Pillow, returning `confidence`, `support`, and explicit unavailability when the measure is ambiguous. Search work is bounded; use a tighter region or lower `max_shift` when needed. |
 | `renforge_find_image_on_screen` | Locate a local PNG template in the current frame and return confidence, bounds, center, and frame guard. |
 | `renforge_get_displayable_bounds` | Report the logical bounds and center where a shown image tag was rendered. |
@@ -819,7 +837,7 @@ allowlist permits them. See [POLICY.md](POLICY.md) for the operation-level
 model, its relationship to MCP `ToolAnnotations`, and the compatibility plan.
 
 `renforge_scene_tree` is read-mostly: it never changes game state, but `save_as`
-writes a JSON snapshot under `<project>/.renforge/scenes/` for later diffing.
+writes a JSON snapshot under `<state>/scenes/` for later diffing.
 `renforge_measure` is read-only. Requesting `include=["style"]` on
 `renforge_scene_tree` is the structured alternative to the `renforge_eval` style
 escape hatch above.

@@ -245,7 +245,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "Saves, preferences, and HOME default to isolated temporary locations so the session does not read or write the "
             "user's normal Ren'Py state; the ready payload includes `session_id` and an `isolation` object. "
             "It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and "
-            "publish authenticated ownership/bridge metadata under `.renforge/control/`. `renforge_stop` removes only owned "
+            "publish authenticated ownership/bridge metadata under `<state>/control/`, where `<state>` is this project's RenForge "
+            "folder outside the game (`RENFORGE_STATE_DIR` or `~/.local/state/renforge`, then `projects/<name>-<hash>`). `renforge_stop` removes only owned "
             "session artifacts. Exposing the user save tree (`savedir=existing`) requires `authorize=true` when "
             "`RENFORGE_POLICY=enforce`. Copy selected host slots with `renforge_saves(action=\"import\")` instead of "
             "bind-mounting the user tree."
@@ -739,7 +740,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "game files outside that directory. `write` takes `path` and `content` (`.rpy`, `.txt`, `.json`, or `.md`). "
             "`list` reports listed, missing, and unlisted files. `lint` returns project lint diagnostics that point into "
             "the mod. `remove` deletes only manifest-listed files, their compiled `.rpyc` siblings, and empty directories; "
-            "unlisted files are kept and reported. `package` zips the mod into `.renforge/mods/`. `reload` hot-reloads the "
+            "unlisted files are kept and reported. `package` zips the mod into `<state>/mods/`. `reload` hot-reloads the "
             "running game and returns errors and a fresh observation. `guide` returns modding idioms. Mod actions are "
             "classified per action by the runtime policy."
         ),
@@ -1166,7 +1167,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "Inspect a bounded scene inventory with completed-frame logical geometry where established. Beyond "
             "renforge_list_ui_elements it includes non-focusable nodes and uncertain custom input. Natural text overflow "
             "is explicitly unavailable. Use this when semantic selectors are ambiguous. `save_as` or "
-            "`diff_against` may create `.renforge/scenes/`; `save_as` writes and overwrites the named JSON snapshot. Omit both "
+            "`diff_against` may create `<state>/scenes/`; `save_as` writes and overwrites the named JSON snapshot. Omit both "
             "options for read-only inspection."
         ),
         annotations=_ann(
@@ -1184,8 +1185,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "ids": "Optional element id filters.",
             "include": "Optional expensive node properties: `color`, `style`, and `overflow`.",
             "format": "Return format (`json` or `wireframe`).",
-            "save_as": "Optional snapshot name saved under `.renforge/scenes/<name>.json`; reusing a name overwrites it.",
-            "diff_against": "Optional snapshot name for diff context; compare against existing `.renforge/scenes/<name>.json` entry.",
+            "save_as": "Optional snapshot name saved under `<state>/scenes/<name>.json`; reusing a name overwrites it.",
+            "diff_against": "Optional snapshot name for diff context; compare against existing `<state>/scenes/<name>.json` entry.",
             "max_output_depth": "Maximum traversal depth before truncation, from 0 through 20.",
             "max_items": "Maximum total nodes, from 1 through 10000.",
             "max_output_bytes": "Payload cap, from 64 through 2000000 bytes.",
@@ -1269,7 +1270,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     "renforge_autopilot": ToolDefinition(
         description=(
             "Auto-play branches by stopping any current manual session and launching a fresh session for every replay. It writes "
-            "incremental progress to `.renforge/autopilot.json` and may download/cache the required SDK. Best for broad checks; "
+            "incremental progress to `<state>/autopilot.json` and may download/cache the required SDK. Best for broad checks; "
             "not deterministic and potentially expensive."
         ),
         annotations=_ann(
@@ -1459,7 +1460,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "renforge_capture_screenshot": ToolDefinition(
         description=(
-            "Persist the current frame under `.renforge/captures/` and return the output path plus hash. This writes disk and may "
+            "Persist the current frame under `<state>/captures/` and return the output path plus hash. This writes disk and may "
             "overwrite an existing name."
         ),
         annotations=_ann(

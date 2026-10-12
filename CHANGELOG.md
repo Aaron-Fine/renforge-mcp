@@ -5,6 +5,15 @@ versioning.
 
 ## Unreleased
 
+### Changed
+
+- RenForge keeps its per-project state outside the game folder, under
+  `RENFORGE_STATE_DIR` or `~/.local/state/renforge/projects/<name>-<hash>/`.
+  Opening or launching a project no longer creates `<project>/.renforge`.
+- Launches in a Wayland session use `SDL_VIDEODRIVER=wayland,x11` so games
+  start while the screen is locked. The startup deadline defaults to 180 s and
+  reads `RENFORGE_STARTUP_TIMEOUT`.
+
 ### Added
 
 - Runtime compatibility checks reject games/SDKs below Ren'Py 8.0 with
