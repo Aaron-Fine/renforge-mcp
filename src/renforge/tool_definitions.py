@@ -363,6 +363,29 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         ),
         parameters={"project_path": "Project root whose active launch should be stopped."},
     ),
+    "renforge_session": ToolDefinition(
+        description=(
+            "The canonical play-session lifecycle. action=launch starts the game with agent-mode defaults "
+            "(isolated saves, preferences, and HOME; no Live Editor; transitions and vsync off) and returns "
+            "status=starting or ready; poll action=status until ready or failed. save and load take a slot "
+            "name; list shows the session's slots; stop ends the game and cleans up. Server environment "
+            "variables cover the rare launch settings (RENFORGE_STARTUP_TIMEOUT, RENFORGE_ISOLATION, ...). "
+            "load requires authorize=true when RENFORGE_POLICY=enforce."
+        ),
+        annotations=_ann(
+            readOnlyHint=False,
+            idempotentHint=False,
+            destructiveHint=True,
+            openWorldHint=False,
+        ),
+        parameters={
+            "project_path": "Project root of the game.",
+            "action": "launch, status, save, load, list, or stop.",
+            "slot": "Slot name for save and load.",
+            "authorize": "Explicitly approve load when RENFORGE_POLICY=enforce.",
+        },
+        parameter_schemas={"action": _enum("launch", "status", "save", "load", "list", "stop")},
+    ),
     "renforge_game_state": ToolDefinition(
         description=(
             "Read full live state for debugging and monitoring. Use this before/after interactions to verify "
@@ -482,8 +505,9 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             '(a line, menu, or hub) already finished once since launch, so the agent is repeating itself. lifecycle.phase is playing, main_menu, '
             'ended, or unknown; ending evidence records a root script return confirmed at the engine main menu. '
             'Initial menus and explicit menu restarts are not endings. screenshot=true attaches the PNG whose SHA-256 '
-            'is frame_hash (omitted in compact detail, where it equals frame_id). frame_id guards the source capture; frame is its dimension descriptor for clicks on resized images. Pass observation_id to renforge_act to reject observations from '
-            'another launch or rebuilt controls. Controls use widget ids or menu indices, then drag names, '
+            'is frame_id. The snapshot is compact: defaults and repeats are left out, and chrome is reduced to id '
+            'and text; renforge_explain(id=...) returns a control\'s full record. Pass observation_id to renforge_act '
+            'to reject observations from another launch or rebuilt controls. Controls use widget ids or menu indices, then drag names, '
             'action summaries, image basenames, or synthetic ordinals. Action summaries include targets and '
             'arguments, including for unlabeled buttons. operations lists the supported adapters for that '
             'widget; adjustment reports bar values or viewport axes; draggable and droppable describe drag '
@@ -503,29 +527,25 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         parameters={
             "project_path": "Project root of the running live session.",
             "screenshot": "Attach the current PNG when true. The snapshot is still returned when false.",
-            "detail": "compact (default) drops null/false defaults, render paths, and repeats, and reduces chrome to id and text; full returns every field.",
         },
-        parameter_schemas={"screenshot": {"type": "boolean"}, "detail": _enum("compact", "full")},
+        parameter_schemas={"screenshot": {"type": "boolean"}},
     ),
     "renforge_act": ToolDefinition(
         description=(
-            'Activate one observed control or post one physical key. Pass observation_id from the snapshot '
-            'you acted on: it covers the interaction and session, so nothing else is needed; interaction-only '
-            'callers retain the legacy guard. Controls use id; keys use key without id. A button runs its action in '
-            'its screen context, falling back to a pointer click when it has no action. Inputs replace text '
-            'with allow/exclude/length filtering; submit=false edits without Enter. A bar takes value; a '
-            'viewport takes x and/or y. All supplied numeric values must be finite and all axes are '
-            'validated before mutation. A draggable control takes drop as an eligible droppable drag id, or '
-            'an empty string for release on nothing; omit drop to click when supported. Drop runs callbacks, '
-            'not a pointer trajectory. key accepts a-z, arrows, escape, return, space, or tab; omit hold for a '
-            'tap, true holds, false releases. A held key can be released after its interaction changes, '
-            'within its owning session. The bridge rechecks identity, stability, availability, and widget '
-            'operations before mutation. By default return the next stable observation and optional PNG. '
-            'observe=false returns only the action result. advance=true uses bounded native skip to the next '
-            'decision or ending with max_steps and timeout budgets, returning progress and the final observation. '
-            'progress.stop=end identifies a confirmed script return; main_menu is a menu without ending evidence. ok '
-            'reports a known action outcome; action_outcome=unknown and retry_safe=false mark a lost input reply. observation_status separately reports ready, timeout, transport_error, or crash. '
-            'Never repeat a successful or uncertain action solely because observation failed. Native skip temporarily allows unseen narrative and restores preferences; mode=dismiss retains guarded dismiss progression.'
+            "The one play step: act on a control, a key, or nothing, then continue to the next decision. "
+            "Pass observation_id from the renforge_observe (or previous renforge_act) snapshot you decided on; "
+            "a changed game refuses with error=stale and returns the current observation. id is a control id "
+            "from that snapshot, or key/<name> for a physical key (a-z, arrows, escape, return, space, tab). "
+            "value is the control's input: text for an input field (submitted with Enter), a number for a bar, "
+            "{x, y} for a viewport, a control id for a drag's drop target (empty string drops on nothing), or "
+            "true/false to hold/release a key; a control that takes none ignores it. Omit id to continue from "
+            "the observed state (dismiss narration, wait out pauses). After the input the game progresses with "
+            "bounded native skip (preferences restored) until a choice, input, custom screen, ending, or the "
+            "time budget; it never selects a control on its own. Returns ok, action_outcome (succeeded, refused, "
+            "unknown, or none), the next compact observation, observation_status, and progress (stop, steps, "
+            "crossed dialogue with seen=true on repeated lines, ending). stop=end is a confirmed script return; "
+            "main_menu is a menu without ending evidence. Never repeat a successful or uncertain action only "
+            "because the follow-up observation failed."
         ),
         annotations=_ann(
             readOnlyHint=False,
@@ -535,76 +555,14 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         ),
         parameters={
             "project_path": "Project root of the running live session.",
-            "interaction": "Optional with observation_id; the interaction number of the snapshot this action belongs to.",
-            "id": "Control or chrome id from that same snapshot. Omit it when posting a key.",
-            "text": "Full replacement for an input control. Omit it for a click or a key.",
-            "key": "Physical key to post: a-z, up, down, left, right, escape, return, space, or tab.",
-            "hold": "True posts key-down only. False posts key-up only. Omit it for a tap.",
-            "value": "New value for a bar or slider adjustment.",
-            "x": "New horizontal offset for a viewport adjustment.",
-            "y": "New vertical offset for a viewport adjustment.",
-            "drop": "Eligible droppable drag id. An empty string releases it on nothing.",
-            "session_id": "Session id from the originating observation; rejects other launches.",
-            "observation_id": "Observation id from the originating snapshot; rejects rebuilt or changed controls.",
-            "submit": "Submit text with Enter when true; false only replaces it.",
-            "observe": "Return the next stable observation after a successful action (default true).",
-            "advance": "After acting, progress to the next decision within the same time budget.",
-            "screenshot": "Attach the resulting observation's PNG when true.",
-            "max_steps": "Maximum narrative interaction advances when advance=true, from 1 to 200.",
-            "timeout": "Total action and observation/progression budget in seconds, from 0.1 to 120.",
-            "mode": "Progression mode: skip (default, bounded native skip) or dismiss (guarded events).",
-            "detail": "compact (default) drops null/false defaults, render paths, and repeats, and reduces chrome to id and text; full returns every field.",
+            "observation_id": "observation_id of the snapshot this action was chosen from.",
+            "id": "Control id from that snapshot, or key/<name>. Omit to just continue.",
+            "value": "Input for the control: text, a number, {x, y}, a drop target id, or true/false for a key.",
+            "screenshot": "Attach a size-bounded PNG of the resulting observation (default true).",
+            "timeout": "Budget in seconds for the action and progression, from 0.1 to 120 (default 30).",
         },
         parameter_schemas={
-            "mode": _enum("skip", "dismiss"),
-            "detail": _enum("compact", "full"),
-            "interaction": {"type": "integer"},
-            "value": {"type": "number"},
-            "x": {"type": "number"},
-            "y": {"type": "number"},
-            "max_steps": {"minimum": 1, "maximum": 200},
-            "timeout": {"minimum": 0.1, "maximum": 120},
-        },
-    ),
-    "renforge_advance_until": ToolDefinition(
-        description=(
-            "Progress to the next decision with bounded native skip by default (mode=skip). The bridge "
-            "pauses skip at every interaction and resumes only for known narrative; choices, inputs, "
-            "custom actionable screens, and unknown interactions stop progression. Never selects controls. "
-            "Unseen narrative is temporarily permitted, skip-after-choices is disabled, and preferences "
-            "are restored on completion or lease expiry. mode=dismiss retains guarded single-step events. "
-            "max_steps bounds narrative interaction advances (1..200); timeout includes cleanup, final "
-            "observation, and transcript retrieval (0.1..120 seconds). Returns mode, stop, steps, "
-            "observation_status, final observation, elapsed_ms, and crossed dialogue. Stop reasons include "
-            "end, main_menu, choose, none, max_steps, timeout, wait, stalled, unsupported, transport_error, exited, and crash. "
-            "end requires a top-level script return followed by the engine main menu; ending records its id, "
-            "reason, and statement. Initial menus and explicit restarts stop at main_menu with ending=null. "
-            "Verified runtime exceptions and nonzero owned process exits are crashes; frame timeouts and lost connections are distinct. "
-            "If no final frame settles, observation is null and last_observation is explicitly historical. "
-            "Events are collected throughout progression; crossed preserves repeated occurrences, marks a line "
-            "already read once since launch with seen=true (a loop), and "
-            "crossed_truncated reports retrieval gaps. screenshot=false omits the PNG; returned images "
-            "are size-bounded and frame_hash hashes the returned PNG. Use observation.frame for guarded screenshot-pixel clicks. Verified owned process exits report exited or crash without confirming an ending."
-        ),
-        annotations=_ann(
-            readOnlyHint=False,
-            idempotentHint=False,
-            destructiveHint=True,
-            openWorldHint=True,
-        ),
-        parameters={
-            "project_path": "Project root of the running live session.",
-            "max_steps": "Maximum narrative interaction advances before stopping. Integer from 1 to 200.",
-            "timeout": "Wall-clock budget including cleanup in seconds, from 0.1 to 120.",
-            "screenshot": "Attach a size-bounded PNG of the final observation (default true).",
-            "mode": "skip (default) uses bounded native skip; dismiss posts guarded dismiss events.",
-            "detail": "compact (default) drops null/false defaults, render paths, and repeats, and reduces chrome to id and text; full returns every field.",
-        },
-        parameter_schemas={
-            "mode": _enum("skip", "dismiss"),
-            "detail": _enum("compact", "full"),
             "screenshot": {"type": "boolean"},
-            "max_steps": {"minimum": 1, "maximum": 200},
             "timeout": {"minimum": 0.1, "maximum": 120},
         },
     ),

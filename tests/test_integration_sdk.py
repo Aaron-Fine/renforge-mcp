@@ -1908,3 +1908,32 @@ def test_live_replayed_lines_are_marked_seen(sdk, demo_copy: Path) -> None:
         assert twice["stop"] == "choose", twice
         repeats = [note for note in twice["crossed"] if note["type"] == "say"]
         assert repeats and all(note.get("seen") is True for note in repeats), twice["crossed"]
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
+def test_live_play_loop_continues_refuses_stale_and_chooses(sdk, demo_copy: Path) -> None:
+    """observe, then act with no id (continue) and with a control id."""
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.tools.live import observe, play
+
+    with launch_with_bridge(sdk, RenpyProject(demo_copy), startup_timeout=90, editor=False) as session:
+        for _ in range(100):
+            first = observe(str(demo_copy), screenshot=False)
+            if first.get("stable") and first.get("dialogue"):
+                break
+            time.sleep(0.1)
+        gate = play(str(demo_copy), first["observation_id"], screenshot=False)
+        assert gate["ok"] and gate["action_outcome"] == "none", gate
+        assert gate["progress"]["stop"] == "choose", gate
+        assert gate["observation"]["label"] == "village_gate"
+
+        stale = play(str(demo_copy), first["observation_id"], screenshot=False)
+        assert stale["ok"] is False and stale["error"] == "stale", stale
+        assert session.client.get_var("courage") == 0
+
+        chose = play(str(demo_copy), gate["observation"]["observation_id"],
+                     "village_gate_choices/demo_lantern_take", screenshot=False)
+        assert chose["ok"] and chose["action_outcome"] == "succeeded", chose
+        assert session.client.get_var("courage") == 1
+        assert any(note.get("type") == "say" for note in chose["progress"]["crossed"]), chose

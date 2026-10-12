@@ -12,7 +12,10 @@ TOOL_NAMES = (
     "renforge_jump",
     "renforge_new_game",
     "renforge_stop",
+    "renforge_session",
 )
+
+SESSION_ACTIONS = ("launch", "status", "save", "load", "list", "stop")
 
 
 def build_wrappers(context):
@@ -352,6 +355,39 @@ def build_wrappers(context):
             project_root=project_path,
             fn=_stop_game,
             args=(project_path,),
+            kwargs={},
+        )
+
+
+    def renforge_session(project_path: str, action: str, slot: str | None = None,
+                         authorize: bool = False) -> dict:
+        """Start, check, save, load, list saves of, or stop a play session.
+
+        The canonical lifecycle for agents. ``launch`` uses agent-mode
+        defaults (isolated saves, preferences and HOME; no Live Editor);
+        server configuration covers the rest. Poll ``status`` until ready.
+        """
+
+        def _session() -> dict:
+            if action not in SESSION_ACTIONS:
+                return {"ok": False, "error": "action must be one of: " + ", ".join(SESSION_ACTIONS)}
+            if action == "launch":
+                return _start_launch(project_path, editor=False)
+            if action == "status":
+                return _launch_status(project_path)
+            if action == "stop":
+                return _stop_game(project_path)
+            if action in ("save", "load") and not (isinstance(slot, str) and slot.strip()):
+                return {"ok": False, "error": f"{action} needs a slot name"}
+            return live.saves(project_path, action, slot=slot)
+
+        return _log_tool_call(
+            name="renforge_session",
+            params={"project_path": project_path, "action": action, "slot": slot,
+                    "authorize": authorize},
+            project_root=project_path,
+            fn=_session,
+            args=(),
             kwargs={},
         )
 

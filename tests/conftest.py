@@ -11,6 +11,5 @@ def _isolated_renforge_state(tmp_path_factory, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _all_tools_listed(monkeypatch):
-    # The fork-only tool filter must not leak in from a developer's shell.
-    monkeypatch.delenv("RENFORGE_TOOLS", raising=False)
-    monkeypatch.delenv("RENFORGE_TOOLS_EXCLUDE", raising=False)
+    # A developer's RENFORGE_TOOLSETS must not change what the tests see.
+    monkeypatch.delenv("RENFORGE_TOOLSETS", raising=False)

@@ -72,7 +72,7 @@ EXPECTED_TOOLS = {
     "renforge_advance",
     "renforge_observe",
     "renforge_act",
-    "renforge_advance_until",
+    "renforge_session",
     "renforge_control",
     "renforge_send_input",
     "renforge_saves",
@@ -257,7 +257,8 @@ def test_create_app_registers_expected_tools() -> None:
     assert EXPECTED_TOOLS == set(TOOL_DEFINITIONS) == names
     instructions = getattr(app, "instructions", "") or ""
     assert "renforge_info" in instructions or not hasattr(app, "instructions")
-    for tool in ("renforge_control", "renforge_wait_until", "renforge_get_errors"):
+    # The instructions teach the play loop: one tool per task.
+    for tool in ("renforge_session", "renforge_observe", "renforge_act", "renforge_explain", "renforge_mod"):
         assert tool in instructions or not hasattr(app, "instructions")
 
 

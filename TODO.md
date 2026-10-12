@@ -24,29 +24,33 @@ Goal: the five-tool loop the playthroughs actually used (`session`, `observe`,
 
 ### Cuts
 
-- [ ] Fold `launch`, `launch_status`, `saves` (save/load/list) and `stop` into
+- [x] Fold `launch`, `launch_status`, `saves` (save/load/list) and `stop` into
   one `renforge_session` tool with an `action` argument.
-- [ ] `act`: replace `text`, `value`, `x`, `y`, `drop` with one `value`
+- [x] `act`: replace `text`, `value`, `x`, `y`, `drop` with one `value`
   interpreted by the control's type (typed text for an input, a number for a
   bar, an x/y pair for a viewport, a target control id for a drag).
-- [ ] `act`: physical keys become pseudo-controls (`key/escape`, `key/tab`);
+- [x] `act`: physical keys become pseudo-controls (`key/escape`, `key/tab`);
   `hold` becomes that control's value. Drop `key`, `hold`, and `submit`
   (inputs always submit; editing without submitting moves to `value` options
   only if a game needs it).
-- [ ] Guards: `observation_id` only. Drop `interaction` and `session_id` from
+- [x] Guards: `observation_id` only. Drop `interaction` and `session_id` from
   `act` and the guarded legacy calls.
-- [ ] Progression: `act` advances to the next decision by default within one
+- [x] Progression: `act` advances to the next decision by default within one
   time budget. Retire `advance_until` (keep it as an alias for one release),
   `mode=dismiss`, `max_steps`, and the `observe` flag.
-- [ ] Launch: agent-mode defaults only. Remove `savedir`, `home`,
+- [x] Launch: agent-mode defaults only. Remove `savedir`, `home`,
   `persistent`, `preferences`, `cleanup_on_stop`, `display`, `audio`, and
   `timeout` from the agent-facing tool; keep them as server configuration
   (environment variables) for the rare user who needs them.
-- [ ] Compact observations only. Remove `detail`; `explain(id)` returns a
+- [x] Compact observations only. Remove `detail`; `explain(id)` returns a
   control's full facts on request.
-- [ ] Group upstream's editor, translation, build/distribute, and docs tools
+- [x] Group upstream's editor, translation, build/distribute, and docs tools
   into separate toolsets the server enables on request, replacing the
   fork-only `RENFORGE_TOOLS` filter.
+
+Done 2026-10-12: the `play` toolset is the canonical loop. Earlier tools stay
+in the `live`, `debug`, `editor`, `project`, `translation`, `build`, and `docs`
+toolsets rather than being removed; `advance_until` (fork-only) was retired.
 
 ### Related findings
 

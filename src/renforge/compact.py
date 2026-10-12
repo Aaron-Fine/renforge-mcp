@@ -1,9 +1,9 @@
 """Compact observations for agents: the same facts without defaults or repeats.
 
-``detail="full"`` returns the snapshot unchanged. The compact form keeps every
-fact an agent acts on and drops fields that only restate defaults (``null``,
-``false``, empty lists), per-occurrence render paths, and data repeated
-elsewhere. Chrome (the game's menu and quick-menu buttons) is reduced to ids
+The play tools always return this form; ``renforge_explain(id=...)`` gives a
+control's full record. It keeps every fact an agent acts on and drops fields
+that only restate defaults (``null``, ``false``, empty lists), per-occurrence
+render paths, and data repeated elsewhere. Chrome (the game's menu and quick-menu buttons) is reduced to ids
 and labels.
 """
 
@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
-
-DETAILS = ("compact", "full")
 
 # Shown only when they say something other than the usual "yes".
 _TRUE_BY_DEFAULT = ("enabled", "clickable", "visible")
@@ -48,9 +46,9 @@ def compact_control(control: Mapping[str, Any], *, chrome: bool = False) -> dict
     return out
 
 
-def compact_observation(snapshot: Any, detail: str = "compact") -> Any:
-    """Return the observation in the requested detail; never mutates it."""
-    if detail == "full" or not isinstance(snapshot, Mapping):
+def compact_observation(snapshot: Any) -> Any:
+    """Return the compact observation; never mutates the snapshot."""
+    if not isinstance(snapshot, Mapping):
         return snapshot
     out: dict[str, Any] = {}
     for key, value in snapshot.items():

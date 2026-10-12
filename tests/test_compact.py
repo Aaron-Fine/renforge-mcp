@@ -49,4 +49,4 @@ def test_compact_observation_reduces_chrome_and_repeats():
     assert out["chrome"] == [{"id": "quick_menu/Skip", "text": "Skip", "enabled": False}]
     assert out["readout"] == [{"screen": "hud", "text": "Day 1"}]
     assert out["screens"] == [{"name": "hud", "layer": "screens"}]
-    assert compact_observation(snapshot, "full") is snapshot
+    assert snapshot["dialogue"] is None  # the original is not mutated

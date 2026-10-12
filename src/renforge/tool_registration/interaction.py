@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..compact import DETAILS, compact_observation
+from ..compact import compact_observation
 
 TOOL_NAMES = (
     "renforge_advance",
     "renforge_observe",
     "renforge_act",
-    "renforge_advance_until",
     "renforge_control",
     "renforge_send_input",
     "renforge_saves",
@@ -39,15 +38,13 @@ def build_wrappers(context):
         png = result.pop("_png", None)
         return [result, _png_content(png)] if isinstance(png, bytes) and png else result
 
-    def _detailed(result, detail):
-        """Shape a tool result's observation; observe returns one directly."""
-        if detail not in DETAILS:
-            return {"ok": False, "error": "detail must be compact or full"}
+    def _compact(result):
+        """Observations from the play tools are always compact."""
         if not isinstance(result, dict):
             return result
         if isinstance(result.get("observation"), dict):
-            return dict(result, observation=compact_observation(result["observation"], detail))
-        return compact_observation(result, detail)
+            return dict(result, observation=compact_observation(result["observation"]))
+        return compact_observation(result)
 
     def renforge_advance(project_path: str) -> dict:
         """Advance the current dialogue."""
@@ -60,18 +57,15 @@ def build_wrappers(context):
             kwargs={},
         )
 
-    def renforge_observe(project_path: str, screenshot: bool = True, detail: str = "compact"):
+    def renforge_observe(project_path: str, screenshot: bool = True):
         """Read the current interaction snapshot, optionally with its PNG."""
 
         def _tool() -> Any:
-            if detail not in DETAILS:
-                return _detailed(None, detail)
-            result = live.observe(project_path, screenshot=screenshot)
-            return _image_result(_detailed(result, detail))
+            return _image_result(_compact(live.observe(project_path, screenshot=screenshot)))
 
         return _log_tool_call(
             name="renforge_observe",
-            params={"project_path": project_path, "screenshot": screenshot, "detail": detail},
+            params={"project_path": project_path, "screenshot": screenshot},
             project_root=project_path,
             fn=_tool,
             args=(),
@@ -80,78 +74,23 @@ def build_wrappers(context):
 
     def renforge_act(
         project_path: str,
-        interaction: int | None = None,
+        observation_id: str,
         id: str | None = None,
-        text: str | None = None,
-        key: str | None = None,
-        hold: bool | None = None,
-        value: int | float | None = None,
-        x: int | float | None = None,
-        y: int | float | None = None,
-        drop: str | None = None,
-        session_id: str | None = None,
-        observation_id: str | None = None,
-        submit: bool = True,
-        observe: bool = True,
-        advance: bool = False,
+        value: str | float | bool | dict[str, float] | None = None,
         screenshot: bool = True,
-        max_steps: int = 30,
-        timeout: float = 5.0,
-        mode: str = "skip",
-        detail: str = "compact",
+        timeout: float = 30.0,
     ):
-        """Act once, then return a stable observation or advance to a decision."""
-        params = {
-            "project_path": project_path, "interaction": interaction, "id": id,
-            "text": text, "key": key, "hold": hold, "value": value,
-            "x": x, "y": y, "drop": drop, "session_id": session_id,
-            "observation_id": observation_id, "submit": submit,
-            "observe": observe, "advance": advance, "screenshot": screenshot,
-            "max_steps": max_steps, "timeout": timeout, "mode": mode, "detail": detail,
-        }
+        """Act on one control, a key, or nothing, then continue to the next decision."""
+        params = {"project_path": project_path, "observation_id": observation_id, "id": id,
+                  "value": value, "screenshot": screenshot, "timeout": timeout}
 
         def _tool():
-            if detail not in DETAILS:
-                return _detailed(None, detail)
-            kwargs = {name: item for name, item in params.items()
-                      if name not in ("project_path", "interaction", "id", "detail")}
-            return _image_result(_detailed(live.act(project_path, interaction, control_id=id, **kwargs), detail))
+            return _image_result(_compact(live.play(
+                project_path, observation_id, id, value, screenshot=screenshot, timeout=timeout)))
 
         return _log_tool_call(
             name="renforge_act", params=params, project_root=project_path,
             fn=_tool, args=(), kwargs={},
-        )
-
-    def renforge_advance_until(
-        project_path: str,
-        max_steps: int = 30,
-        timeout: float = 30.0,
-        screenshot: bool = True,
-        mode: str = "skip",
-        detail: str = "compact",
-    ):
-        """Use bounded native skip until the player must choose or a budget runs out."""
-
-        def _tool() -> Any:
-            if detail not in DETAILS:
-                return _detailed(None, detail)
-            result = live.advance_until(project_path, max_steps=max_steps, timeout=timeout, screenshot=screenshot, mode=mode)
-            return _image_result(_detailed(result, detail))
-
-        return _log_tool_call(
-            name="renforge_advance_until",
-            params={
-                "project_path": project_path,
-                "max_steps": max_steps,
-                "timeout": timeout,
-                "screenshot": screenshot,
-                "mode": mode,
-                "detail": detail,
-            },
-            project_root=project_path,
-            fn=_tool,
-            args=(),
-            kwargs={},
         )
 
 

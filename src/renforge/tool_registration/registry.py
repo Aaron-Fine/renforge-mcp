@@ -9,7 +9,7 @@ from typing import Annotated, Any, Callable, Literal, get_args, get_origin, get_
 
 from pydantic import Field
 
-from ..dev_tool_filter import allowed_tools
+from ..toolsets import allowed_tools
 from ..tool_definitions import TOOL_DEFINITIONS
 
 
@@ -21,7 +21,7 @@ class ToolRegistrar:
         self.app = app
         self.tool_decorator = tool_decorator
         self.registered_names: set[str] = set()
-        # Fork-only development filter (RENFORGE_TOOLS); see dev_tool_filter.
+        # RENFORGE_TOOLSETS chooses which tool groups are listed; see toolsets.
         self.allowed_names = allowed_tools(TOOL_DEFINITIONS)
         self.hidden_names: set[str] = set()
 

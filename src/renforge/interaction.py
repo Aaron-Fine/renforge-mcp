@@ -623,6 +623,15 @@ def validate_act_payload(payload: Mapping[str, Any]) -> str | None:
         return "stale"
     has_id = isinstance(payload.get("id"), str) and bool(payload.get("id"))
     has_key = payload.get("key") is not None
+    if "input" in payload:
+        # One value for any control type; the bridge expands it per control.
+        if has_key or any(payload.get(name) is not None for name in ("text", "value", "x", "y", "drop")):
+            return "unsupported"
+        item = payload["input"]
+        if not (item is None or isinstance(item, (str, bool)) or _real_number(item)
+                or (isinstance(item, Mapping) and set(item) <= {"x", "y"}
+                    and all(v is None or _real_number(v) for v in item.values()))):
+            return "unsupported_input"
     if has_key and (has_id or any(payload.get(name) is not None for name in ("text", "value", "x", "y", "drop"))):
         return "key_or_control"
     if not has_id and not has_key:

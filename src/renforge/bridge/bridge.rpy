@@ -5426,12 +5426,10 @@ init python:
         if error:
             return error
         widget = getattr(focus, "widget", None)
-        summary = {
-            "id": element.get("id"),
-            "text": element.get("text"),
-            "screen": element.get("screen"),
-            "source": element.get("source"),
-        }
+        # Every fact observe knows about the control; observe itself is compact.
+        summary = {key: value for key, value in element.items() if not key.startswith("_")}
+        if element.get("control_id"):
+            summary["id"] = element["control_id"]
         wanted = _renforge_source_tuple(widget) if widget is not None else None
         if wanted is None:
             return {
@@ -6073,13 +6071,48 @@ init python:
         return result
 
 
+    def _renforge_expand_act_input(payload, pairs):
+        """Turn act's single ``input`` into what the control takes.
+
+        Text for an input, a number for a bar, ``{"x", "y"}`` for a viewport,
+        and a control id for a drag's drop target. The control's own
+        operations decide; anything else is refused before any input.
+        """
+        if "input" not in payload:
+            return payload, None
+        payload = builtins.dict(payload)
+        value = payload.pop("input")
+        if value is None:
+            return payload, None
+        record = next((record for _focus, record in pairs if record.get("id") == payload.get("id")), None)
+        if record is None:
+            return payload, None  # the normal lookup reports the missing control
+        operations = record.get("operations") or ()
+        role = _renforge_observe_normalize_role(record.get("role"))
+        number = _renforge_runtime.interaction._real_number(value)
+        if "text" in operations and isinstance(value, builtins.str):
+            payload["text"] = value
+        elif "drop" in operations and isinstance(value, builtins.str):
+            payload["drop"] = value
+        elif role == "viewport" and isinstance(value, builtins.dict):
+            for axis in ("x", "y"):
+                if value.get(axis) is not None:
+                    payload[axis] = value[axis]
+        elif "value" in operations and number:
+            payload["value"] = value
+        else:
+            return payload, "unsupported_input"
+        return payload, None
+
     def _renforge_h_act(payload):
         payload = payload or {}
         contract = _renforge_runtime.interaction
-        refusal = contract.validate_act_payload(payload)
+        raw, pairs = _renforge_observe_raw(False, with_pairs=True, include_readout=False)
+        payload, refusal = _renforge_expand_act_input(payload, pairs)
+        if refusal is None:
+            refusal = contract.validate_act_payload(payload)
         if refusal:
             return {"ok": False, "error": refusal}
-        raw, pairs = _renforge_observe_raw(False, with_pairs=True, include_readout=False)
         interaction = raw["interaction"]
         bridge = _renforge_runtime.bridge
         key = payload.get("key")

@@ -20,19 +20,22 @@ from renforge.server import create_app
 from renforge.state import project_state_dir
 
 
-def test_classify_observe_act_and_advance_until() -> None:
+def test_classify_the_play_loop() -> None:
     assert classify("renforge_observe", {"project_path": "/tmp/game"}) == (
         "renforge_observe",
         RISK_OBSERVATIONAL,
     )
     assert classify(
         "renforge_act",
-        {"project_path": "/tmp/game", "interaction": 1, "id": "choice/item/0"},
+        {"project_path": "/tmp/game", "observation_id": "o", "id": "choice/item/0"},
     ) == ("renforge_act", RISK_MUTATING)
-    assert classify(
-        "renforge_advance_until",
-        {"project_path": "/tmp/game", "max_steps": 5, "timeout": 10},
-    ) == ("renforge_advance_until", RISK_MUTATING)
+    assert classify("renforge_session", {"action": "status"}) == (
+        "renforge_session.status", RISK_OBSERVATIONAL)
+    assert classify("renforge_session", {"action": "launch"}) == (
+        "renforge_session.launch", RISK_MUTATING)
+    assert classify("renforge_session", {"action": "load", "slot": "a"}) == (
+        "renforge_session.load", RISK_DESTRUCTIVE)
+    assert classify("renforge_session", {"action": "explode"})[1] == RISK_MALFORMED
 
 
 def test_classify_control_saves_eval_and_scenario_operations() -> None:

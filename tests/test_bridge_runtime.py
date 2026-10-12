@@ -1911,6 +1911,17 @@ def test_act_sets_adjustments_and_drops_a_named_drag(running_bridge):
     missing = running_bridge.client.act(interaction=6, control_id="puzzle/towel", drop="puzzle/missing")
     assert missing.get("ok") is False and missing.get("error") == "missing", missing
 
+    # The play tool's single input is read by the control's type.
+    assert running_bridge.client.act(interaction=6, control_id="puzzle/volume", input_value=3)["ok"]
+    assert volume.value == 3
+    assert running_bridge.client.act(interaction=6, control_id="puzzle/page", input_value={"x": 7})["ok"]
+    assert horizontal.value == 7 and vertical.value == 4
+    dropped_again = running_bridge.client.act(interaction=6, control_id="puzzle/towel", input_value="puzzle/slot")
+    assert dropped_again["ok"] and dropped_again["drop"] == "puzzle/slot"
+    wrong = running_bridge.client.act(interaction=6, control_id="puzzle/volume", input_value="loud")
+    assert wrong.get("ok") is False and wrong.get("error") == "unsupported_input", wrong
+    assert volume.value == 3
+
 
 def test_act_key_is_physical_and_refused_when_the_interaction_changed(running_bridge):
     import sys

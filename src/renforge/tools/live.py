@@ -1120,6 +1120,7 @@ def act(
     *,
     session_id: str | None = None,
     observation_id: str | None = None,
+    input_value: Any = None,
     submit: bool = True,
     observe: bool = True,
     advance: bool = False,
@@ -1137,6 +1138,7 @@ def act(
         "interaction": interaction, "id": control_id, "text": text, "key": key,
         "hold": hold, "value": value, "x": x, "y": y, "drop": drop,
         "session_id": session_id, "observation_id": observation_id,
+        "input": input_value,
     }.items() if item is not None}
     if text is not None:
         payload["submit"] = submit
@@ -1161,6 +1163,7 @@ def act(
                 interaction=interaction, control_id=control_id, text=text, key=key,
                 hold=hold, value=value, x=x, y=y, drop=drop, submit=submit,
                 session_id=session_id, observation_id=observation_id, deadline=deadline,
+                input_value=input_value,
             )
         except BridgeError as exc:
             return {"ok": False, "action_outcome": "unknown", "retry_safe": False,
@@ -1214,6 +1217,62 @@ def act(
         return result
 
     return _with_client(project_path, _handler)
+
+
+KEY_CONTROL_PREFIX = "key/"
+
+
+def play(
+    project_path: str,
+    observation_id: str,
+    control_id: str | None = None,
+    value: Any = None,
+    *,
+    screenshot: bool = True,
+    timeout: float = 30.0,
+) -> dict:
+    """The one play step: act on a control (or on nothing), then continue.
+
+    ``control_id`` is an observed control or a physical key written as
+    ``key/<name>``. ``value`` is the control's input: text for an input, a
+    number for a bar, ``{"x", "y"}`` for a viewport, a control id for a drag
+    target, or true/false to hold/release a key. With no control the game
+    continues from the observed state. Either way progression stops at the
+    next decision or when the time budget runs out.
+    """
+    if not isinstance(observation_id, str) or not observation_id:
+        return {"ok": False, "error": "observation_id from renforge_observe is required"}
+    if not _real_number(timeout) or not 0.1 <= timeout <= 120:
+        return {"ok": False, "error": "timeout must be a number from 0.1 to 120 seconds"}
+    if not isinstance(screenshot, bool):
+        return {"ok": False, "error": "screenshot must be a boolean"}
+    common = {"observation_id": observation_id, "advance": True, "max_steps": 200,
+              "timeout": timeout, "screenshot": screenshot}
+    if control_id is None:
+        if value is not None:
+            return {"ok": False, "error": "value needs a control id"}
+        current = observe(project_path, screenshot=False)
+        if current.get("ok") is False:
+            return current
+        if current.get("observation_id") != observation_id:
+            return {"ok": False, "error": "stale", "action_outcome": "refused", "observation": current,
+                    "hint": "The game changed since that observation; act on this one instead."}
+        progress = advance_until(project_path, max_steps=200, timeout=timeout, screenshot=screenshot)
+        result = {"ok": progress.get("ok", True), "action_outcome": "none",
+                  "observation": progress.pop("observation", None),
+                  "observation_status": progress.get("observation_status")}
+        png = progress.pop("_png", None)
+        if png is not None:
+            result["_png"] = png
+        result["progress"] = progress
+        return result
+    if not isinstance(control_id, str) or not control_id:
+        return {"ok": False, "error": "id must be a control id or key/<name>"}
+    if control_id.startswith(KEY_CONTROL_PREFIX):
+        if value is not None and not isinstance(value, bool):
+            return {"ok": False, "error": "a key takes value true (hold), false (release), or nothing (tap)"}
+        return act(project_path, key=control_id[len(KEY_CONTROL_PREFIX):], hold=value, **common)
+    return act(project_path, control_id=control_id, input_value=value, **common)
 
 
 def advance_until(

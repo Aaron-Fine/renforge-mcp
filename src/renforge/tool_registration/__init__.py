@@ -32,7 +32,7 @@ def register_all_tools(app: Any) -> None:
         domain.register(registrar, wrappers)
 
     expected = set(TOOL_DEFINITIONS)
-    # Tools hidden by the fork-only RENFORGE_TOOLS filter still count as wired.
+    # Tools in groups RENFORGE_TOOLSETS leaves out still count as wired.
     accounted = registrar.registered_names | registrar.hidden_names
     if set(wrappers) != expected or accounted != expected:
         missing = sorted(expected - accounted)

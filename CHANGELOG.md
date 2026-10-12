@@ -32,6 +32,20 @@ versioning.
   host polls a cheap operation status instead of full observations, and the
   geometry walk avoids Ren'Py's rollback-tracked containers.
 
+- The play loop has one tool per task, in the `play` toolset:
+  `renforge_session` (launch, status, save, load, list, stop with agent-mode
+  defaults), `renforge_observe` (always compact), `renforge_act`
+  (`observation_id`, a control id, `key/<name>`, or nothing to continue, plus
+  one `value` read by the control's type; it always progresses to the next
+  decision), `renforge_explain` (now with a control's full record), and
+  `renforge_mod`. The fork-only `renforge_advance_until` tool and `act`'s
+  `interaction`, `session_id`, `text`, `key`, `hold`, `x`, `y`, `drop`,
+  `submit`, `observe`, `advance`, `max_steps`, `mode`, and `detail` options
+  are gone; the `live` toolset keeps every earlier upstream tool.
+- `RENFORGE_TOOLSETS` lists only chosen tool groups (`play`, `live`, `debug`,
+  `editor`, `project`, `translation`, `build`, `docs`); it replaces the
+  fork-only `RENFORGE_TOOLS` filter.
+
 ### Added
 
 - Runtime compatibility checks reject games/SDKs below Ren'Py 8.0 with

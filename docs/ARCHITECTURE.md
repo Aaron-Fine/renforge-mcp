@@ -199,8 +199,8 @@ both progression modes at `end` or `main_menu`, even without clickable menu
 controls; the host uses a settled final observation before reporting completion.
 
 The host composes action, observation, and bounded progression with one client.
-`act` returns the next stable observation by default; optional progression
-reuses `advance_until`. Input success and observation/progression failure stay
+`renforge_act` (`live.play`) acts, or continues with no control, then always
+runs bounded progression to the next decision. Input success and observation/progression failure stay
 separate. Action follow-up observations do not advance the transcript cursor.
 Say callbacks assign occurrence IDs, so repeated words remain distinct and
 frame/event copies merge. Rendered dialogue takes precedence over raw callback
@@ -209,8 +209,8 @@ bounded-buffer gaps.
 
 ## Bounded native progression
 
-`progression.py` orchestrates an owned `progression` bridge lease. Default
-`advance_until` and composed `act(advance=true)` enable native slow skip rather
+`progression.py` orchestrates an owned `progression` bridge lease.
+`renforge_act`'s progression enables native slow skip rather
 than issuing one socket request per dismiss. Fast skip mode is deliberately
 excluded because Ren’Py can bypass interactions in that mode. At every new
 interaction the bridge freezes skip before screen construction; the periodic

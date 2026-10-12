@@ -66,6 +66,16 @@ MOD_ACTIONS: dict[str, str] = {
     "package": RISK_OBSERVATIONAL,
 }
 
+SESSION_ACTIONS: dict[str, str] = {
+    # Launch is always isolated here, unlike renforge_launch(savedir=existing).
+    "launch": RISK_MUTATING,
+    "status": RISK_OBSERVATIONAL,
+    "list": RISK_OBSERVATIONAL,
+    "save": RISK_MUTATING,
+    "load": RISK_DESTRUCTIVE,
+    "stop": RISK_MUTATING,
+}
+
 EDITOR_ACTIONS: dict[str, str] = {
     "status": RISK_OBSERVATIONAL,
     "select": RISK_MUTATING,
@@ -229,6 +239,15 @@ def classify(name: str, params: Mapping[str, Any] | None = None) -> tuple[str, s
         if risk is None:
             return f"renforge_mod.{action}", RISK_MALFORMED
         return f"renforge_mod.{action}", risk
+    if name == "renforge_session":
+        action = payload.get("action")
+        if not isinstance(action, str) or not action.strip():
+            return "renforge_session", RISK_MALFORMED
+        action = action.strip()
+        risk = SESSION_ACTIONS.get(action)
+        if risk is None:
+            return f"renforge_session.{action}", RISK_MALFORMED
+        return f"renforge_session.{action}", risk
     if name == "renforge_editor":
         action = payload.get("action")
         if not isinstance(action, str) or not action.strip():
@@ -249,7 +268,7 @@ def classify(name: str, params: Mapping[str, Any] | None = None) -> tuple[str, s
         return _classify_launch(name, payload)
     if name in {"renforge_observe", "renforge_explain"}:
         return name, RISK_OBSERVATIONAL
-    if name in {"renforge_act", "renforge_advance_until"}:
+    if name == "renforge_act":
         return name, RISK_MUTATING
     return name, RISK_UNMANAGED
 

@@ -290,9 +290,14 @@ class BridgeClient:
         session_id: str | None = None,
         observation_id: str | None = None,
         submit: bool = True,
+        input_value: Any = None,
         deadline: float | None = None,
     ) -> dict:
-        """Activate one control id, or post one physical key, on this interaction."""
+        """Activate one control id, or post one physical key, on this interaction.
+
+        ``input_value`` is the single value the bridge interprets by control
+        type (text, bar value, viewport ``{"x", "y"}``, or drop target id).
+        """
         payload: dict[str, Any] = {} if interaction is None else {"interaction": interaction}
         if session_id is not None:
             payload["session_id"] = session_id
@@ -318,6 +323,8 @@ class BridgeClient:
         # Empty drop is a release onto nothing, so it has to stay on the wire.
         if drop is not None:
             payload["drop"] = drop
+        if input_value is not None:
+            payload["input"] = input_value
         reply = self.request("act", payload, deadline=deadline)
         if reply.get("error") is not None and reply.get("ok") is not False:
             return {**reply, "ok": False, "action_outcome": "unknown", "retry_safe": False}
