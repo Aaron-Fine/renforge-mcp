@@ -4365,6 +4365,9 @@ init python:
     def _renforge_render_geometry(max_nodes=5000):
         """Read completed render occurrences without invoking displayable.render.
 
+        Plain builtins are used throughout: store literals are rollback-tracked
+        and made this walk about a third slower.
+
         Render.reverse maps children into their parent's coordinate space;
         child offsets are applied after that transform, as in take_focuses.
         The same widget may appear in several render paths.
@@ -4372,7 +4375,7 @@ init python:
         render_mod = getattr(getattr(renpy, "display", None), "render", None)
         root = getattr(render_mod, "screen_render", None)
         width, height = _renforge_scene_window()
-        result = {"occurrences": {}, "renders": {}, "available": root is not None, "truncated": False}
+        result = builtins.dict(occurrences=builtins.dict(), renders=builtins.dict(), available=root is not None, truncated=False)
         if root is None:
             return result
         math = _renforge_runtime.interaction.math
@@ -4393,7 +4396,7 @@ init python:
             bx, by = edge_end
             def side(p):
                 return (bx-ax)*(p[1]-ay) - (by-ay)*(p[0]-ax)
-            out = []
+            out = builtins.list()
             if not poly:
                 return out
             previous = poly[-1]
@@ -4410,13 +4413,13 @@ init python:
             return out
 
         def rectangle(matrix, w, h):
-            corners = [point(matrix, 0, 0), point(matrix, w, 0),
-                       point(matrix, w, h), point(matrix, 0, h)]
+            corners = (point(matrix, 0, 0), point(matrix, w, 0),
+                       point(matrix, w, h), point(matrix, 0, h))
             if matrix[0]*matrix[3]-matrix[1]*matrix[2] < 0:
-                corners.reverse()
+                corners = corners[::-1]
             return corners
 
-        drawn = {}
+        drawn = builtins.dict()
 
         def draws(render, depth=0):
             """True when the subtree blits a texture or draws a mesh."""
@@ -4436,9 +4439,9 @@ init python:
             drawn[key] = result
             return result
 
-        initial = [(0.0, 0.0), (float(width), 0.0),
-                   (float(width), float(height)), (0.0, float(height))]
-        stack = [(root, (1, 0, 0, 1, 0, 0), initial, (), (), None)]
+        initial = ((0.0, 0.0), (float(width), 0.0),
+                   (float(width), float(height)), (0.0, float(height)))
+        stack = builtins.list(((root, (1, 0, 0, 1, 0, 0), initial, (), (), None),))
         visited = 0
         while stack and visited < max_nodes:
             render, matrix, clip, path, parents, inherited_reason = stack.pop()
@@ -4455,30 +4458,30 @@ init python:
                 for index, edge in enumerate(clip):
                     polygon = clip_polygon(polygon, edge, clip[(index+1) % len(clip)])
                 if not clip or getattr(render, "alpha", 1) <= 0 or w <= 0 or h <= 0:
-                    polygon = []
+                    polygon = ()
                 if polygon and not reason:
                     x = math.floor(min(p[0] for p in polygon))
                     y = math.floor(min(p[1] for p in polygon))
                     right = math.ceil(max(p[0] for p in polygon))
                     bottom = math.ceil(max(p[1] for p in polygon))
-                    bounds = {"x": x, "y": y, "width": right-x, "height": bottom-y}
+                    bounds = builtins.dict(x=x, y=y, width=right-x, height=bottom-y)
                     visible = bounds["width"] > 0 and bounds["height"] > 0
                 else:
                     bounds, visible = None, None if reason else False
             except Exception:
                 bounds, visible, reason = None, None, "unsupported render geometry"
-                corners = []
+                corners = ()
             empty = None
             if visible and not draws(render):
                 # A full-frame canvas that blits nothing is not on screen. The
                 # reason describes this render only; children keep their geometry.
                 bounds, visible, empty = None, False, "renders nothing"
-            occurrence = {"bounds": bounds, "visible": visible,
-                          "bounds_reason": reason or empty or (None if visible else "clipped, transparent, or zero-sized"),
-                          "render_path": builtins.list(path)}
+            occurrence = builtins.dict(bounds=bounds, visible=visible,
+                          bounds_reason=reason or empty or (None if visible else "clipped, transparent, or zero-sized"),
+                          render_path=builtins.list(path))
             for widget in getattr(render, "render_of", ()) or ():
-                result["occurrences"].setdefault(id(widget), []).append(dict(occurrence))
-                result["renders"].setdefault(id(widget), []).append((render, matrix, occurrence))
+                result["occurrences"].setdefault(id(widget), builtins.list()).append(builtins.dict(occurrence))
+                result["renders"].setdefault(id(widget), builtins.list()).append((render, matrix, occurrence))
             child_clip = clip
             if corners and not reason:
                 xclip = bool(getattr(render, "xclipping", False))
@@ -4486,15 +4489,15 @@ init python:
                 if xclip or yclip:
                     child_clip = builtins.list(clip)
                     # Use local edge indices before orientation normalization.
-                    raw = [point(matrix, 0, 0), point(matrix, w, 0),
-                           point(matrix, w, h), point(matrix, 0, h)]
+                    raw = (point(matrix, 0, 0), point(matrix, w, 0),
+                           point(matrix, w, h), point(matrix, 0, h))
                     for index in ((0, 2) if yclip else ()) + ((1, 3) if xclip else ()):
                         start, end = raw[index], raw[(index+1) % 4]
                         if matrix[0]*matrix[3]-matrix[1]*matrix[2] < 0:
                             start, end = end, start
                         child_clip = clip_polygon(child_clip, start, end)
             if getattr(render, "alpha", 1) <= 0:
-                child_clip = []
+                child_clip = ()
             reverse = getattr(render, "reverse", None)
             local = (1, 0, 0, 1, 0, 0)
             if reverse is not None:
@@ -4530,18 +4533,19 @@ init python:
 
 
     def _renforge_scene_inventory():
-        nodes = []
-        seen = set()
-        named = {}
-        stack = [(root, layer, None, None, ()) for layer, root in reversed(_renforge_scene_roots())]
+        # Plain builtins: store literals are rollback-tracked and slow here.
+        nodes = builtins.list()
+        seen = builtins.set()
+        named = builtins.dict()
+        stack = builtins.list((root, layer, None, None, ()) for layer, root in reversed(_renforge_scene_roots()))
         while stack and len(nodes) < 5000:
             node, layer, screen_name, screen_node, parents = stack.pop()
             if node is None or id(node) in seen or getattr(node, "hiding", False):
                 continue
             seen.add(id(node))
             class_name = node.__class__.__name__
-            children = []
-            extra_widgets = []
+            children = builtins.list()
+            extra_widgets = builtins.list()
             if class_name == "ScreenDisplayable":
                 # Like ScreenDisplayable.find_focusable: a screen that is hiding
                 # (HIDE) or the old side of a transition (OLD) takes no input,
@@ -4568,7 +4572,7 @@ init python:
             lineage = parents + (id(node),)
             for child in reversed(children):
                 stack.append((child, layer, screen_name, screen_node, lineage))
-        return {"nodes": nodes, "named": named, "truncated": bool(stack), "geometry": _renforge_render_geometry()}
+        return builtins.dict(nodes=nodes, named=named, truncated=bool(stack), geometry=_renforge_render_geometry())
 
 
     def _renforge_collect_interaction(inventory=None):
@@ -5603,6 +5607,8 @@ init python:
         # Owned skip never leaks beyond the operation. Native fast mode can
         # bypass interaction checks, so only native slow skip is used here.
         renpy.config.skipping = None
+        if operation.get("skip_delay") is not None:
+            renpy.config.skip_delay = operation["skip_delay"]
         prefs = operation["preferences"]
         for name, value in operation["saved_preferences"].items():
             setattr(prefs, name, value)
@@ -5617,6 +5623,13 @@ init python:
             return
         if operation["steps"] >= operation["max_steps"]:
             _renforge_progress_finish("max_steps")
+            return
+        # This line was already checked and is skipping; the engine ends it
+        # after its skip delay. Another full check would only repeat it,
+        # unless the screens are being rebuilt within the same interaction.
+        if (operation["enabled_generation"] == bridge.observe_generation
+                and renpy.config.skipping == "slow"
+                and not getattr(renpy.display.interface, "restart_interaction", False)):
             return
         raw = _renforge_observe_raw(False, include_readout=False)
         if not raw["stable"]:
@@ -5657,6 +5670,11 @@ init python:
         bridge = _renforge_runtime.bridge
         operation = bridge.progression
         operation_id = payload.get("id")
+        if payload.get("action") == "status":
+            # Cheap poll while an operation runs: no observation is built.
+            if operation is None or operation["id"] != operation_id:
+                return {"ok": False, "error": "stale_operation"}
+            return {"ok": True, "progression": _renforge_progress_public(operation)}
         if payload.get("action") == "stop":
             if operation is None or operation["id"] != operation_id:
                 return {"ok": False, "error": "stale_operation"}
@@ -5695,7 +5713,12 @@ init python:
             "id": operation_id, "active": True, "stop": None, "steps": 0,
             "deadline": _renforge_time.monotonic() + timeout, "max_steps": max_steps,
             "preferences": prefs, "saved_preferences": saved, "enabled_generation": None,
+            "skip_delay": getattr(renpy.config, "skip_delay", None),
         }
+        # Games may hold each skipped line on screen (Stranded in Space uses
+        # 150 ms); each line is already checked after it draws.
+        if bridge.progression["skip_delay"] is not None:
+            renpy.config.skip_delay = 0
         prefs.skip_unseen = True
         prefs.skip_after_choices = False
         if "transitions" in saved:

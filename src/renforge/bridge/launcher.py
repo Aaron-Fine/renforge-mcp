@@ -55,6 +55,7 @@ _EDITOR_CJK_LANGUAGES: frozenset[str] = frozenset({"zh-CN"})
 _BRIDGE_STARTUP_ERROR_PREFIX: str = "RENFORGE_BRIDGE_STARTUP_ERROR="
 STARTUP_TIMEOUT_ENV: str = "RENFORGE_STARTUP_TIMEOUT"
 TRANSITIONS_ENV: str = "RENFORGE_TRANSITIONS"
+VSYNC_ENV: str = "RENFORGE_VSYNC"
 # Launch runs in the background and a process that exits fails at once, so
 # this only bounds a game that hangs. The first run of a large game can spend
 # well over a minute building caches.
@@ -966,6 +967,12 @@ def _launch_after_project_lock(
     # change never reaches the player's real preferences.
     if isolation.preferences_mode == "empty" and env.get(TRANSITIONS_ENV, "").strip().lower() != "on":
         env["RENFORGE_BRIDGE_TRANSITIONS"] = "off"
+    # Vsync makes every frame wait for the display. A hidden or locked-screen
+    # window is throttled (about 70 ms a frame here), and skipping draws at
+    # least one frame per line, so it capped skipping at ~7 lines a second.
+    # Idle CPU is the same without it. RENPY_GL_VSYNC, if set, is respected.
+    if "RENPY_GL_VSYNC" not in env and env.get(VSYNC_ENV, "").strip().lower() != "on":
+        env["RENPY_GL_VSYNC"] = "0"
     if editor_endpoint is not None:
         env.update(
             _editor_environment(

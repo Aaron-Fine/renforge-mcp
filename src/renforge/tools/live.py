@@ -1311,7 +1311,8 @@ def _advance_with_client(project_path: str, client: BridgeClient, *, max_steps: 
             return {"ok": False, "status": failure_status(exc, process), "error": str(exc)}
 
     if mode == "skip":
-        result = run_native_skip(client, fetch, max_steps=max_steps, deadline=progress_end, total_deadline=wall_end)
+        result = run_native_skip(client, fetch, max_steps=max_steps, deadline=progress_end,
+                                 total_deadline=wall_end, between=collect)
     else:
         result = run_advance_until(fetch, dismiss, max_steps=max_steps,
                                    timeout=max(0.01, progress_end - time.monotonic()))

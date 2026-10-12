@@ -5585,6 +5585,9 @@ def test_init_return_does_not_confirm_ending(running_bridge, monkeypatch):
 @pytest.mark.parametrize("phase,stop", [("ended", "end"), ("main_menu", "main_menu")])
 def test_native_skip_stops_at_lifecycle_boundaries(running_bridge, monkeypatch, phase, stop):
     bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    # Reaching an ending or the main menu starts a new interaction.
+    renpy.config.start_interact_callbacks[0]()
+    raw["interaction"] = bridge.observe_generation
     raw["lifecycle"] = {"phase": phase, "ending": {"reason": "script_return"} if phase == "ended" else None}
     # Even a menu that advertises dismiss must never be skipped.
     running_bridge.globs["_renforge_progress_tick"]()
@@ -6202,3 +6205,28 @@ def test_isolated_session_turns_transitions_off_once(running_bridge, monkeypatch
     renpy.store._preferences.transitions = 2
     renpy.config.start_interact_callbacks[0]()
     assert renpy.store._preferences.transitions == 2
+
+
+def test_native_skip_checks_a_line_once_unless_its_screens_rebuild(running_bridge, monkeypatch):
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    calls = []
+    real = running_bridge.globs["_renforge_observe_raw"]
+    monkeypatch.setitem(running_bridge.globs, "_renforge_observe_raw",
+                        lambda *a, **k: calls.append(1) or real(*a, **k))
+    assert renpy.config.skipping == "slow"
+    running_bridge.globs["_renforge_progress_tick"]()
+    assert calls == []
+    renpy.display.interface.restart_interaction = True
+    try:
+        running_bridge.globs["_renforge_progress_tick"]()
+    finally:
+        renpy.display.interface.restart_interaction = False
+    assert calls == [1]
+
+
+def test_native_skip_does_not_hold_lines_and_restores_skip_delay(running_bridge, monkeypatch):
+    running_bridge.renpy.config.skip_delay = 150
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    assert renpy.config.skip_delay == 0
+    running_bridge.client.progression("stop", "owner", reason="cancelled")
+    assert renpy.config.skip_delay == 150

@@ -17,6 +17,12 @@ versioning.
   (`RENFORGE_TRANSITIONS=on` keeps them). `observe`, `act`, and
   `advance_until` return a compact observation by default (`detail=full` for
   every field), and `act` accepts `observation_id` alone as its guard.
+- Bounded skipping is about 7x faster on a standard GUI (138 to 19 ms per
+  line; Stranded in Space 185 to 15 ms). Launched games run without vsync
+  (`RENFORGE_VSYNC=on` keeps it), a game's `config.skip_delay` is set to 0
+  during an operation and restored after, each line is checked once, the
+  host polls a cheap operation status instead of full observations, and the
+  geometry walk avoids Ren'Py's rollback-tracked containers.
 
 ### Added
 

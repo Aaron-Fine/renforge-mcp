@@ -62,12 +62,34 @@ def settle(fetch, deadline, *, screenshot=True):
     return None, "timeout", "final observation did not settle within the budget"
 
 
-def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline):
+def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, between=None):
+    """Start one bridge-owned skip operation and wait for it to stop.
+
+    Once started, poll only the operation's status (and ``between``, which
+    drains events): a full observation per poll would compete with skipping
+    for the game's main thread. The caller settles the final observation.
+    """
     operation_id = uuid.uuid4().hex
     attempted = False
     result = {"ok": True, "stop": "timeout", "steps": 0, "observation": None, "mode": "skip"}
     try:
         while time.monotonic() < deadline:
+            if attempted:
+                reply = client.progression("status", operation_id, deadline=deadline)
+                if reply.get("ok") is False:
+                    result.update(ok=False, stop="unsupported", error=reply.get("error"))
+                    break
+                if between is not None:
+                    between()
+                status = reply.get("progression", {})
+                result["steps"] = status.get("steps", 0)
+                if status.get("active") is False:
+                    result["stop"] = status.get("stop") or "none"
+                    # A custom hub is a normal place to stop and hand control back.
+                    result["ok"] = result["stop"] != "crash"
+                    break
+                time.sleep(min(POLL_SECONDS, max(0, deadline - time.monotonic())))
+                continue
             raw = fetch(False)
             if raw.get("ok") is False:
                 result.update(ok=False, stop=raw.get("status", "transport_error"), error=raw.get("error"))
@@ -100,8 +122,6 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline):
                     result.update(ok=False, stop="unsupported", error=reply.get("error"))
                     break
                 status = reply.get("progression", {})
-            else:
-                status = raw.get("progression", {})
             if status.get("id") == operation_id:
                 result["steps"] = status.get("steps", 0)
                 if status.get("active") is False:

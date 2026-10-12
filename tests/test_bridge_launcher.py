@@ -205,6 +205,8 @@ def test_launch_with_bridge_builds_run_command(monkeypatch, tmp_path: Path, warp
     assert env["RENFORGE_BRIDGE_CONTROL_DIR"] == str(control_dir(project_root))
     # Isolated preferences: transitions are turned off for the agent.
     assert env["RENFORGE_BRIDGE_TRANSITIONS"] == "off"
+    # Frames never wait for the display unless the user asks for vsync.
+    assert env["RENPY_GL_VSYNC"] == "0"
     starting = control_dir(project_root) / "bridge.json"
     # reserved before spawn; fake popen overwrote it to ready for the ping path
     assert starting.exists()

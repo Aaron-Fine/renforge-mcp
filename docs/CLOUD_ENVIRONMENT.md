@@ -175,6 +175,7 @@ Key environment variables for cloud environments:
 | `RENPY_SDK_CACHE_DIR` | Ren'Py SDK cache location | `~/.cache/renforge/sdks` |
 | `RENFORGE_STARTUP_TIMEOUT` | Seconds a launch may take before it fails; `renforge_launch(timeout=...)` overrides it | `180` |
 | `RENFORGE_TRANSITIONS` | `on` keeps scene transitions in sessions with isolated preferences (they are off by default there) | off |
+| `RENFORGE_VSYNC` | `on` keeps vsync for launched games (off by default; frames then never wait for the display, which a locked or hidden window throttles). An explicit `RENPY_GL_VSYNC` always wins | off |
 | `RENFORGE_STATE_DIR` | Where RenForge keeps per-project state, outside the game | `~/.local/state/renforge` |
 | `RENFORGE_SDK_TESTS` | Enable the broad real-SDK integration suite | Unset (opt-in locally) |
 | `RENFORGE_SDK_VERSION` | SDK version used by that integration suite | `8.5.3` (`DEFAULT_RENPY_VERSION`) |
