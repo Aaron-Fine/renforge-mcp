@@ -198,6 +198,13 @@ change (a fresh `observe` is correct).
   line, status polling, plain containers in the geometry walk): 19 ms a line
   on the demo GUI, ~15 ms in Stranded in Space. Observations and crossed
   lines report `seen` for statements already finished since launch.
-- Still open: task-app readout; NullAction overlay as unknown input; menu
-  `source` in transformed viewports; the CI artifact change waits on branch
+- Fork-only `RENFORGE_TOOLS` / `RENFORGE_TOOLS_EXCLUDE` limit the listed
+  tools during development (remove before upstreaming).
+- Task-app readout fixed (viewport content is readout). The fountain's
+  "NullAction overlay" was Academy34's Interactable, whose `click_action`
+  also fires the game's event hooks; displayables with one `*click*` action
+  attribute are now controls, so free-roam hotspots are acted on by id and
+  hubs stop as `choose`, not `unsupported`. Clipped menu choices have
+  `source`.
+- Still open: the CI artifact change waits on local branch
   `ci/state-folder-artifacts` (needs a token with `workflow` scope).

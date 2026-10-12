@@ -4353,12 +4353,24 @@ init python:
                     "menu_index": None, "ordinal": len(pairs),
                     "action": _renforge_observe_format_action(value) if value is not None else None,
                     **geometry})
-        for entry_number, (owner, index, caption, action) in enumerate(menu):
-            if entry_number in matched_menu:
-                continue
+        unmatched = [entry for number, entry in enumerate(menu) if number not in matched_menu]
+        # A choice outside the focus list (clipped, or in a transformed
+        # viewport) usually still has its button in the screen's tree; that
+        # button gives the entry its source line.
+        menu_buttons = builtins.dict()
+        if unmatched:
+            owners = builtins.set(id(entry[0]) for entry in unmatched)
+            for node, _layer, _name, screen_node, _parents in inventory["nodes"]:
+                if id(screen_node) in owners and (getattr(node, "action", None) is not None
+                                                  or getattr(node, "clicked", None) is not None):
+                    menu_buttons.setdefault(id(screen_node), builtins.list()).append(node)
+        for owner, index, caption, action in unmatched:
             sensitivity = getattr(behavior, "is_sensitive", None)
             enabled = bool(sensitivity(action)) if callable(sensitivity) else True
             name = _renforge_observe_screen_node_name(owner)
+            button = next((node for node in menu_buttons.get(id(owner), ())
+                           if _renforge_action_contains(getattr(node, "action", None)
+                                                        or getattr(node, "clicked", None), action)), None)
             focus = types.SimpleNamespace(widget=None, screen=owner, action=action, menu_action=action)
             pairs.append((focus, {"screen": name, "layer": getattr(owner, "layer", None),
                 "role": "button", "type": "button", "text": caption,
@@ -4366,6 +4378,7 @@ init python:
                 "visible": None, "bounds": None, "bounds_reason": "menu entry has no focus rectangle",
                 "semantic": True, "menu_index": index, "ordinal": len(pairs),
                 "action": action.__class__.__name__, "operations": ["click"],
+                "source": _renforge_source_location(button) if button is not None else None,
                 "coordinate_space": "logical"}))
         _renforge_mark_coverage(pairs)
         truncated = focus_truncated or len(pairs) > 400 or inventory.get("menu_truncated", False) or inventory["geometry"]["truncated"]

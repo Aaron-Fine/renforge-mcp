@@ -1725,6 +1725,8 @@ label start:
         assert len(menu) == 3, snapshot
         assert all(item['enabled'] and item['clickable'] for item in menu)
         assert {item['id'] for item in menu} == {'branch_picker/item/0', 'branch_picker/item/1', 'branch_picker/item/2'}
+        # Clipped entries have no focus rectangle but still name their source line.
+        assert all(item['source'] and item['source'].startswith('game/') for item in menu), menu
         viewport = next(item for item in snapshot['controls'] if item['role'] == 'viewport')
         assert viewport['bounds'] == {'x': 100, 'y': 80, 'width': 300, 'height': 50}, viewport
         listed = session.client.list_ui_elements()

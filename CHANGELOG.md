@@ -20,6 +20,11 @@ versioning.
 - Observations report `seen` (the current statement already finished once
   since launch), and repeated lines in `crossed` carry `seen: true`, so an
   agent can tell when it is looping.
+- Text inside a scrolling viewport (a phone task list) is readout, not the
+  viewport's label. A game displayable that keeps its Ren'Py Actions in one
+  `*click*` attribute (Academy34's `click_action`) is a control rather than
+  unknown input. Menu choices without a focus rectangle (clipped, or in a
+  transformed viewport) report the `source` of their button.
 - Bounded skipping is about 7x faster on a standard GUI (138 to 19 ms per
   line; Stranded in Space 185 to 15 ms). Launched games run without vsync
   (`RENFORGE_VSYNC=on` keeps it), a game's `config.skip_delay` is set to 0
