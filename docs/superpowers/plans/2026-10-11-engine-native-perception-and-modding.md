@@ -177,3 +177,22 @@ change (a fresh `observe` is correct).
   `_location`; report `source=null`.
 - One `_location` can appear many times on screen (`use`, loops); treat it as
   the statement, not the instance.
+
+## Follow-up (2026-10-12, later)
+
+- Flaky village-gate test: at startup, the `scene ... with dissolve`
+  interaction can outlive the dissolve's delay, showing only the quick menu,
+  and progression stopped with `stop=none`. Short timed pauses now stay
+  unsettled for their delay plus one second; 30/30 repro runs pass.
+- RenForge state lives outside the game (`RENFORGE_STATE_DIR`, default
+  `~/.local/state/renforge/projects/<name>-<hash>/`).
+- Tool count: upstream has 55 tools; this fork added only observe, act,
+  advance_until, explain, and mod, so nothing qualified for removal.
+- observe/act/advance_until return compact observations by default
+  (`detail=full` for everything); act accepts `observation_id` alone.
+- Isolated sessions start with transitions off (`RENFORGE_TRANSITIONS=on`).
+- list_ui_elements and related upstream tools have upstream ids again; an
+  earlier branch commit had broken the live demo acceptance tests.
+- Still open: a "seen before" marker for revisited lines; lighter per-line
+  checks while skipping; task-app readout; NullAction overlay as unknown
+  input; menu `source` in transformed viewports.
