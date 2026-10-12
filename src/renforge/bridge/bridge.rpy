@@ -4888,7 +4888,7 @@ init python:
         kind = node.__class__.__name__
         loc = _renforge_explain_loc(node)
         emit = _renforge_explain_emit
-        if kind == "Say":
+        if kind in ("Say", "TranslateSay"):
             who = getattr(node, "who", None)
             what = getattr(node, "what", None)
             if who:
@@ -5233,7 +5233,30 @@ init python:
             wanted = None
         if not filename or wanted is None:
             return {"ok": False, "error": "source must look like file:line"}
-        return dict(_renforge_explain_statement(wanted), ok=True, source=source)
+        found = _renforge_explain_statement(wanted)
+        if found.get("statement") is None:
+            script = _renforge_explain_script_statement(wanted)
+            if script is not None:
+                return dict(script, ok=True, source=source)
+        return dict(found, ok=True, source=source)
+
+
+    def _renforge_explain_script_statement(wanted):
+        """The script statements at ``(file, line)``, with their full text."""
+        script = getattr(getattr(renpy, "game", None), "script", None)
+        found = []
+        for node in getattr(script, "all_stmts", None) or ():
+            where = _renforge_explain_loc(node)
+            if where is None or (where["file"], where["line"]) != wanted:
+                continue
+            texts = _renforge_explain_node_texts(node)
+            found.append({"kind": node.__class__.__name__,
+                          "text": "\n".join(text for _kind, text in texts)[:4000]})
+            if len(found) >= 8:
+                break
+        if not found:
+            return None
+        return {"statement": None, "script": found}
 
 
     def _renforge_explain_node_texts(node):

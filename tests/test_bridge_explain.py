@@ -460,3 +460,24 @@ def test_explain_search_finds_text_with_its_enclosing_label(running_bridge):
     assert [(m["kind"], m["line"], m["label"]) for m in reply["matches"]] == [
         ("python", 12, "gate"), ("if", 14, "gate")]
     assert running_bridge.client.explain(search=" ")["ok"] is False
+
+
+def test_explain_source_returns_full_script_statement_text(running_bridge):
+    f = "game/gate.rpy"
+    code = types.SimpleNamespace(source="add_cutscene(Cutscene(\n    conditions=[Condition('explored')],\n))")
+    _set_script(running_bridge, {})
+    running_bridge.renpy.game.script.all_stmts = [_script_node("Python", f, 22, code=code)]
+    _set_screens(running_bridge, {})
+
+    reply = running_bridge.client.explain(source="game/gate.rpy:22")
+
+    assert reply["statement"] is None
+    assert reply["script"] == [{"kind": "Python", "text": code.source}]
+
+
+def test_label_walk_reads_translate_say(running_bridge):
+    f = "game/script.rpy"
+    label = _script_node("Label", f, 1, block=[_script_node("TranslateSay", f, 2, who="mc", what="Hi.")])
+    _set_script(running_bridge, {"start": label})
+    reply = running_bridge.client.explain(label="start")
+    assert [(s["kind"], s["text"]) for s in reply["statements"]] == [("say", "mc: Hi.")]
