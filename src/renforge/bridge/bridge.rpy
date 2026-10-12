@@ -4323,6 +4323,26 @@ init python:
                 corners.reverse()
             return corners
 
+        drawn = {}
+
+        def draws(render, depth=0):
+            """True when the subtree blits a texture or draws a mesh."""
+            key = id(render)
+            if key in drawn:
+                return drawn[key]
+            drawn[key] = False
+            result = bool(getattr(render, "mesh", None))
+            for child in getattr(render, "children", ()) or ():
+                if result:
+                    break
+                target = child[0] if child else None
+                if hasattr(target, "render_of"):
+                    result = depth < 64 and draws(target, depth + 1)
+                elif target is not None:
+                    result = True
+            drawn[key] = result
+            return result
+
         initial = [(0.0, 0.0), (float(width), 0.0),
                    (float(width), float(height)), (0.0, float(height))]
         stack = [(root, (1, 0, 0, 1, 0, 0), initial, (), (), None)]
@@ -4355,6 +4375,9 @@ init python:
             except Exception:
                 bounds, visible, reason = None, None, "unsupported render geometry"
                 corners = []
+            if visible and not draws(render):
+                # A full-frame canvas that blits nothing is not on screen.
+                bounds, visible, reason = None, False, "renders nothing"
             occurrence = {"bounds": bounds, "visible": visible,
                           "bounds_reason": reason or (None if visible else "clipped, transparent, or zero-sized"),
                           "render_path": builtins.list(path)}

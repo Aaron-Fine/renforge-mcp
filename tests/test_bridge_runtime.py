@@ -1464,7 +1464,7 @@ def test_readout_skips_focus_control_text(running_bridge):
     renpy.get_filename_line = lambda: ("game/script.rpy", 4)
     renpy.config.overlay_screens = []
 
-    text_render = types.SimpleNamespace(width=40, height=16, render_of=[day], children=[], reverse=None)
+    text_render = types.SimpleNamespace(width=40, height=16, render_of=[day], children=[], reverse=None, mesh=True)
     renpy.display.render = types.SimpleNamespace(screen_render=types.SimpleNamespace(
         width=800, height=600, render_of=[], children=[(text_render, 12, 8, True, True)], reverse=None))
     renpy.config.screen_width, renpy.config.screen_height = 800, 600
@@ -5761,6 +5761,8 @@ def test_delivered_frame_clicks_and_guards(running_bridge):
 
 
 def _completed_render(width, height, widgets=(), children=(), reverse=None, **extra):
+    # A leaf stands for an image or solid: it draws through its mesh.
+    extra.setdefault("mesh", not children)
     return types.SimpleNamespace(width=width, height=height, render_of=list(widgets),
         children=list(children), reverse=reverse, **extra)
 
@@ -6042,3 +6044,19 @@ def test_nested_interaction_replies_before_the_handler_returns(running_bridge):
         del globs["_RENFORGE_HANDLERS"]["rf_nested"]
     assert reply["ok"] is True
     assert reply["nested_interaction"] is True
+
+
+def test_a_canvas_that_blits_nothing_is_not_visible(running_bridge):
+    renpy = running_bridge.renpy
+    renpy.config.screen_width, renpy.config.screen_height = 800, 600
+    empty, drawn = object(), object()
+    root = _completed_render(800, 600, children=[
+        (_completed_render(800, 600, [empty], mesh=False), 0, 0, True, True),
+        (_completed_render(800, 600, [drawn], children=[(_completed_render(40, 40), 100, 100, True, True)]),
+         0, 0, True, True)])
+    renpy.display.render = types.SimpleNamespace(screen_render=root)
+    geometry = running_bridge.globs['_renforge_render_geometry']()
+    [hidden] = geometry['occurrences'][id(empty)]
+    assert hidden['visible'] is False and hidden['bounds_reason'] == 'renders nothing'
+    [shown] = geometry['occurrences'][id(drawn)]
+    assert shown['visible'] is True
