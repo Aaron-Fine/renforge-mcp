@@ -215,16 +215,25 @@ def _compatible_sdk_version(installed: str, required: str) -> bool:
 
 
 def bundled_engine_version(project_root: Path) -> str | None:
-    """Return ``X.Y.Z`` from a distributed game's ``renpy/vc_version.py``.
+    """Return the ``X.Y.Z`` engine a game was made for, or None.
 
-    The file records the engine the game shipped with (``8.1.2.23090503``
-    becomes ``8.1.2``). A source project with no ``renpy/`` directory returns
-    None and keeps the stable SDK.
+    A distributed game ships ``renpy/vc_version.py`` (``8.1.2.23090503``
+    becomes ``8.1.2``). Otherwise ``game/script_version.txt``, which Ren'Py
+    writes into builds and reads for compatibility, declares the engine as
+    ``(8, 5, 3)``; a source project can add one to pin its SDK. A project with
+    neither keeps the stable SDK.
     """
-    reported = _sdk_internal_version(Path(project_root))
-    triple = _version_tuple(reported or "")
+    root = Path(project_root)
+    triple = _version_tuple(_sdk_internal_version(root) or "")
     if triple is None:
-        return None
+        try:
+            declared = (root / "game" / "script_version.txt").read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return None
+        match = re.match(r"^\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", declared)
+        if match is None:
+            return None
+        triple = tuple(int(part) for part in match.groups())
     return f"{triple[0]}.{triple[1]}.{triple[2]}"
 
 

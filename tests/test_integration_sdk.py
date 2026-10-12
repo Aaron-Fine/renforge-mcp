@@ -7,7 +7,8 @@ Opt-in: these download/use a real Ren'Py SDK and invoke it. Enable with::
         tests/test_integration_sdk_live_demo_acceptance.py
 
 Optionally pin the version with ``RENFORGE_SDK_VERSION`` (default: the
-``DEFAULT_RENPY_VERSION`` RenForge ships with).
+``DEFAULT_RENPY_VERSION`` RenForge ships with). Tests built on the demo game
+use the engine it declares in ``game/script_version.txt`` instead.
 Each test runs against a temp copy of the demo so the committed one is never
 polluted with compiled ``.rpyc``/cache artifacts.
 """
@@ -29,10 +30,15 @@ pytestmark = pytest.mark.skipif(
 _DEMO = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
 
 
-@pytest.fixture(scope="module")
-def sdk():
+@pytest.fixture
+def sdk(request):
     from renforge.sdk import DEFAULT_RENPY_VERSION, get_or_install_sdk
 
+    # The demo pins its engine in game/script_version.txt, so demo-based tests
+    # use that SDK; RENFORGE_SDK_VERSION selects the engine for the minimal
+    # fixture games that exercise the bridge across Ren'Py versions.
+    if "demo_copy" in request.fixturenames:
+        return get_or_install_sdk("stable", project_root=_DEMO)
     return get_or_install_sdk(os.environ.get("RENFORGE_SDK_VERSION", DEFAULT_RENPY_VERSION))
 
 

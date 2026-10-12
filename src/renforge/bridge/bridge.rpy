@@ -4010,6 +4010,43 @@ init python:
         return entries
 
 
+    # Ren'Py interface actions: menus, skipping, rollback, saves, preferences.
+    # They never advance the story, so a say screen holding them is still
+    # dismissable dialogue.
+    _RENFORGE_CHROME_ACTIONS = frozenset((
+        "ShowMenu", "Skip", "Rollback", "RollForward", "HideInterface",
+        "QuickSave", "QuickLoad", "FileSave", "FileLoad", "FileDelete",
+        "Help", "Quit", "MainMenu", "Screenshot", "OpenURL",
+        "SetMute", "ToggleMute", "SetMixer",
+    ))
+
+
+    def _renforge_action_list(action):
+        if action is None:
+            return []
+        return builtins.list(action) if _renforge_observe_is_sequence(action) else [action]
+
+
+    def _renforge_engine_chrome_action(actions):
+        """True when every action is one of Ren'Py's own interface actions.
+
+        The class must come from Ren'Py's common library, so a game class that
+        merely shares a name does not count.
+        """
+        if not actions:
+            return False
+        for action in actions:
+            cls = type(action)
+            if cls.__name__ not in _RENFORGE_CHROME_ACTIONS:
+                return False
+            code = next((getattr(value, "__code__", None) for value in vars(cls).values()
+                         if getattr(value, "__code__", None) is not None), None)
+            filename = str(getattr(code, "co_filename", "")).replace("\\", "/")
+            if "renpy/common/" not in filename:
+                return False
+        return True
+
+
     def _renforge_source_tuple(displayable):
         """``(file, line)`` of the screen-language statement that built it.
 
@@ -4071,6 +4108,8 @@ init python:
                     break
             record["widget_id"] = _renforge_observe_widget_id(focus, widget, inventory["named"])
             record["source"] = _renforge_source_location(widget)
+            if _renforge_engine_chrome_action(_renforge_action_list(_renforge_focus_action_value(focus))):
+                record["chrome"] = True
             record["type"] = _renforge_focus_type(focus, widget)
             record["coordinate_space"] = "logical"
             record["zorder"] = _renforge_focus_zorder(focus, widget, len(pairs))
@@ -4144,6 +4183,32 @@ init python:
                     "enabled": (getattr(widget, "clicked", None) is not None
                                 and bool(_renforge_focus_enabled(focus, widget))),
                     "clickable": True, "covered": False,
+                    "image_name": _renforge_observe_image_name(widget),
+                    "menu_index": None, "ordinal": len(pairs),
+                    "action": _renforge_observe_action_class(widget), **geometry})
+        # A game's own displayable that holds a Ren'Py Action in ``action``
+        # follows the engine's button convention: running the action is the click.
+        action_type = getattr(getattr(renpy, "ui", None), "Action", None)
+        sensitivity = getattr(behavior, "is_sensitive", None)
+        if isinstance(action_type, type):
+            for widget, layer, name, screen, _parents in inventory["nodes"]:
+                if id(widget) in seen_widgets or type(widget).__module__.startswith("renpy."):
+                    continue
+                actions = _renforge_action_list(getattr(widget, "action", None))
+                if not actions or not all(isinstance(item, action_type) for item in actions):
+                    continue
+                geometry = _renforge_widget_geometry(widget, inventory)
+                if geometry["visible"] is not True:
+                    continue
+                try:
+                    enabled = bool(sensitivity(widget.action)) if callable(sensitivity) else True
+                except Exception:
+                    enabled = True
+                add(types.SimpleNamespace(widget=widget, screen=screen), {
+                    "screen": name, "layer": layer, "role": "button",
+                    "text": _renforge_focus_text(widget) or None,
+                    "enabled": enabled, "clickable": enabled, "covered": False,
+                    "semantic": True,
                     "image_name": _renforge_observe_image_name(widget),
                     "menu_index": None, "ordinal": len(pairs),
                     "action": _renforge_observe_action_class(widget), **geometry})

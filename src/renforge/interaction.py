@@ -510,8 +510,11 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
     elements = [item for item in (raw.get("elements") or []) if isinstance(item, Mapping)]
     controls = []
     chrome = []
-    for control in (_public_control(item) for item in assign_control_ids(elements)):
-        if _is_chrome(control.get("screen")):
+    for item in assign_control_ids(elements):
+        control = _public_control(item)
+        # Screen-name chrome, or controls whose actions are only Ren'Py interface
+        # actions (menus, skip, rollback, saves), never story decisions.
+        if _is_chrome(control.get("screen")) or item.get("chrome") is True:
             chrome.append(control)
         else:
             controls.append(control)

@@ -456,3 +456,25 @@ def test_sdk_install_rechecks_cache_after_acquiring_lock(
 
 def test_default_renpy_version_tracks_current_stable() -> None:
     assert sdk.DEFAULT_RENPY_VERSION == "8.5.3"
+
+
+def test_script_version_declares_the_engine_for_a_source_project(tmp_path: Path) -> None:
+    (tmp_path / "game").mkdir()
+    assert sdk.bundled_engine_version(tmp_path) is None
+    (tmp_path / "game" / "script_version.txt").write_text("(8, 5, 3)\n", encoding="utf-8")
+    assert sdk.bundled_engine_version(tmp_path) == "8.5.3"
+    (tmp_path / "game" / "script_version.txt").write_text("not a version", encoding="utf-8")
+    assert sdk.bundled_engine_version(tmp_path) is None
+
+
+def test_bundled_engine_wins_over_script_version(tmp_path: Path) -> None:
+    (tmp_path / "game").mkdir()
+    (tmp_path / "game" / "script_version.txt").write_text("(8, 5, 3)\n", encoding="utf-8")
+    (tmp_path / "renpy").mkdir()
+    (tmp_path / "renpy" / "vc_version.py").write_text("version = '8.1.2.23090503'\n", encoding="utf-8")
+    assert sdk.bundled_engine_version(tmp_path) == "8.1.2"
+
+
+def test_demo_game_pins_its_engine() -> None:
+    demo = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
+    assert sdk.bundled_engine_version(demo) == "8.5.3"

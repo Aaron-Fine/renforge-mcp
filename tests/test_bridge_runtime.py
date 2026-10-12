@@ -5849,6 +5849,66 @@ def test_custom_input_candidates_keep_eligibility_unknown_and_block_dismiss(runn
     assert running_bridge.client.dismiss_if(interaction=8)['ok'] is False
 
 
+def test_custom_displayables_holding_renpy_actions_are_controls(running_bridge):
+    """A game displayable with a Ren'Py Action in ``action`` is a button; interface actions are chrome."""
+    from renforge.observe import classify
+    renpy = running_bridge.renpy
+
+    class Action:
+        pass
+
+    namespace = {"Action": Action}
+    exec(compile("class ShowMenu(Action):\n    def __call__(self):\n        return None\n",
+                 "renpy/common/00action_menu.rpy", "exec"), namespace)
+    calls = []
+
+    class GameAction(Action):
+        def __call__(self):
+            calls.append("bed")
+
+    class GameButton:
+        def __init__(self, action):
+            self.action = action
+
+        def event(self, ev, x, y, st):
+            raise AssertionError('inspection must not invoke custom input')
+
+    class ScreenDisplayable:
+        screen_name = ('say', None)
+        layer = 'screens'
+        modal = False
+        hiding = False
+        widgets = {}
+        scope = {}
+
+    bed, save = GameButton(GameAction()), GameButton(namespace["ShowMenu"]())
+    screen = ScreenDisplayable()
+    screen.children = [bed, save]
+    renpy.ui = types.SimpleNamespace(Action=Action)
+    renpy.display.behavior.is_sensitive = lambda action: True
+    renpy.display.behavior.run = lambda action: action()
+    _arm_stable_interaction(running_bridge, generation=9)
+    renpy.game.context = lambda: types.SimpleNamespace(interacting=True,
+        scene_lists=types.SimpleNamespace(layers={'screens': [types.SimpleNamespace(displayable=screen)]}))
+    renpy.config.screen_width, renpy.config.screen_height = 800, 600
+    renpy.display.focus.focus_list[:] = []
+    renpy.display.render = types.SimpleNamespace(screen_render=_completed_render(800, 600, [screen],
+        children=[(_completed_render(60, 40, [bed]), 600, 300, True, True),
+                  (_completed_render(40, 40, [save]), 700, 500, True, True)]))
+    try:
+        snapshot = classify(running_bridge.client.observe(screenshot=False))
+        assert [control['bounds'] for control in snapshot['controls']] == [
+            {'x': 600, 'y': 300, 'width': 60, 'height': 40}]
+        assert snapshot['controls'][0]['semantic'] is True
+        assert [control['action'] for control in snapshot['chrome']] == ['ShowMenu']
+        assert snapshot['input_candidates'] == []
+        assert snapshot['omitted']['unclassified'] is False
+        assert running_bridge.client.click_element(id=snapshot['controls'][0]['id'])['ok']
+        assert calls == ['bed']
+    finally:
+        del renpy.ui
+
+
 @pytest.mark.parametrize('candidate_layer,blocked', [('below', True), ('above', False)])
 def test_modal_order_preserves_custom_input_above_its_layer(running_bridge, candidate_layer, blocked):
     renpy = running_bridge.renpy
