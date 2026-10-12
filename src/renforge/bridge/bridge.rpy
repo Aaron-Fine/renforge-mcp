@@ -2141,6 +2141,22 @@ init python:
                 request.event.set()
         return not finished
 
+    def _renforge_custom_action_attr(widget):
+        """The attribute a game's own displayable keeps its click action in.
+
+        ``action`` when present, else the one attribute whose name mentions
+        "click" (``click_action``, ``on_click``). Several such attributes are
+        ambiguous, so none is chosen.
+        """
+        if hasattr(widget, "action"):
+            return "action"
+        try:
+            names = builtins.sorted(key for key in vars(widget)
+                                    if isinstance(key, builtins.str) and "click" in key.lower())
+        except TypeError:
+            return None
+        return names[0] if len(names) == 1 else None
+
     def _renforge_focus_action_value(focus):
         # Button.per_interact copies a sensitive action onto clicked, and
         # Button.event runs clicked. Prefer that, then the declared action.
@@ -2157,6 +2173,11 @@ init python:
             action = getattr(owner, "action", None)
             if action is not None:
                 return action
+        # A game's own displayable may keep it under a click attribute.
+        if widget is not None and not type(widget).__module__.startswith("renpy."):
+            attr = _renforge_custom_action_attr(widget)
+            if attr is not None:
+                return getattr(widget, attr, None)
         return None
 
     def _renforge_with_focus_screen(focus, fn):
@@ -4299,17 +4320,20 @@ init python:
                     "image_name": _renforge_observe_image_name(widget),
                     "menu_index": None, "ordinal": len(pairs),
                     "action": _renforge_observe_action_class(widget), **geometry})
-        # A game's own displayable that holds a Ren'Py Action in ``action``
-        # follows the engine's button convention: running the action is the click.
+        # A game's own displayable that holds Ren'Py Actions in ``action`` (or
+        # one ``*click*`` attribute, such as ``click_action``) follows the
+        # engine's button convention: running the action is the click.
         action_type = getattr(getattr(renpy, "ui", None), "Action", None)
         sensitivity = getattr(behavior, "is_sensitive", None)
         if isinstance(action_type, type):
             for widget, layer, name, screen, _parents in inventory["nodes"]:
                 if id(widget) in seen_widgets or type(widget).__module__.startswith("renpy."):
                     continue
-                if not hasattr(widget, "action"):
+                attr = _renforge_custom_action_attr(widget)
+                if attr is None:
                     continue
-                actions = _renforge_action_list(widget.action)
+                value = getattr(widget, attr, None)
+                actions = _renforge_action_list(value)
                 if not all(isinstance(item, action_type) for item in actions):
                     continue
                 geometry = _renforge_widget_geometry(widget, inventory)
@@ -4317,7 +4341,7 @@ init python:
                     continue
                 # As with Ren'Py buttons, no action means insensitive.
                 try:
-                    enabled = bool(actions) and (bool(sensitivity(widget.action)) if callable(sensitivity) else True)
+                    enabled = bool(actions) and (bool(sensitivity(value)) if callable(sensitivity) else True)
                 except Exception:
                     enabled = True
                 add(types.SimpleNamespace(widget=widget, screen=screen), {
@@ -4327,7 +4351,8 @@ init python:
                     "semantic": True,
                     "image_name": _renforge_observe_image_name(widget),
                     "menu_index": None, "ordinal": len(pairs),
-                    "action": _renforge_observe_action_class(widget), **geometry})
+                    "action": _renforge_observe_format_action(value) if value is not None else None,
+                    **geometry})
         for entry_number, (owner, index, caption, action) in enumerate(menu):
             if entry_number in matched_menu:
                 continue

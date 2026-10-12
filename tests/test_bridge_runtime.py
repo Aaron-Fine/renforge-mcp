@@ -6079,6 +6079,74 @@ def test_custom_displayables_holding_renpy_actions_are_controls(running_bridge):
         del renpy.ui
 
 
+
+def test_custom_displayables_keeping_actions_under_a_click_attribute_are_controls(running_bridge):
+    """Academy34's Interactable keeps a list of Actions in ``click_action``."""
+    from renforge.observe import classify
+    renpy = running_bridge.renpy
+
+    class Action:
+        pass
+
+    calls = []
+
+    class Trigger(Action):
+        def __init__(self, name):
+            self.name = name
+
+        def __call__(self):
+            calls.append(self.name)
+
+    class Interactable:
+        def __init__(self, click_action, xray_action=None):
+            self.click_action = click_action
+            self.xray_action = xray_action
+
+        def event(self, ev, x, y, st):
+            raise AssertionError('inspection must not invoke custom input')
+
+    class Ambiguous:
+        def __init__(self):
+            self.click_action = Trigger("a")
+            self.on_click = Trigger("b")
+
+        def event(self, ev, x, y, st):
+            raise AssertionError('inspection must not invoke custom input')
+
+    class ScreenDisplayable:
+        screen_name = ('location_campus', None)
+        layer = 'screens'
+        modal = False
+        hiding = False
+        widgets = {}
+        scope = {}
+
+    hotspot = Interactable([Trigger("talk_red"), Trigger("campus_talk_red")])
+    unsure = Ambiguous()
+    screen = ScreenDisplayable()
+    screen.children = [hotspot, unsure]
+    renpy.ui = types.SimpleNamespace(Action=Action)
+    renpy.display.behavior.is_sensitive = lambda action: True
+    renpy.display.behavior.run = lambda action: [item() for item in (action if isinstance(action, list) else [action])] and None
+    _arm_stable_interaction(running_bridge, generation=9)
+    renpy.game.context = lambda: types.SimpleNamespace(interacting=True,
+        scene_lists=types.SimpleNamespace(layers={'screens': [types.SimpleNamespace(displayable=screen)]}))
+    renpy.config.screen_width, renpy.config.screen_height = 800, 600
+    renpy.display.focus.focus_list[:] = []
+    renpy.display.render = types.SimpleNamespace(screen_render=_completed_render(800, 600, [screen],
+        children=[(_completed_render(60, 40, [hotspot]), 600, 300, True, True),
+                  (_completed_render(60, 40, [unsure]), 100, 100, True, True)]))
+    try:
+        snapshot = classify(running_bridge.client.observe(screenshot=False))
+        assert [control['bounds']['x'] for control in snapshot['controls']] == [600]
+        # Two click attributes are ambiguous: still reported as unknown input.
+        assert len(snapshot['input_candidates']) == 1
+        assert running_bridge.client.click_element(id=snapshot['controls'][0]['id'])['ok']
+        assert calls == ["talk_red", "campus_talk_red"]
+    finally:
+        del renpy.ui
+
+
 @pytest.mark.parametrize('candidate_layer,blocked', [('below', True), ('above', False)])
 def test_modal_order_preserves_custom_input_above_its_layer(running_bridge, candidate_layer, blocked):
     renpy = running_bridge.renpy
