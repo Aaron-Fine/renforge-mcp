@@ -99,9 +99,35 @@ Re-evaluation:
   authorized like `eval`; writes must not follow symlinks). Agent worktrees
   started from a stale commit; task cards must check their base commit.
 
+## First week of Academy34 (2026-10-11, second trial)
+
+A new game, with both skip offers declined, reached the game's end-of-week
+message ("You've made it! ... call yourself a cadet") through public MCP tools
+only, with no runtime errors. It covered about a dozen free-roam stages: the
+parking lot, dorms, Alex's room in several states, the main hall, lecture
+theatre, yard, campus by night and day, stadium, fountain, pool, and five
+weekday classes.
+
+- Object measuring was not needed. Custom displayables that hold a Ren'Py
+  `Action` became controls; other custom regions were clicked at their centre,
+  or at a pixel chosen from the screenshot when the centre was transparent.
+- `explain(search=...)` traced the bed's vague "explore a little" refusal to
+  a chain of five story conditions, without evaluating anything.
+- Fixes from the run: engine interface actions count as chrome (dialogue no
+  longer stops on every line); `action=None` is disabled; one-pixel key
+  listeners and empty canvases don't count as unknown input; actions that
+  open a nested interaction reply first; menu captions are substituted;
+  reaching a custom hub is `ok`; `explain` searches statements and screens.
+- Demo pin: `game/script_version.txt` turns Ren'Py's developer mode off and
+  crashed the demo, so the demo pins 8.5.3 in a RenForge-owned
+  `renforge.json`. The 8.0.3 live suite went from 13/35 to 36/36 passing.
+- Still open: task-app readout missed its list lines; occasional
+  `stop=none, steps=0` on a transition frame; a drawn full-screen
+  `NullAction()` overlay still counts as unknown input.
+
 ## Later, only if needed
 
-- **Next:** tighter bounds for custom free-roam hotspots (sample pixel opacity).
+- Tighter bounds for custom hotspots (pixel opacity): not needed so far.
 - Fewer agent-facing tools; Live Editor off by default for agent sessions.
 - Split `bridge.rpy` into a few files.
 - `source` for menu choices drawn in a transformed viewport.
