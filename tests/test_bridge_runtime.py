@@ -1528,6 +1528,83 @@ def test_readout_skips_focus_control_text(running_bridge):
     assert all(item["text"] != "Skip" for item in snapshot["readout"])
 
 
+def test_viewport_content_is_readout_not_its_label(running_bridge):
+    """A scrolling list (a phone task app) is text to read, not a control label."""
+    from renforge.observe import classify
+
+    renpy = running_bridge.renpy
+
+    class Text:
+        def __init__(self, text, x=None, y=None, w=None, h=None):
+            self.text = text
+            if x is not None:
+                self.x, self.y, self.w, self.h = x, y, w, h
+
+    class Button:
+        def __init__(self, label):
+            self.child = Text(label)
+            self.children = [self.child]
+            self.action = None
+
+    class SayBehavior:
+        def __init__(self):
+            self.dismiss = ["dismiss"]
+
+    class ScreenDisplayable:
+        def __init__(self, name, children):
+            self.screen_name = (name, None)
+            self.layer = "screens"
+            self.modal = False
+            self.hiding = False
+            self.scope = {}
+            self.widgets = {}
+            self.children = children
+            self.child = children[0] if children else None
+
+    class Viewport:
+        def __init__(self, children):
+            self.children = children
+            self.child = children[0]
+            self.xadjustment = types.SimpleNamespace(change=lambda value: None)
+            self.yadjustment = types.SimpleNamespace(change=lambda value: None)
+
+        def visit(self):
+            return self.children
+
+    day = Text("Get the book", 12, 8, 40, 16)
+    button = Button("Done")
+    page = Viewport([day, button])
+    say = SayBehavior()
+    screen = ScreenDisplayable("tasks", [page, say])
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(
+                layers={"screens": [types.SimpleNamespace(displayable=screen)]}
+            ),
+        )
+    )
+    renpy.display.interface.ongoing_transition = {}
+    focus = _FakeFocus("Done", 10, 40, 80, 24, widget=button)
+    focus.screen_name = "tasks"
+    scroller = _FakeFocus("", 0, 0, 300, 200, widget=page)
+    scroller.screen_name = "tasks"
+    renpy.display.focus.focus_list[:] = [scroller, focus]
+    renpy.get_filename_line = lambda: ("game/script.rpy", 4)
+    renpy.config.overlay_screens = []
+
+    text_render = types.SimpleNamespace(width=40, height=16, render_of=[day], children=[], reverse=None, mesh=True)
+    renpy.display.render = types.SimpleNamespace(screen_render=types.SimpleNamespace(
+        width=800, height=600, render_of=[], children=[(text_render, 12, 8, True, True)], reverse=None))
+    renpy.config.screen_width, renpy.config.screen_height = 800, 600
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    assert [item["text"] for item in snapshot["readout"]] == ["Get the book"]
+    viewport = next(c for c in snapshot["controls"] if c["role"] == "viewport")
+    assert viewport["text"] is None
+    # A button inside the viewport is still a control, and its text is not readout.
+    assert any(c["role"] == "button" for c in snapshot["controls"])
+
+
 def test_say_tags_are_removed_before_the_snapshot(running_bridge):
     from renforge.observe import classify
 

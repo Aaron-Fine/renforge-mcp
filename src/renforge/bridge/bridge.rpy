@@ -4264,8 +4264,11 @@ init python:
             if bounds is None and not _renforge_observe_operations(_renforge_observe_normalize_role(role)):
                 continue
             name = _renforge_screen_name(focus)
+            # A viewport scrolls content; that content is readout, not its label.
+            is_viewport = _renforge_observe_normalize_role(role) == "viewport"
             add(focus, {
-                "screen": name, "role": role, "text": _renforge_focus_text(widget) or None,
+                "screen": name, "role": role,
+                "text": None if is_viewport else (_renforge_focus_text(widget) or None),
                 "enabled": bool(_renforge_focus_enabled(focus, widget)),
                 "clickable": True, "covered": False, "visible": True,
                 "image_name": _renforge_observe_image_name(widget) or _renforge_observe_drag_image(widget),
@@ -4875,7 +4878,9 @@ init python:
             copied.pop("center", None)
             elements.append(copied)
             widget = getattr(focus, "widget", None)
-            if widget is not None:
+            # A viewport's text is content to read; controls inside it are
+            # blocked on their own.
+            if widget is not None and _renforge_observe_normalize_role(record.get("role")) != "viewport":
                 blocked.add(id(widget))
         readout, readout_truncated = _renforge_observe_readout(blocked, inventory) if include_readout else ([], False)
         overlay = []
