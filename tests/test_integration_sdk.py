@@ -385,11 +385,11 @@ def test_live_menu_selection_takes_the_branch(sdk, demo_copy: Path) -> None:
             time.sleep(1.0)
 
         assert any(
-            control.get("id") == "village_gate_choices/demo_lantern_take"
+            control.get("id") == "demo_lantern_take"
             for control in focus_elements
         ), focus_elements
         assert any(
-            control.get("id") == "village_gate_choices/demo_lantern_decline"
+            control.get("id") == "demo_lantern_decline"
             for control in focus_elements
         ), focus_elements
         for control in focus_elements:
@@ -508,7 +508,7 @@ def test_live_demo_control_supports_editor_save(sdk, demo_copy: Path) -> None:
                 break
             client.advance()
             time.sleep(0.4)
-        button = next(control for control in controls if control.get("id") == "village_gate_choices/demo_lantern_take")
+        button = next(control for control in controls if control.get("id") == "demo_lantern_take")
         client.request("editor_task0_start", {"screen": "village_gate_choices"})
         bounds = button["bounds"]
         selected = client.request(
@@ -643,7 +643,7 @@ def test_live_named_save_state_round_trip(sdk, demo_copy: Path) -> None:
                 break
             client.advance()
             time.sleep(0.5)
-        assert any(control.get("id") == "village_gate_choices/demo_lantern_take" for control in focus_elements), focus_elements
+        assert any(control.get("id") == "demo_lantern_take" for control in focus_elements), focus_elements
         selected = client.select_choice(text="Take the lantern and go.")
         assert selected["ok"] is True, selected
         time.sleep(1.0)
@@ -1728,7 +1728,8 @@ label start:
         viewport = next(item for item in snapshot['controls'] if item['role'] == 'viewport')
         assert viewport['bounds'] == {'x': 100, 'y': 80, 'width': 300, 'height': 50}, viewport
         listed = session.client.list_ui_elements()
-        assert {item['id'] for item in listed} == {item['id'] for item in snapshot['controls']}
+        # Upstream ids stay on list_ui_elements; control_id links each to observe.
+        assert {item['control_id'] for item in listed} == {item['id'] for item in snapshot['controls']}
         assert session.client.select_choice(text='Repeat')['ok'] is False
         refused = session.client.select_choice(index=choices[-1]['index'], interaction=snapshot['interaction'], observation_id='stale')
         assert refused['ok'] is False

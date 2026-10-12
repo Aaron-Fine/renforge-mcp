@@ -1761,8 +1761,77 @@ init python:
         return elements
 
 
+    def _renforge_explicit_focus_id(focus, widget):
+        for owner in (focus, widget):
+            if owner is None:
+                continue
+            for attr_name in ("mcp_id", "id", "widget_id", "focus_id", "name", "key"):
+                value = getattr(owner, attr_name, None)
+                if value is None or callable(value):
+                    continue
+                try:
+                    value = str(value).strip()
+                except Exception:
+                    continue
+                if value:
+                    return value
+        return None
+
+    def _renforge_focus_action_name(focus, widget):
+        """Action class name, as upstream's UI-element ids use it."""
+        for owner in (widget, focus):
+            if owner is None:
+                continue
+            for attr_name in ("action", "clicked", "alternate", "hovered"):
+                value = getattr(owner, attr_name, None)
+                if value is None:
+                    continue
+                if isinstance(value, (builtins.list, tuple)) and len(value) == 1:
+                    value = value[0]
+                try:
+                    name = getattr(value.__class__, "__name__", None)
+                    if name and name not in ("list", "tuple", "object", "RevertableList"):
+                        return str(name)
+                    return str(value)
+                except Exception:
+                    continue
+        return None
+
+    def _renforge_legacy_element_ids(pairs):
+        """Give UI-element tools upstream's ids, distinct from observe's.
+
+        list_ui_elements, click_element, hover_element, scene_tree, and hit
+        tests are upstream tools: an explicit id, else the screen's widget
+        name, else screen.Action, else screen.text, else screen:role:text.
+        observe/act keep their own screen/... ids.
+        """
+        used = {}
+        for ordinal, (focus, record) in enumerate(pairs):
+            widget = getattr(focus, "widget", None)
+            screen = record.get("screen")
+            text = record.get("text")
+            role = record.get("role") or record.get("type")
+            element_id = _renforge_explicit_focus_id(focus, widget) or record.get("widget_id")
+            if not element_id:
+                action = _renforge_focus_action_name(focus, widget)
+                if screen and action:
+                    element_id = "%s.%s" % (screen, action)
+                elif screen and text:
+                    element_id = "%s.%s" % (screen, text)
+                else:
+                    element_id = "%s:%s:%s" % (screen or "screen", role, text or ordinal)
+            element_id = _renforge_scene_string(element_id, _RENFORGE_SCENE_MAX_ID_CHARS)
+            count = used.get(element_id, 0)
+            used[element_id] = count + 1
+            if count:
+                element_id = "%s#%s" % (element_id, count + 1)
+            record["control_id"] = record.get("id")
+            record["id"] = element_id
+        return pairs
+
     def _renforge_focusable_elements(max_items=None, max_text_chars=None, inventory=None):
         pairs, _truncated = _renforge_observe_focus_pairs(inventory)
+        _renforge_legacy_element_ids(pairs)
         if max_items is not None:
             pairs = pairs[:max_items]
         if max_text_chars is not None:
@@ -2190,8 +2259,10 @@ init python:
         for focus, element in _renforge_focusable_elements():
             if wanted_screen and str(element.get("screen") or "").casefold() != wanted_screen:
                 continue
+            # Upstream element ids, widget names, and observe's control ids all resolve.
             if (wanted_id is not None and str(element.get("id")) != wanted_id
-                    and element.get("widget_id") != wanted_id):
+                    and element.get("widget_id") != wanted_id
+                    and element.get("control_id") != wanted_id):
                 continue
             if wanted_text is not None:
                 actual_text = str(element.get("text") or "")

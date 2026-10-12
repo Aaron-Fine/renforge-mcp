@@ -3513,11 +3513,13 @@ def test_list_ui_elements_uses_owning_screen_for_named_textbutton_widget_id(runn
 
     renpy.get_screen = default_layer_lookup
     elements = running_bridge.client.list_ui_elements(screen="tools")
-    assert elements[0]["id"] == "tools/rf_tools"
+    # Upstream's id is the bare widget name; observe's id is kept alongside.
+    assert elements[0]["id"] == "rf_tools"
+    assert elements[0]["control_id"] == "tools/rf_tools"
     _focus, element, error = running_bridge.globs["_renforge_resolve_ui_element"](
         {"id": "tools/rf_tools", "screen": "tools"}, "click_element")
     assert error is None
-    assert element["id"] == "tools/rf_tools"
+    assert element["id"] == "rf_tools"
 
 
 def test_hit_test_reports_topmost_focusable(running_bridge):
