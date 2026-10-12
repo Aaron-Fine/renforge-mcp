@@ -5914,9 +5914,9 @@ def test_custom_displayables_holding_renpy_actions_are_controls(running_bridge):
         widgets = {}
         scope = {}
 
-    bed, save = GameButton(GameAction()), GameButton(namespace["ShowMenu"]())
+    bed, save, clock = GameButton(GameAction()), GameButton(namespace["ShowMenu"]()), GameButton(None)
     screen = ScreenDisplayable()
-    screen.children = [bed, save]
+    screen.children = [bed, save, clock]
     renpy.ui = types.SimpleNamespace(Action=Action)
     renpy.display.behavior.is_sensitive = lambda action: True
     renpy.display.behavior.run = lambda action: action()
@@ -5927,11 +5927,12 @@ def test_custom_displayables_holding_renpy_actions_are_controls(running_bridge):
     renpy.display.focus.focus_list[:] = []
     renpy.display.render = types.SimpleNamespace(screen_render=_completed_render(800, 600, [screen],
         children=[(_completed_render(60, 40, [bed]), 600, 300, True, True),
-                  (_completed_render(40, 40, [save]), 700, 500, True, True)]))
+                  (_completed_render(40, 40, [save]), 700, 500, True, True),
+                  (_completed_render(90, 40, [clock]), 10, 10, True, True)]))
     try:
         snapshot = classify(running_bridge.client.observe(screenshot=False))
-        assert [control['bounds'] for control in snapshot['controls']] == [
-            {'x': 600, 'y': 300, 'width': 60, 'height': 40}]
+        assert [(control['bounds']['x'], control['enabled']) for control in snapshot['controls']] == [
+            (600, True), (10, False)]
         assert snapshot['controls'][0]['semantic'] is True
         assert [control['action'] for control in snapshot['chrome']] == ['ShowMenu']
         assert snapshot['input_candidates'] == []

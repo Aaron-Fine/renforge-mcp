@@ -4211,14 +4211,17 @@ init python:
             for widget, layer, name, screen, _parents in inventory["nodes"]:
                 if id(widget) in seen_widgets or type(widget).__module__.startswith("renpy."):
                     continue
-                actions = _renforge_action_list(getattr(widget, "action", None))
-                if not actions or not all(isinstance(item, action_type) for item in actions):
+                if not hasattr(widget, "action"):
+                    continue
+                actions = _renforge_action_list(widget.action)
+                if not all(isinstance(item, action_type) for item in actions):
                     continue
                 geometry = _renforge_widget_geometry(widget, inventory)
                 if geometry["visible"] is not True:
                     continue
+                # As with Ren'Py buttons, no action means insensitive.
                 try:
-                    enabled = bool(sensitivity(widget.action)) if callable(sensitivity) else True
+                    enabled = bool(actions) and (bool(sensitivity(widget.action)) if callable(sensitivity) else True)
                 except Exception:
                     enabled = True
                 add(types.SimpleNamespace(widget=widget, screen=screen), {
