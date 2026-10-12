@@ -75,7 +75,9 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, betwe
     try:
         while time.monotonic() < deadline:
             if attempted:
-                reply = client.progression("status", operation_id, deadline=deadline)
+                # The overall deadline leaves room to read the last status;
+                # running out of budget is a stop, not a transport failure.
+                reply = client.progression("status", operation_id, deadline=total_deadline)
                 if reply.get("ok") is False:
                     result.update(ok=False, stop="unsupported", error=reply.get("error"))
                     break

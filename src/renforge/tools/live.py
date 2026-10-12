@@ -1254,11 +1254,13 @@ def play(
         current = observe(project_path, screenshot=False)
         if current.get("ok") is False:
             return current
-        if current.get("observation_id") != observation_id:
-            return {"ok": False, "error": "stale", "action_outcome": "refused", "observation": current,
-                    "hint": "The game changed since that observation; act on this one instead."}
+        # Continuing never picks a choice: progression stops at the next
+        # decision from wherever the game is, so a stale observation is safe
+        # here (a line that moves on by itself often makes it stale).
+        stale = current.get("observation_id") != observation_id
         progress = advance_until(project_path, max_steps=200, timeout=timeout, screenshot=screenshot)
         result = {"ok": progress.get("ok", True), "action_outcome": "none",
+                  **({"continued_from_newer_state": True} if stale else {}),
                   "observation": progress.pop("observation", None),
                   "observation_status": progress.get("observation_status")}
         png = progress.pop("_png", None)

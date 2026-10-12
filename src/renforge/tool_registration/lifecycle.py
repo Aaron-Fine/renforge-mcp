@@ -364,15 +364,19 @@ def build_wrappers(context):
         """Start, check, save, load, list saves of, or stop a play session.
 
         The canonical lifecycle for agents. ``launch`` uses agent-mode
-        defaults (isolated saves, preferences and HOME; no Live Editor);
-        server configuration covers the rest. Poll ``status`` until ready.
+        defaults: saves and preferences in the project's RenForge state
+        folder (never the player's, and kept across launches), an isolated
+        HOME, no Live Editor. Poll ``status`` until ready.
         """
 
         def _session() -> dict:
             if action not in SESSION_ACTIONS:
                 return {"ok": False, "error": "action must be one of: " + ", ".join(SESSION_ACTIONS)}
             if action == "launch":
-                return _start_launch(project_path, editor=False)
+                # Saves stay apart from the player's own but survive relaunches.
+                from ..state import project_state_dir
+                saves = project_state_dir(project_path) / "saves"
+                return _start_launch(project_path, editor=False, savedir=str(saves))
             if action == "status":
                 return _launch_status(project_path)
             if action == "stop":

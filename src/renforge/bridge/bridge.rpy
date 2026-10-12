@@ -5689,6 +5689,19 @@ init python:
             return
         raw = _renforge_observe_raw(False, include_readout=False)
         if not raw["stable"]:
+            if (raw.get("unstable_reason") in ("pause", "transition")
+                    and getattr(renpy.config, "allow_skipping", True)
+                    and getattr(renpy.store, "_skipping", True)):
+                # The game moves on by itself, and skipping ends pauses and
+                # transitions as Ren'Py's own skip does. Never judge the
+                # screens behind it: they may be about to go (TDI's
+                # "show black; pause 0.5; jump" leaves the old hub up).
+                renpy.config.skipping = "slow"
+                operation["enabled_generation"] = bridge.observe_generation
+                schedule = getattr(renpy.display.interface, "timeout", None)
+                if callable(schedule):
+                    schedule(0)
+                return
             renpy.config.skipping = None
             return
         snapshot = _renforge_runtime.interaction.classify(raw)

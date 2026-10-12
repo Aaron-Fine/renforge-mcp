@@ -512,8 +512,11 @@ id and text; `renforge_explain(id=...)` returns a control's full record.
 
 After the input the game progresses to the next decision (see below) and the
 result carries the next observation, so the loop is observe once, then act
-repeatedly. A changed game refuses with `error="stale"` and returns the current
-observation. An unstable snapshot cannot authorize input.
+repeatedly. Acting on a control in a changed game refuses with
+`error="stale"` and returns the current observation. Continuing (no `id`) is
+never refused: it cannot choose anything, so it proceeds from the current state
+and reports `continued_from_newer_state`. An unstable snapshot cannot authorize
+input on a control.
 
 The earlier `live` toolset still offers `renforge_advance`, `renforge_click_element`,
 `renforge_select_choice`, `renforge_send_input`, and the rest, with their own

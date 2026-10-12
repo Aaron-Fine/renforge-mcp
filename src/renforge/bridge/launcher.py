@@ -963,9 +963,11 @@ def _launch_after_project_lock(
     env["RENFORGE_BRIDGE_CONTROL_DIR"] = str(control_dir(project.root))
     env["RENFORGE_BRIDGE_PORT"] = str(port)
     # Transitions only slow an agent down and leave half-drawn frames to wait
-    # out. Turn them off when the session's preferences are its own, so the
-    # change never reaches the player's real preferences.
-    if isolation.preferences_mode == "empty" and env.get(TRANSITIONS_ENV, "").strip().lower() != "on":
+    # out. Turn them off when the session's preferences are its own (empty,
+    # or in a save folder that is not the player's), so the change never
+    # reaches the player's real preferences.
+    own_preferences = isolation.preferences_mode == "empty" or not isolation.exposes_user_saves
+    if own_preferences and env.get(TRANSITIONS_ENV, "").strip().lower() != "on":
         env["RENFORGE_BRIDGE_TRANSITIONS"] = "off"
     # Vsync makes every frame wait for the display. A hidden or locked-screen
     # window is throttled (about 70 ms a frame here), and skipping draws at

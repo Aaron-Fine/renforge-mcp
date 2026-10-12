@@ -366,7 +366,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     "renforge_session": ToolDefinition(
         description=(
             "The canonical play-session lifecycle. action=launch starts the game with agent-mode defaults "
-            "(isolated saves, preferences, and HOME; no Live Editor; transitions and vsync off) and returns "
+            "(saves and preferences in the project's RenForge state folder, apart from the player's and kept "
+            "across launches; isolated HOME; no Live Editor; transitions and vsync off) and returns "
             "status=starting or ready; poll action=status until ready or failed. save and load take a slot "
             "name; list shows the session's slots; stop ends the game and cleans up. Server environment "
             "variables cover the rare launch settings (RENFORGE_STARTUP_TIMEOUT, RENFORGE_ISOLATION, ...). "
@@ -534,7 +535,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         description=(
             "The one play step: act on a control, a key, or nothing, then continue to the next decision. "
             "Pass observation_id from the renforge_observe (or previous renforge_act) snapshot you decided on; "
-            "a changed game refuses with error=stale and returns the current observation. id is a control id "
+            "acting on a control in a changed game refuses with error=stale and returns the current observation, "
+            "while continuing (no id) proceeds from the current state. id is a control id "
             "from that snapshot, or key/<name> for a physical key (a-z, arrows, escape, return, space, tab). "
             "value is the control's input: text for an input field (submitted with Enter), a number for a bar, "
             "{x, y} for a viewport, a control id for a drag's drop target (empty string drops on nothing), or "

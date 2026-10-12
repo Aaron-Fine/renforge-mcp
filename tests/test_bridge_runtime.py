@@ -6427,3 +6427,18 @@ def test_roles_come_from_the_engine_classes_before_names(running_bridge):
     role = running_bridge.globs["_renforge_observe_role"]
     assert role(None, Scroller()) == "viewport"
     assert role(None, type("SoundBar", (), {})()) == "bar"  # not the engine's: named fallback
+
+
+@pytest.mark.parametrize("reason", ["pause", "transition"])
+def test_progression_skips_through_a_pause_without_judging_the_screens_behind_it(
+        running_bridge, monkeypatch, reason):
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    renpy.config.start_interact_callbacks[0]()  # a new interaction: skip frozen
+    raw["interaction"] = bridge.observe_generation
+    raw["stable"], raw["unstable_reason"] = False, reason
+    # A stale hub is still drawn under the pause; it must not stop progression.
+    raw["elements"] = [{"screen": "hub", "role": "button", "enabled": True, "clickable": True,
+                        "covered": False, "action": "Jump('beach')"}]
+    running_bridge.globs["_renforge_progress_tick"]()
+    assert bridge.progression["active"] is True
+    assert renpy.config.skipping == "slow"
