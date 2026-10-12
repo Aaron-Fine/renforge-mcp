@@ -106,7 +106,8 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline):
                 result["steps"] = status.get("steps", 0)
                 if status.get("active") is False:
                     result["stop"] = status.get("stop") or "none"
-                    result["ok"] = result["stop"] not in ("crash", "unsupported")
+                    # A custom hub is a normal place to stop and hand control back.
+                    result["ok"] = result["stop"] != "crash"
                     break
             time.sleep(min(POLL_SECONDS, max(0, deadline - time.monotonic())))
     except BridgeError as exc:
