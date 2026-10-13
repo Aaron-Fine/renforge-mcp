@@ -4993,6 +4993,15 @@ init python:
                 statement = {"file": file_name, "line": line_no}
         except Exception:
             statement = None
+        # The label holding the statement that is running. The last label
+        # entered goes stale when a call returns, and after a load whose
+        # after_load label calls others.
+        try:
+            label = _renforge_enclosing_label(statement["file"], statement["line"]) if statement else None
+        except Exception:
+            label = None
+        if label is None and bridge is not None:
+            label = bridge.current_label if isinstance(bridge.current_label, str) else None
         reply = {
             "ok": True,
             "interaction": interaction,
@@ -5599,18 +5608,74 @@ init python:
         return texts
 
 
+    def _renforge_label_last_line(label, first):
+        """The last line of a label's block, from Ren'Py's own walk of it."""
+        last = [first]
+
+        def visit(node):
+            line = getattr(node, "linenumber", None)
+            if isinstance(line, builtins.int) and not isinstance(line, bool) and line > last[0]:
+                last[0] = line
+
+        try:
+            label.get_children(visit)
+        except Exception:
+            pass
+        return last[0]
+
+
+    def _renforge_label_lines():
+        """``{file: [(first, last, label), ...]}`` by first line, rebuilt when the script reloads.
+
+        Ren'Py's own return-point labels (``_call_<label>_<n>``) are left out:
+        they name a call site, not the label a player is in.
+        """
+        script = getattr(getattr(renpy, "game", None), "script", None)
+        namemap = _renforge_explain_namemap()
+        key = (id(script), len(namemap))
+        # Kept on the runtime module, outside the store, so saves and
+        # rollback never carry it.
+        cache = getattr(_renforge_runtime, "label_lines", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        labels = builtins.dict()
+        for name_key, value in list(namemap.items()):
+            if value.__class__.__name__ != "Label":
+                continue
+            name = name_key if isinstance(name_key, builtins.str) else getattr(value, "name", None)
+            if not isinstance(name, builtins.str) or name.startswith("_call_"):
+                continue
+            where = _renforge_explain_loc(value)
+            if where:
+                labels.setdefault(where["file"], builtins.list()).append(
+                    (where["line"], _renforge_label_last_line(value, where["line"]), name))
+        for entries in labels.values():
+            entries.sort()
+        _renforge_runtime.label_lines = (key, labels)
+        return labels
+
+
+    def _renforge_enclosing_label(file_name, line):
+        """The innermost label whose block holds ``file_name:line``, or None.
+
+        A top-level define, screen, or init block after a label is in no label.
+        """
+        if not isinstance(file_name, builtins.str) or not isinstance(line, builtins.int):
+            return None
+        if file_name.endswith(".rpyc"):
+            file_name = file_name[:-1]
+        enclosing = None
+        for first, last, name in _renforge_label_lines().get(file_name, ()):
+            if first > line:
+                break
+            if line <= last:
+                enclosing = name
+        return enclosing
+
+
     def _renforge_explain_search(needle, limit):
         """Every loaded statement whose text contains ``needle``, with its enclosing label."""
         wanted = needle.casefold()
-        labels = {}
-        for key, value in _renforge_explain_namemap().items():
-            if value.__class__.__name__ == "Label":
-                where = _renforge_explain_loc(value)
-                name = key if isinstance(key, builtins.str) else getattr(value, "name", None)
-                if where and isinstance(name, builtins.str):
-                    labels.setdefault(where["file"], []).append((where["line"], name))
-        for entries in labels.values():
-            entries.sort()
         script = getattr(getattr(renpy, "game", None), "script", None)
         matches = []
         truncated = False
@@ -5626,11 +5691,7 @@ init python:
                 truncated = True
                 break
             where = _renforge_explain_loc(node) or {}
-            enclosing = None
-            for line, name in labels.get(where.get("file"), ()):
-                if line > (where.get("line") or 0):
-                    break
-                enclosing = name
+            enclosing = _renforge_enclosing_label(where.get("file"), where.get("line") or 0)
             kind, text = found[0]
             at = text.casefold().find(wanted)
             snippet = text[max(0, at - 60):at + len(needle) + 60]
@@ -6060,8 +6121,14 @@ init python:
         if role == "bar":
             adjustment = getattr(widget, "adjustment", None)
             operations = ["value"] if callable(getattr(adjustment, "change", None)) and getattr(adjustment, "adjustable", True) is not False else []
+            # A viewport's scrollbar (Ren'Py builds it on the viewport's own
+            # adjustment) has no value and no change callback: it only
+            # scrolls. A slider bound to a value or callback is input.
+            if getattr(widget, "value", None) is None and getattr(adjustment, "changed", None) is None:
+                record["scroll"] = True
         elif role == "viewport":
             operations = ["value"] if any(callable(getattr(getattr(widget, attr, None), "change", None)) for attr in ("xadjustment", "yadjustment")) else []
+            record["scroll"] = True
         elif role == "drag":
             record["draggable"] = bool(getattr(widget, "draggable", False))
             record["droppable"] = bool(getattr(widget, "droppable", False))

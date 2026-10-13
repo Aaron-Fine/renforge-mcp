@@ -1107,6 +1107,20 @@ def test_hud_buttons_kept_up_from_earlier_lines_do_not_hold_a_clickable_line():
     assert classify(_raw(elements=hud, screens=screens, dialogue=None))["forward"] == "choose"
 
 
+def test_a_scrolling_panel_beside_a_line_does_not_hold_it():
+    # Come Home's livestream chat: a viewport and its scrollbar, re-shown with the line.
+    chat = [_element(screen="stream", role="viewport", scroll=True),
+            _element(screen="stream", role="bar", text="viewport vertical scroll", scroll=True)]
+    screens = [{"name": "say", "layer": "screens", "modal": False},
+               {"name": "stream", "layer": "screens", "modal": False}]
+    line = classify(_raw(elements=chat, screens=screens))
+    assert line["forward"] == "dismiss"
+    assert all(c["scroll"] for c in line["controls"])  # still there to scroll
+    # A slider bound to a value is input, so it still stops the line.
+    slider = [_element(screen="stream", role="bar", text="volume")]
+    assert classify(_raw(elements=slider, screens=screens))["forward"] == "choose"
+
+
 def test_dismiss_past_optional_controls_still_refuses_menus_and_modals():
     hotspot = [_element(screen="shrine", role="hotspot", widget_id="touch")]
     line = classify(_raw(elements=hotspot))

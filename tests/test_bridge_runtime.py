@@ -942,6 +942,34 @@ def test_observe_dismiss_guard_and_stale_act(running_bridge):
     assert snapshot["dialogue"] == {"who": "Elder", "what": "The gate is quiet."}
     assert snapshot["statement"] == {"file": "game/script.rpy", "line": 16}
 
+    # The label is the one holding the running statement. The last label
+    # entered goes stale after a call returns or an after_load label runs
+    # others (Come Home); Ren'Py's own _call_ return points are not labels a
+    # player is in.
+    class Node:
+        def __init__(self, line, block=()):
+            self.filename, self.linenumber, self.block = "game/script.rpy", line, list(block)
+
+        def get_children(self, f):
+            f(self)
+            for node in self.block:
+                node.get_children(f)
+
+    class Label(Node):
+        def __init__(self, name, line, block=()):
+            super().__init__(line, block)
+            self.name = name
+
+    namemap = {"start": Label("start", 1, [Node(2)]), "gate": Label("gate", 12, [Node(14), Node(16), Node(17)]),
+               "_call_helper_1": Label("_call_helper_1", 15), "helper": Label("helper", 30, [Node(31)])}
+    renpy.game.script = types.SimpleNamespace(namemap=namemap)
+    bridge.current_label = "helper"
+    assert classify(running_bridge.client.observe(screenshot=False))["label"] == "gate"
+    # A line past the end of every label (a top-level define) is in none.
+    explain = running_bridge.globs["_renforge_enclosing_label"]
+    assert explain("game/script.rpy", 20) is None
+    assert explain("game/script.rpy", 31) == "helper"
+
     queued = list(renpy._queued_events)
     stale = running_bridge.client.dismiss_if(interaction=0)
     assert stale.get("ok") is False and stale.get("error") == "stale", stale
@@ -1617,6 +1645,7 @@ def test_viewport_content_is_readout_not_its_label(running_bridge):
     assert [item["text"] for item in snapshot["readout"]] == ["Get the book"]
     viewport = next(c for c in snapshot["controls"] if c["role"] == "viewport")
     assert viewport["text"] is None
+    assert viewport["scroll"] is True  # scrolling is never a story decision
     # A button inside the viewport is still a control, and its text is not readout.
     assert any(c["role"] == "button" for c in snapshot["controls"])
 
@@ -1820,6 +1849,7 @@ def test_act_sets_adjustments_and_drops_a_named_drag(running_bridge):
         def __init__(self, adjustment):
             self.adjustment = adjustment
             self.action = Preference()
+            self.value = self.action  # bar value Preference("music volume")
             self.mcp_id = "volume"
 
     class Viewport:
@@ -1896,6 +1926,8 @@ def test_act_sets_adjustments_and_drops_a_named_drag(running_bridge):
     assert by_id["puzzle/volume"]["operations"] == ["value"]
     assert by_id["puzzle/volume"]["adjustment"] == {"value": 2, "range": 10, "step": 1, "page": 10}
     assert by_id["puzzle/volume"]["selected"] is True
+    assert by_id["puzzle/volume"]["scroll"] is False  # a slider is input
+    assert by_id["puzzle/page"]["scroll"] is True
     assert by_id["puzzle/page"]["adjustment"]["x"]["range"] == 100
     assert by_id["puzzle/page"]["adjustment"]["y"]["value"] == 5
     assert by_id["puzzle/towel"]["image"] == "towel.png"

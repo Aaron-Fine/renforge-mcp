@@ -260,6 +260,8 @@ def _public_control(control: Mapping[str, Any]) -> dict[str, Any]:
         "value": control.get("value") if isinstance(control.get("value"), str) else None,
         "draggable": control.get("draggable"),
         "droppable": control.get("droppable"),
+        # Only scrolls what the screen shows (a viewport or its scrollbar).
+        "scroll": control.get("scroll") is True,
         "operations": list(control.get("operations") or []),
         "enabled": enabled,
         "clickable": clickable,
@@ -279,6 +281,10 @@ def _public_control(control: Mapping[str, Any]) -> dict[str, Any]:
 
 def _is_decision(control: Mapping[str, Any]) -> bool:
     if not control.get("enabled", True):
+        return False
+    if control.get("scroll"):
+        # Scrolling never ends an interaction, so a chat log or task list
+        # beside a line of dialogue does not stop the line.
         return False
     if control.get("covered"):
         return False

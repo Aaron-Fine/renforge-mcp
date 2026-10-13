@@ -85,6 +85,14 @@ versioning.
   used to report every mod clean.
 - `renforge_mod(action="reload")` takes no mod name: it reloads every script,
   wherever the mod lives.
+- A viewport, or a scrollbar Ren'Py built for one, is marked `scroll` and is
+  never a decision: a chat log shown with a line (Come Home's livestreams) no
+  longer stops `act` at every line. A slider bound to a value is still input.
+- An observation's `label` is the label whose block holds the running
+  statement. It used to be the last label entered, which went stale after a
+  `call` returned (a hub reported `_call_determinehinttext_2`) and after
+  loading a save whose `after_load` calls other labels. `explain` search no
+  longer puts a top-level `define` inside the label above it.
 
 ### Added
 
