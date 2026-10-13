@@ -6264,6 +6264,53 @@ def test_unfocused_menu_actions_are_sensitive_distinct_and_guarded(running_bridg
     assert calls == [22, 1]
 
 
+def test_a_choice_the_screen_draws_without_an_action_is_disabled(running_bridge):
+    """TDI draws a disabled=... item as `textbutton caption action None sensitive False`."""
+    from renforge.observe import classify
+    renpy = running_bridge.renpy
+    calls = []
+
+    class Action:
+        def __init__(self, value):
+            self.value = value
+
+        def __call__(self):
+            calls.append(self.value)
+
+    class ScreenDisplayable:
+        screen_name = ('choice', None)
+        layer = 'screens'
+        modal = False
+        hiding = False
+        children = []
+        widgets = {}
+
+    nude, done = Action("nude"), Action("continue")
+    screen = ScreenDisplayable()
+    screen.scope = {'items': [types.SimpleNamespace(caption='Ask her to skinny-dip', action=nude),
+                              types.SimpleNamespace(caption='Continue', action=done)]}
+    locked = _FakeWidget('Ask her to skinny-dip')
+    locked.clicked = None
+    button = _FakeWidget('Continue')
+    button.clicked = button.action = done
+    focuses = [_FakeFocus(None, 0, 0, 200, 40, widget=locked), _FakeFocus(None, 0, 50, 200, 40, widget=button)]
+    for focus in focuses:
+        focus.screen = screen
+    _arm_stable_interaction(running_bridge, generation=12)
+    renpy.game.context = lambda: types.SimpleNamespace(interacting=True,
+        scene_lists=types.SimpleNamespace(layers={'screens': [types.SimpleNamespace(displayable=screen)]}))
+    renpy.display.focus.focus_list[:] = focuses
+    renpy.display.behavior.is_sensitive = lambda action: True
+    renpy.display.behavior.run = lambda action: action()
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    controls = {control['text']: control for control in snapshot['controls']}
+    assert sorted(controls) == ['Ask her to skinny-dip', 'Continue']
+    assert controls['Ask her to skinny-dip']['enabled'] is False
+    assert controls['Continue']['enabled'] is True
+    refused = running_bridge.client.act(interaction=12, control_id=controls['Ask her to skinny-dip']['id'])
+    assert refused['ok'] is False and calls == []
+
+
 def test_nested_interaction_replies_before_the_handler_returns(running_bridge):
     """ShowMenu outside the game menu runs a nested interaction inside the handler."""
     renpy = running_bridge.renpy

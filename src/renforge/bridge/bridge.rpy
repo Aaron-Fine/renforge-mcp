@@ -4378,6 +4378,18 @@ init python:
             button = next((node for node in menu_buttons.get(id(owner), ())
                            if _renforge_action_contains(getattr(node, "action", None)
                                                         or getattr(node, "clicked", None), action)), None)
+            if button is None:
+                # A choice screen can draw an item as a button with no action
+                # (TDI: `textbutton i.caption action None sensitive False` for
+                # disabled=...). That button is the item: it cannot be chosen.
+                drawn = next((pair for pair in pairs
+                              if getattr(pair[0], "screen", None) is owner
+                              and getattr(getattr(pair[0], "widget", None), "clicked", 0) is None
+                              and pair[1].get("text") == caption), None)
+                if drawn is not None:
+                    pairs.remove(drawn)
+                    enabled = False
+                    button = drawn[0].widget
             focus = types.SimpleNamespace(widget=None, screen=owner, action=action, menu_action=action)
             pairs.append((focus, {"screen": name, "layer": getattr(owner, "layer", None),
                 "role": "button", "type": "button", "text": caption,

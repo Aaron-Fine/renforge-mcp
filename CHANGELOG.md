@@ -55,6 +55,9 @@ versioning.
   `show text` and other image-referenced text reaches readout, inputs report
   their typed `value`, and state-only actions (`SensitiveIf`, `SelectedIf`)
   no longer keep menu buttons out of chrome.
+- A menu choice the game's choice screen draws as a button with no action
+  (Total Degeneracy Island's `disabled=` items) is reported disabled and
+  `act` refuses it. It used to look enabled and `act` ran the hidden choice.
 - A hard pause no longer counts as a showing say window, so free roam that
   waits on one (Total Degeneracy Island) stops repeating the last scene's line as
   `dialogue`.
