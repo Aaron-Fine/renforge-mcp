@@ -5045,7 +5045,7 @@ init python:
 
 
     _RENFORGE_EXPLAIN_TEXT_CHARS = 160
-    _RENFORGE_EXPLAIN_KEYWORDS = ("action", "sensitive", "hovered", "unhovered", "selected", "alternate", "value", "id")
+    _RENFORGE_EXPLAIN_KEYWORDS = ("action", "clicked", "sensitive", "hovered", "unhovered", "selected", "alternate", "value", "id")
 
 
     def _renforge_explain_str(value):
@@ -5298,7 +5298,26 @@ init python:
             return {"ok": False, "error": "unknown label"}
         where = _renforge_explain_loc(node) or {}
         state = {"entries": [], "limit": limit, "truncated": False}
-        _renforge_explain_label_walk(getattr(node, "block", None), 0, state)
+        block = getattr(node, "block", None)
+        fell_into = []
+        hops = 0
+        while not block and hops < 50:
+            # Ren'Py runs on past a label with no block: into the statements
+            # after it, or into the next label's own block.
+            hops += 1
+            follow = getattr(node, "next", None)
+            if follow is None:
+                break
+            if follow.__class__.__name__ == "Label":
+                node = follow
+                fell_into.append(getattr(follow, "name", None))
+                block = getattr(follow, "block", None)
+                continue
+            block = []
+            while follow is not None and follow.__class__.__name__ != "Label" and len(block) < 2000:
+                block.append(follow)
+                follow = getattr(follow, "next", None)
+        _renforge_explain_label_walk(block, 0, state)
         return {
             "ok": True,
             "label": name,
@@ -5306,6 +5325,7 @@ init python:
             "line": where.get("line"),
             "statements": state["entries"],
             "truncated": state["truncated"],
+            **({"falls_into": fell_into} if fell_into else {}),
         }
 
 

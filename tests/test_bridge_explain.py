@@ -500,3 +500,26 @@ def test_explain_search_covers_screen_language(running_bridge):
     reply = running_bridge.client.explain(search='jump("rf_room")')
     assert [(m["kind"], m["line"], m["screen"]) for m in reply["matches"]] == [("screen", 9, "rf_hub")]
     assert [m["line"] for m in running_bridge.client.explain(search="quest_stage")["matches"]] == [6]
+
+
+def test_a_label_without_a_block_falls_through_like_ren_py(running_bridge):
+    """'label a:' with nothing under it runs on into the next label's block."""
+    say = _script_node("Say", "game/list.rpy", 9, who="m", what="Next scene.")
+    scenes = _script_node("Label", "game/list.rpy", 7, name="story_list", block=[say], next=None)
+    middle = _script_node("Label", "game/list.rpy", 5, name="hscene_list", block=[], next=scenes)
+    first = _script_node("Label", "game/list.rpy", 4, name="scene_list", block=[], next=middle)
+    _set_script(running_bridge, {"scene_list": first})
+
+    reply = running_bridge.client.explain(label="scene_list")
+
+    assert reply["falls_into"] == ["hscene_list", "story_list"]
+    assert _rows(reply) == [("say", 0, "m: Next scene.")]
+
+
+def test_imagemap_hotspots_show_their_clicked_action(running_bridge):
+    hotspot = _script_node("SLDisplayable", "game/map.rpy", 67, name="hotspot",
+                           positional=["(144, 110, 266, 548)"],
+                           keyword=[("clicked", 'Jump("main_hall")'), ("activate_sound", '"door.mp3"')],
+                           children=[])
+    text = running_bridge.globs["_renforge_explain_sl_text"](hotspot)
+    assert 'clicked Jump("main_hall")' in text and "activate_sound" not in text
