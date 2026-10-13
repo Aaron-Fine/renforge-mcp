@@ -1347,6 +1347,22 @@ def test_dialogue_who_is_the_say_window_name_and_hides_when_the_window_does(runn
     assert menu["dialogue"] is None
     assert menu["forward"] == "none"
 
+    # Free roam waiting on a hard pause shows no say window either.
+    hard_pause = SayBehavior()
+    hard_pause.dismiss, hard_pause.dismiss_unfocused = ["dismiss_hard_pause"], []
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(layers={
+                "screens": [types.SimpleNamespace(displayable=MainMenu())],
+                "transient": [types.SimpleNamespace(displayable=hard_pause)],
+            }),
+        )
+    )
+    hub = running_bridge.client.observe(screenshot=False)
+    assert hub["say_dismiss"] == "dismiss_hard_pause"
+    assert hub["dialogue"] is None
+
 
 def test_unlabeled_button_action_includes_its_target(running_bridge):
     from renforge.observe import classify

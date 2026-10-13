@@ -4039,10 +4039,9 @@ init python:
                 rendered_what = _renforge_observe_text_string(what_widget, max_chars=None)
                 if rendered_what is not None:
                     scoped_what = rendered_what
-        showing = scoped_what is not None or scoped_who_set or say_dismiss in (
-            "dismiss",
-            "dismiss_hard_pause",
-        )
+        # A hard pause (dismiss_hard_pause alone) shows no say window: free
+        # roam that waits on one would otherwise repeat the scene's last line.
+        showing = scoped_what is not None or scoped_who_set or say_dismiss == "dismiss"
         if not showing:
             return None
         bridge = _renforge_runtime.bridge
