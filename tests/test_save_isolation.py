@@ -22,8 +22,10 @@ from renforge.save_isolation import (
     list_host_slots,
     parse_save_directory,
     path_exposes_user_saves,
+    renpy_tool_environment,
     resolve_launch_isolation,
     resolve_save_isolation,
+    TOOL_SAVES_ADAPTER_FILENAME,
 )
 
 
@@ -492,3 +494,34 @@ def test_live_saves_list_user_and_import(
         assert blocked["code"] == "SAVE_IMPORT_NOT_ISOLATED"
     finally:
         live._SESSIONS.pop(live._key(project), None)
+
+
+def test_renpy_tool_environment_keeps_one_shot_commands_out_of_player_saves(monkeypatch) -> None:
+    # Ren'Py writes persistent data on every start, lint included.
+    monkeypatch.setenv("RENPY_SEARCHPATH", "/already/there")
+    with renpy_tool_environment() as env:
+        home = Path(env["HOME"])
+        assert home.is_dir() and home != Path.home()
+        assert Path(env["RENFORGE_SAVEDIR"]).is_dir()
+        adapter_dir, existing = env["RENPY_SEARCHPATH"].split("::", 1)
+        assert existing == "/already/there"
+        adapter = (Path(adapter_dir) / TOOL_SAVES_ADAPTER_FILENAME).read_text(encoding="utf-8")
+        assert "renpy.savelocation.init = " in adapter
+    assert not home.exists()
+
+
+def test_import_finds_the_save_folder_the_running_game_names(tmp_path: Path, host_save_root: Path) -> None:
+    # Games shipped as .rpa/.rpyc only have no loose options.rpy to read.
+    project = tmp_path / "game-root"
+    (project / "game").mkdir(parents=True)
+    host_saves = host_save_root / "archived-game"
+    host_saves.mkdir(parents=True)
+    (host_saves / "1-1-LT1.save").write_bytes(b"SLOT")
+    dest = tmp_path / "state" / "saves"
+
+    assert import_host_slots(project, dest, slot="1-1")["ok"] is False
+    imported = import_host_slots(project, dest, slot="1-1", save_name="archived-game")
+    assert imported["ok"] is True
+    assert (dest / "1-1-LT1.save").read_bytes() == b"SLOT"
+    assert (host_saves / "1-1-LT1.save").read_bytes() == b"SLOT"
+
