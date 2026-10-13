@@ -275,7 +275,7 @@ def test_dispatcher_guide_and_list(tmp_path) -> None:
     assert mod_tools.mod(str(root), "list") == {"ok": True, "mods": []}
 
 
-@pytest.mark.parametrize("action", ["write", "lint", "reload", "remove", "package"])
+@pytest.mark.parametrize("action", ["write", "lint", "remove", "package"])
 def test_dispatcher_requires_name(tmp_path, action) -> None:
     result = mod_tools.mod(str(tmp_path), action)
 
@@ -379,7 +379,7 @@ def test_reload_polls_until_stable_and_reports_clean_errors(tmp_path, monkeypatc
     )
     _install_reload(monkeypatch, fake)
 
-    result = mod_tools.mod(str(tmp_path), "reload", name="demo")
+    result = mod_tools.mod(str(tmp_path), "reload")
 
     assert fake.controls == [(str(tmp_path), "reload_script")]
     assert fake.observe_calls == 2
@@ -400,7 +400,7 @@ def test_reload_fails_when_new_errors_appear(tmp_path, monkeypatch) -> None:
     )
     _install_reload(monkeypatch, fake)
 
-    result = mod_tools.mod(str(tmp_path), "reload", name="demo")
+    result = mod_tools.mod(str(tmp_path), "reload")
 
     assert result["ok"] is False
     assert result["errors"]["events"] == [error_event]
@@ -415,7 +415,7 @@ def test_reload_gives_up_after_timeout(tmp_path, monkeypatch) -> None:
     _install_reload(monkeypatch, fake)
     monkeypatch.setattr(mod_tools, "RELOAD_TIMEOUT", 0.0)
 
-    result = mod_tools.mod(str(tmp_path), "reload", name="demo")
+    result = mod_tools.mod(str(tmp_path), "reload")
 
     assert result["observation"] == unstable
     assert fake.observe_calls == 1
@@ -430,7 +430,7 @@ def test_reload_skips_polling_when_control_fails(tmp_path, monkeypatch) -> None:
         mod_tools, "control", lambda project_path, action, **kwargs: {"ok": False, "error": "no running game"}
     )
 
-    result = mod_tools.mod(str(tmp_path), "reload", name="demo")
+    result = mod_tools.mod(str(tmp_path), "reload")
 
     assert result["ok"] is False
     assert result["reload"] == {"ok": False, "error": "no running game"}

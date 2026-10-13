@@ -287,6 +287,37 @@ def test_session_load_returns_the_restored_observation(tmp_path, monkeypatch) ->
                        "observation": {"stable": True, "observation_id": "obs_2", "label": "loaded", "controls": []}}
 
 
+def test_session_lists_and_imports_the_players_slots(tmp_path, monkeypatch) -> None:
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    from fastmcp import Client
+
+    from renforge.state import project_state_dir
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    player = home / ".renpy" / "archived-game"
+    player.mkdir(parents=True)
+    (player / "1-1-LT1.save").write_bytes(b"PLAYER")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    # Only the running game knows its save folder when it ships no loose .rpy.
+    monkeypatch.setattr(live, "saves", lambda *a, **k: {"ok": True, "slots": [], "save_directory": "archived-game"})
+
+    async def _call(**args):
+        async with Client(create_app()) as client:
+            result = await client.call_tool("renforge_session", {"project_path": str(project), **args})
+        return json.loads(next(block.text for block in result.content if block.type == "text"))
+
+    assert asyncio.run(_call(action="list")) == {"ok": True, "slots": [], "player_slots": [{"name": "1-1"}]}
+    assert asyncio.run(_call(action="import", slot="1-1"))["replaced"] is False
+    assert (project_state_dir(project) / "saves" / "1-1-LT1.save").read_bytes() == b"PLAYER"
+    assert asyncio.run(_call(action="import", slot="1-1"))["replaced"] is True
+    assert asyncio.run(_call(action="import", slot="9-9"))["ok"] is False
+    assert (player / "1-1-LT1.save").read_bytes() == b"PLAYER"
+
+
 def test_live_tools_error_cleanly_without_a_running_game(tmp_path) -> None:
     from renforge.tools import live
 

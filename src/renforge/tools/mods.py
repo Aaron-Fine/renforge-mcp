@@ -9,7 +9,7 @@ from .. import mods
 from .live import control, get_errors, observe
 
 ACTIONS = ("write", "list", "lint", "reload", "remove", "package", "guide")
-_ACTIONS_WITHOUT_NAME = ("list", "guide")
+_ACTIONS_WITHOUT_NAME = ("list", "guide", "reload")
 RELOAD_POLL_INTERVAL = 0.2
 RELOAD_TIMEOUT = 15.0
 
@@ -25,7 +25,7 @@ def _errors_changed(before: dict[str, Any], after: dict[str, Any]) -> bool:
     return list(after.get("files") or []) != list(before.get("files") or [])
 
 
-def _reload(project_path: str, name: str) -> dict[str, Any]:
+def _reload(project_path: str) -> dict[str, Any]:
     baseline = get_errors(project_path)
     baseline = baseline if isinstance(baseline, dict) else {}
     cursor = baseline.get("cursor", 0)
@@ -86,8 +86,7 @@ def mod(
         if action == "lint":
             return mods.lint(project_path, name)
         if action == "reload":
-            mods._check_name(name)
-            return _reload(project_path, name)
+            return _reload(project_path)
         if action == "remove":
             return mods.remove(project_path, name)
         return mods.package(project_path, name)

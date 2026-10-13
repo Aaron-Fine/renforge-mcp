@@ -573,7 +573,10 @@ menu for it, which works for games shipped only as archives. Nothing the
 story did before the label has happened (variables keep their defaults, and a
 label normally reached with `call` ends the run when it returns), so every
 observation carries `started_at_label`; an unknown label is reported as
-`start_label_error`. Play from saves when the earlier state matters.
+`start_label_error`. Play from saves when the earlier state matters. To
+start from the player's real progress, `action="list"` shows their slots as
+`player_slots`, and `action="import", slot="..."` copies one into the
+session's saves (the player's file is only read); then `action="load"` it.
 
 ```python
 snapshot = renforge_observe(project_path=project)
@@ -739,7 +742,7 @@ The loop for an agent:
 ```text
 renforge_mod(project_path=project, action="write", name="demo", path="intro.rpy", content="...")
 renforge_mod(project_path=project, action="lint", name="demo")          # diagnostics inside the mod only
-renforge_mod(project_path=project, action="reload", name="demo")        # hot reload, errors, fresh observation
+renforge_mod(project_path=project, action="reload")                     # hot reload, errors, fresh observation
 renforge_observe(project_path=project)                                  # check the result in the running game
 renforge_mod(project_path=project, action="remove", name="demo")        # listed files, .rpyc siblings, empty dirs
 ```
@@ -768,7 +771,7 @@ be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 
 | Tool | Purpose |
 | --- | --- |
-| `renforge_session` | The play-session lifecycle (`play` toolset): `launch` with agent-mode defaults (isolated saves and preferences, no Live Editor), `status`, `save`/`load`/`list` named slots (`load` returns the restored game's observation), and `stop`. The tools below remain for existing workflows. |
+| `renforge_session` | The play-session lifecycle (`play` toolset): `launch` with agent-mode defaults (isolated saves and preferences, no Live Editor), `status`, `save`/`load`/`list` named slots (`load` returns the restored game's observation; `list` also shows the player's `player_slots`), `import` to copy one of the player's slots in, and `stop`. The tools below remain for existing workflows. |
 | `renforge_launch` | Start or reuse a game with the **Live Editor enabled by default** and inject the temporary bridge. After launch, poll `renforge_launch_status`, observe with `renforge_screenshot` / `renforge_scene_tree`, then use guarded clicks — see [LIVE_EDITOR.md](LIVE_EDITOR.md). The call waits at most 20 seconds, then returns `status=starting` while startup continues in the background. A competing launch returns `code=LAUNCH_IN_PROGRESS` instead of discarding its parameters. `warp` accepts `file:line`; `display`/`audio` default to `auto`; **saves, preferences, and HOME default to isolated temporary locations** so the session does not read or write the user's normal Ren'Py state (`~/.renpy` / `game/saves` / host preferences). Ready payloads include `session_id` and an `isolation` object. Pass `savedir=existing` (host HOME follows unless `home` is set) or set `RENFORGE_ISOLATION=existing` to use the user's files; that requires `authorize=true` when `RENFORGE_POLICY=enforce`. Prefer `renforge_saves(action="import")` to copy selected host slots. `timeout` controls the background startup deadline. |
 | `renforge_launch_status` | Report `starting`, `ready`, `failed`, or `idle` for the latest launch. While cancellation is pending it keeps `status=starting` and sets `cancel_requested=true`. Ready payloads repeat `session_id` and `isolation`. |
 | `renforge_jump` | Restart at a label or `file:line`; it uses the same non-blocking launch lifecycle and the same isolation knobs as `renforge_launch`. |

@@ -537,7 +537,7 @@
     }
   },
   "renforge_session": {
-    "description": "The canonical play-session lifecycle. action=launch starts the game with agent-mode defaults (saves and preferences in the project's RenForge state folder, apart from the player's and kept across launches; isolated HOME; no Live Editor; transitions and vsync off) and returns status=starting or ready; poll action=status until ready or failed. save and load take a slot name; load returns the restored game's observation, ready for renforge_act; list shows the session's slots; stop ends the game and cleans up. launch with label starts the story at that label (for testing and modding): the game leaves its splash screen or main menu for it, and every observation then carries started_at_label, because nothing the story did before the label has happened (a label normally reached with call ends the run when it returns); play from saves instead when the earlier state matters. An unknown label is reported as start_label_error. Server environment variables cover the rare launch settings (RENFORGE_STARTUP_TIMEOUT, RENFORGE_ISOLATION, ...). load requires authorize=true when RENFORGE_POLICY=enforce.",
+    "description": "The canonical play-session lifecycle. action=launch starts the game with agent-mode defaults (saves and preferences in the project's RenForge state folder, apart from the player's and kept across launches; isolated HOME; no Live Editor; transitions and vsync off) and returns status=starting or ready; poll action=status until ready or failed. save and load take a slot name; load returns the restored game's observation, ready for renforge_act; list shows the session's slots and the player's own (player_slots); import copies one player slot into the session's saves (the player's file is only read), so the agent can load and play or test a mod from the player's real progress; stop ends the game and cleans up. launch with label starts the story at that label (for testing and modding): the game leaves its splash screen or main menu for it, and every observation then carries started_at_label, because nothing the story did before the label has happened (a label normally reached with call ends the run when it returns); play from saves instead when the earlier state matters. An unknown label is reported as start_label_error. Server environment variables cover the rare launch settings (RENFORGE_STARTUP_TIMEOUT, RENFORGE_ISOLATION, ...). load requires authorize=true when RENFORGE_POLICY=enforce.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -552,13 +552,14 @@
           "type": "string"
         },
         "action": {
-          "description": "launch, status, save, load, list, or stop.",
+          "description": "launch, status, save, load, list, import, or stop.",
           "enum": [
             "launch",
             "status",
             "save",
             "load",
             "list",
+            "import",
             "stop"
           ],
           "type": "string"
@@ -573,7 +574,7 @@
             }
           ],
           "default": null,
-          "description": "Slot name for save and load."
+          "description": "Slot name for save, load, and import (import takes a name from player_slots)."
         },
         "label": {
           "anyOf": [
@@ -4322,7 +4323,7 @@
     }
   },
   "renforge_mod": {
-    "description": "Write, test, and remove mods under `game/mods/<name>/` with a `renforge-mod.json` manifest. Never modifies game files outside that directory. `write` takes `path` and `content` (`.rpy`, `.txt`, `.json`, or `.md`). `list` reports listed, missing, and unlisted files. `lint` returns project lint diagnostics that point into the mod. `remove` deletes only manifest-listed files, their compiled `.rpyc` siblings, and empty directories; unlisted files are kept and reported. `package` zips the mod into `<state>/mods/`. `reload` hot-reloads the running game and returns errors and a fresh observation. `guide` returns modding idioms. Mod actions are classified per action by the runtime policy.",
+    "description": "Write, test, and remove mods under `game/mods/<name>/` with a `renforge-mod.json` manifest. Never modifies game files outside that directory. `write` takes `path` and `content` (`.rpy`, `.txt`, `.json`, or `.md`). `list` reports listed, missing, and unlisted files. `lint` returns project lint diagnostics that point into the mod. `remove` deletes only manifest-listed files, their compiled `.rpyc` siblings, and empty directories; unlisted files are kept and reported. `package` zips the mod into `<state>/mods/`. `reload` (no name: it reloads every script, wherever the mod lives) hot-reloads the running game and returns errors and a fresh observation. `guide` returns modding idioms. Mod actions are classified per action by the runtime policy.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -4360,7 +4361,7 @@
             }
           ],
           "default": null,
-          "description": "Mod name matching `^[a-z0-9][a-z0-9_-]{0,63}$`. Required for every action except `list` and `guide`.",
+          "description": "Mod name matching `^[a-z0-9][a-z0-9_-]{0,63}$`. Required for every action except `list`, `reload`, and `guide`.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"

@@ -369,7 +369,10 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "(saves and preferences in the project's RenForge state folder, apart from the player's and kept "
             "across launches; isolated HOME; no Live Editor; transitions and vsync off) and returns "
             "status=starting or ready; poll action=status until ready or failed. save and load take a slot "
-            "name; load returns the restored game's observation, ready for renforge_act; list shows the session's slots; stop ends the game and cleans up. launch with label starts "
+            "name; load returns the restored game's observation, ready for renforge_act; list shows the session's slots "
+            "and the player's own (player_slots); import copies one player slot into the session's saves (the "
+            "player's file is only read), so the agent can load and play or test a mod from the player's real "
+            "progress; stop ends the game and cleans up. launch with label starts "
             "the story at that label (for testing and modding): the game leaves its splash screen or main menu "
             "for it, and every observation then carries started_at_label, because nothing the story did "
             "before the label has happened (a label normally reached with call ends the run when it returns); "
@@ -386,12 +389,12 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         ),
         parameters={
             "project_path": "Project root of the game.",
-            "action": "launch, status, save, load, list, or stop.",
-            "slot": "Slot name for save and load.",
+            "action": "launch, status, save, load, list, import, or stop.",
+            "slot": "Slot name for save, load, and import (import takes a name from player_slots).",
             "label": "With launch: start the story at this label (testing and modding).",
             "authorize": "Explicitly approve load when RENFORGE_POLICY=enforce.",
         },
-        parameter_schemas={"action": _enum("launch", "status", "save", "load", "list", "stop")},
+        parameter_schemas={"action": _enum("launch", "status", "save", "load", "list", "import", "stop")},
     ),
     "renforge_game_state": ToolDefinition(
         description=(
@@ -722,8 +725,9 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "game files outside that directory. `write` takes `path` and `content` (`.rpy`, `.txt`, `.json`, or `.md`). "
             "`list` reports listed, missing, and unlisted files. `lint` returns project lint diagnostics that point into "
             "the mod. `remove` deletes only manifest-listed files, their compiled `.rpyc` siblings, and empty directories; "
-            "unlisted files are kept and reported. `package` zips the mod into `<state>/mods/`. `reload` hot-reloads the "
-            "running game and returns errors and a fresh observation. `guide` returns modding idioms. Mod actions are "
+            "unlisted files are kept and reported. `package` zips the mod into `<state>/mods/`. `reload` (no name: it "
+            "reloads every script, wherever the mod lives) hot-reloads the running game and returns errors and a "
+            "fresh observation. `guide` returns modding idioms. Mod actions are "
             "classified per action by the runtime policy."
         ),
         annotations=_ann(
@@ -736,7 +740,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "project_path": "Project root of the game that owns the mod.",
             "action": "One of `write`, `list`, `lint`, `reload`, `remove`, `package`, or `guide`.",
             "name": (
-                "Mod name matching `^[a-z0-9][a-z0-9_-]{0,63}$`. Required for every action except `list` and `guide`."
+                "Mod name matching `^[a-z0-9][a-z0-9_-]{0,63}$`. Required for every action except `list`, `reload`, and `guide`."
             ),
             "path": "Path relative to the mod directory, for example `script.rpy`. Required for `write`.",
             "content": "UTF-8 file content, at most 1,000,000 bytes. Required for `write`.",

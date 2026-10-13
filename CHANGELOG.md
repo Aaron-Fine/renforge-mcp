@@ -77,8 +77,22 @@ versioning.
 - `RENFORGE_TOOLSETS` lists only chosen tool groups (`play`, `live`, `debug`,
   `editor`, `project`, `translation`, `build`, `docs`); it replaces the
   fork-only `RENFORGE_TOOLS` filter.
+- Lint, compile dumps, translation runs, and shadow lint run Ren'Py with a
+  disposable HOME and one disposable save location. Ren'Py writes a game's
+  persistent data on every start, so these used to rewrite the player's
+  `~/.renpy/<game>/persistent` and `game/saves/persistent`.
+- Lint reads Ren'Py 8's `file.rpy:12 message` lines. `renforge_mod(action="lint")`
+  used to report every mod clean.
+- `renforge_mod(action="reload")` takes no mod name: it reloads every script,
+  wherever the mod lives.
 
 ### Added
+
+- `renforge_session(action="import", slot=...)` copies one of the player's
+  save slots into the session's saves (the player's file is only read), and
+  `list` shows them as `player_slots`. The running game names its save folder,
+  so this also works for games shipped only as archives. The mod guide now
+  points here instead of `renforge_saves`, which the `play` toolset lacks.
 
 - Runtime compatibility checks reject games/SDKs below Ren'Py 8.0 with
   `UNSUPPORTED_RENPY_VERSION` before download, injection, or launch. Explicit

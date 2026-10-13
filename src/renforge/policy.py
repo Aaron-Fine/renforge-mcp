@@ -71,6 +71,7 @@ SESSION_ACTIONS: dict[str, str] = {
     "launch": RISK_MUTATING,
     "status": RISK_OBSERVATIONAL,
     "list": RISK_OBSERVATIONAL,
+    "import": RISK_MUTATING,
     "save": RISK_MUTATING,
     "load": RISK_DESTRUCTIVE,
     "stop": RISK_MUTATING,

@@ -15,7 +15,7 @@ TOOL_NAMES = (
     "renforge_session",
 )
 
-SESSION_ACTIONS = ("launch", "status", "save", "load", "list", "stop")
+SESSION_ACTIONS = ("launch", "status", "save", "load", "list", "import", "stop")
 
 
 def build_wrappers(context):
@@ -392,12 +392,46 @@ def build_wrappers(context):
                 return _launch_status(project_path)
             if action == "stop":
                 return _stop_game(project_path)
-            if action in ("save", "load") and not (isinstance(slot, str) and slot.strip()):
+            if action in ("save", "load", "import") and not (isinstance(slot, str) and slot.strip()):
                 return {"ok": False, "error": f"{action} needs a slot name"}
+            if action == "import":
+                return _import(slot.strip())
             result = live.saves(project_path, action, slot=slot)
             if action == "load" and isinstance(result, dict) and result.get("ok"):
                 result = _after_load(result)
+            if action == "list" and isinstance(result, dict):
+                result["player_slots"] = _player_slots(result.pop("save_directory", None))
             return result
+
+        def _save_name() -> str | None:
+            """The game's config.save_directory, from the running game when there is one."""
+            listed = live.saves(project_path, "list")
+            name = listed.get("save_directory") if isinstance(listed, dict) else None
+            return name if isinstance(name, str) and name else None
+
+        def _player_slots(save_name: str | None) -> list[dict]:
+            """The player's own save slots for this game, which import can copy in."""
+            from ..save_isolation import list_host_slots
+
+            listed = list_host_slots(project_path, save_name=save_name)
+            return [{key: item[key] for key in ("name", "extra_info") if item.get(key)}
+                    for item in listed.get("slots") or []]
+
+        def _import(name: str) -> dict:
+            """Copy one of the player's slots into the session's saves; the player's file is only read."""
+            import re
+
+            from ..save_isolation import import_host_slots
+            from ..state import project_state_dir
+
+            saves = project_state_dir(project_path) / "saves"
+            pattern = re.compile(r"%s-[A-Za-z]{2}\d+\.save" % re.escape(name))
+            replaced = saves.is_dir() and any(pattern.fullmatch(entry.name) for entry in saves.iterdir())
+            result = import_host_slots(project_path, saves, slot=name, save_name=_save_name())
+            if not result.get("ok"):
+                return {"ok": False, "error": f"the player has no save slot {name!r}; list shows player_slots"}
+            return {"ok": True, "slot": name, "replaced": replaced,
+                    "next": "load this slot to play from it"}
 
         def _after_load(result: dict) -> dict:
             """Return the restored game's observation, so the next act can use it.

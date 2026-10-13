@@ -4466,6 +4466,7 @@ def test_list_slots_returns_metadata_without_loading_screenshots(running_bridge)
     running_bridge.renpy.slot_screenshot = lambda slot: calls.append(slot) or pytest.fail(
         "list_slots must not load screenshots"
     )
+    running_bridge.renpy.config.save_directory = "demo-1234"
 
     reply = running_bridge.client.list_slots(regexp="branch")
 
@@ -4475,6 +4476,8 @@ def test_list_slots_returns_metadata_without_loading_screenshots(running_bridge)
             {"name": "branch-a", "extra_info": "before menu", "mtime": 12.5},
             {"name": "branch-b", "extra_info": "after choice", "mtime": 13.5},
         ],
+        # Names the player's own save folder, for session import.
+        "save_directory": "demo-1234",
     }
     assert calls == []
 
@@ -4503,6 +4506,7 @@ def test_list_slots_skips_corrupt_metadata_and_keeps_valid_slots(running_bridge)
             {"name": "broken", "extra_info": "", "mtime": None},
             {"name": "valid", "extra_info": "ok", "mtime": 42.0},
         ],
+        "save_directory": None,
     }
 
 

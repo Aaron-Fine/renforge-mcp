@@ -67,7 +67,9 @@ Never edit the game's own files or archives. Put every change in
 
 ## Safety
 
-- Test with copied saves (`renforge_saves(action="import")`), not the player's.
+- Test from the player's real progress with a copy:
+  `renforge_session(action="import", slot=...)` (`list` shows `player_slots`),
+  then `load` it. The player's own save files are only read.
 - A save made while inside a mod label may not load after the mod is removed.
 - Removing a mod and reloading restores the original game only when the mod
   wrote nothing outside `game/mods/<name>/`.
