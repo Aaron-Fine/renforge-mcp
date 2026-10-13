@@ -262,6 +262,31 @@ def test_create_app_registers_expected_tools() -> None:
         assert tool in instructions or not hasattr(app, "instructions")
 
 
+def test_session_load_returns_the_restored_observation(tmp_path, monkeypatch) -> None:
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    from fastmcp import Client
+
+    from renforge.tools import live
+
+    # The bridge answers before the engine restarts into the save, naming the
+    # old label; the session waits for the restored game instead.
+    monkeypatch.setattr(live, "saves", lambda *a, **k: {
+        "ok": True, "slot": "a", "restored_label": "before_load", "restarting": True})
+    snapshots = iter([{"stable": False}, {"stable": True, "observation_id": "obs_2", "label": "loaded",
+                                          "controls": [], "dialogue": None}])
+    monkeypatch.setattr(live, "observe", lambda *a, **k: next(snapshots))
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    async def _call():
+        async with Client(create_app()) as client:
+            return await client.call_tool("renforge_session",
+                                          {"project_path": str(tmp_path), "action": "load", "slot": "a"})
+
+    payload = json.loads(next(block.text for block in asyncio.run(_call()).content if block.type == "text"))
+    assert payload == {"ok": True, "slot": "a",
+                       "observation": {"stable": True, "observation_id": "obs_2", "label": "loaded", "controls": []}}
+
+
 def test_live_tools_error_cleanly_without_a_running_game(tmp_path) -> None:
     from renforge.tools import live
 

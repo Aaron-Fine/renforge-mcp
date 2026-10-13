@@ -394,7 +394,34 @@ def build_wrappers(context):
                 return _stop_game(project_path)
             if action in ("save", "load") and not (isinstance(slot, str) and slot.strip()):
                 return {"ok": False, "error": f"{action} needs a slot name"}
-            return live.saves(project_path, action, slot=slot)
+            result = live.saves(project_path, action, slot=slot)
+            if action == "load" and isinstance(result, dict) and result.get("ok"):
+                result = _after_load(result)
+            return result
+
+        def _after_load(result: dict) -> dict:
+            """Return the restored game's observation, so the next act can use it.
+
+            The bridge replies before the engine has restarted into the save, so
+            its ``restored_label`` names the label from before the load.
+            """
+            import time
+
+            from ..compact import compact_observation
+
+            result.pop("restored_label", None)
+            result.pop("restarting", None)
+            result.pop("ended_interaction", None)
+            observation = None
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                observation = live.observe(project_path, screenshot=False)
+                if isinstance(observation, dict) and observation.get("stable") and observation.get("observation_id"):
+                    break
+                time.sleep(0.25)
+            if isinstance(observation, dict) and observation.get("observation_id"):
+                result["observation"] = compact_observation(observation)
+            return result
 
         return _log_tool_call(
             name="renforge_session",

@@ -369,7 +369,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "(saves and preferences in the project's RenForge state folder, apart from the player's and kept "
             "across launches; isolated HOME; no Live Editor; transitions and vsync off) and returns "
             "status=starting or ready; poll action=status until ready or failed. save and load take a slot "
-            "name; list shows the session's slots; stop ends the game and cleans up. launch with label starts "
+            "name; load returns the restored game's observation, ready for renforge_act; list shows the session's slots; stop ends the game and cleans up. launch with label starts "
             "the story at that label (for testing and modding): the game leaves its splash screen or main menu "
             "for it, and every observation then carries started_at_label, because nothing the story did "
             "before the label has happened (a label normally reached with call ends the run when it returns); "

@@ -55,6 +55,10 @@ versioning.
   `show text` and other image-referenced text reaches readout, inputs report
   their typed `value`, and state-only actions (`SensitiveIf`, `SelectedIf`)
   no longer keep menu buttons out of chrome.
+- `renforge_session(action="load")` returns the restored game's observation,
+  so the next `renforge_act` can use it directly. Its old `restored_label`
+  named the label from before the load, because the bridge replies before
+  the engine restarts into the save.
 - `renforge_session(action="launch", label=...)` starts the story at a label
   for testing and modding, also in archive-only games; observations carry
   `started_at_label` because earlier story state never ran.
