@@ -56,7 +56,7 @@ versioning.
   their typed `value`, and state-only actions (`SensitiveIf`, `SelectedIf`)
   no longer keep menu buttons out of chrome.
 - A hard pause no longer counts as a showing say window, so free roam that
-  waits on one (Total Drama Island) stops repeating the last scene's line as
+  waits on one (Total Degeneracy Island) stops repeating the last scene's line as
   `dialogue`.
 - `renforge_session(action="load")` returns the restored game's observation,
   so the next `renforge_act` can use it directly. Its old `restored_label`
