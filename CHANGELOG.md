@@ -46,7 +46,8 @@ versioning.
   store variables and dotted fields, and explained labels, screens, and
   controls carry `values` for the variables their conditions read. Values
   skip loop variables and attribute roots, show enums as `Day.SUNDAY`, and
-  read class-level defaults. `explain(source=...)` on a menu, `if`, or
+  read class-level defaults. A long list or dict says it is cut short
+  (`size`, `truncated`) instead of silently dropping entries. `explain(source=...)` on a menu, `if`, or
   `while` lists what each branch does, and label and screen entries name
   their file only when it differs from the result's own.
 - Acting with an observation that is slightly out of date is accepted when

@@ -5720,7 +5720,12 @@ init python:
                 value = found
         if callable(value) or isinstance(value, types.ModuleType):
             return {"error": "not data (%s)" % _renforge_type_label(value)}
-        return {"value": _renforge_explain_value(value)}
+        result = {"value": _renforge_explain_value(value)}
+        if isinstance(value, (builtins.list, builtins.tuple, builtins.set, builtins.frozenset, builtins.dict)) \
+                and len(value) > _RENFORGE_VALUE_FIELDS:
+            # Only the first entries are listed; read others by path (ran.some_key).
+            result.update({"size": len(value), "truncated": True})
+        return result
 
     def _renforge_condition_names(text):
         """Variables a condition reads (names and dotted paths, not calls)."""

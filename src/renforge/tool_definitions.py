@@ -467,7 +467,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "Results for a label, screen, id, or source also carry `values`: the current values of the plain "
             "variables their conditions read. `variables` reads named store variables or dotted fields "
             "(`calendar.dayCount`, `persistent.seen_intro`) as data, so what is on screen can be checked "
-            "against the state of the playthrough; game objects come back as their simple public fields. "
+            "against the state of the playthrough; game objects come back as their simple public fields, and a "
+            "long list or dict lists its first entries with `size` and `truncated` (read a key by path: `ran.scene_a`). "
             "Nothing is called or evaluated. Output is bounded by `limit`."
         ),
         annotations=_ann(

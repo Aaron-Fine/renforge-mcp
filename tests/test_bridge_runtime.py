@@ -6648,6 +6648,12 @@ def test_explain_reads_state_as_data_without_running_game_code(running_bridge):
     more = running_bridge.client.explain(variables=["calendar.viewed", "calendar.week"])["variables"]
     assert more["calendar.viewed"] == {"value": False}
     assert more["calendar.week"] == {"error": "no field week"}
+    # A long dict lists its first entries and says so; any key reads by path.
+    store.ran = {"scene_%02d" % n: n for n in range(60)}
+    ran = running_bridge.client.explain(variables=["ran", "ran.scene_59"])["variables"]
+    assert ran["ran"]["size"] == 60 and ran["ran"]["truncated"] is True
+    assert len(ran["ran"]["value"]) < 60
+    assert ran["ran.scene_59"] == {"value": 59}
 
     names = running_bridge.globs["_renforge_condition_names"]
     assert set(names("if calendar.dayCount > 7 and not calendar.isNight() and lorraine_rp >= 10")) == {
