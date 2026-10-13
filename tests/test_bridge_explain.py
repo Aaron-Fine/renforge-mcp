@@ -191,7 +191,8 @@ def test_label_walk_flattens_translate_and_keeps_menu_and_if_structure(running_b
         ("return", 0, ""),
     ]
     choice = reply["statements"][2]
-    assert (choice["file"], choice["line"]) == ("game/script.rpy", 3)
+    assert choice["line"] == 3
+    assert "file" not in choice  # same file as the label
 
 
 def test_label_walk_respects_limit(running_bridge):
@@ -421,7 +422,7 @@ def test_compiled_script_names_are_reported_as_source_names(running_bridge):
     reply = running_bridge.client.explain(label="start")
 
     assert reply["file"] == "game/script.rpy"
-    assert reply["statements"][0]["file"] == "game/script.rpy"
+    assert "file" not in reply["statements"][0]
 
 
 def test_explain_source_traces_a_file_line_from_observe(running_bridge):
@@ -523,3 +524,18 @@ def test_imagemap_hotspots_show_their_clicked_action(running_bridge):
                            children=[])
     text = running_bridge.globs["_renforge_explain_sl_text"](hotspot)
     assert 'clicked Jump("main_hall")' in text and "activate_sound" not in text
+
+
+def test_explain_source_on_a_menu_shows_what_each_choice_does(running_bridge):
+    f = "game/camp.rpy"
+    effect = _script_node("Python", f, 607, code=types.SimpleNamespace(source="courtney.relationship += 10"))
+    flash = _script_node("Jump", f, 611, target="week1_courtney_flashing_bra", expression=False)
+    menu = _script_node("Menu", f, 605, items=[("Agree", "True", [effect]), ("Hesitate", "True", [flash])])
+    running_bridge.renpy.game = types.SimpleNamespace(script=types.SimpleNamespace(namemap={}, all_stmts=[menu]))
+
+    reply = running_bridge.client.explain(source="game/camp.rpy:605")
+
+    rows = [(row["kind"], row["depth"], row["text"]) for row in reply["script"][0]["statements"]]
+    assert ("choice", 0, "Agree") in rows and ("choice", 0, "Hesitate") in rows
+    assert ("python", 1, "courtney.relationship += 10") in rows
+    assert ("jump", 1, "week1_courtney_flashing_bra") in rows

@@ -44,7 +44,11 @@ versioning.
   are gone; the `live` toolset keeps every earlier upstream tool.
 - `renforge_explain` reads playthrough state as data: `variables=[...]` reads
   store variables and dotted fields, and explained labels, screens, and
-  controls carry `values` for the variables their conditions read.
+  controls carry `values` for the variables their conditions read. Values
+  skip loop variables and attribute roots, show enums as `Day.SUNDAY`, and
+  read class-level defaults. `explain(source=...)` on a menu, `if`, or
+  `while` lists what each branch does, and label and screen entries name
+  their file only when it differs from the result's own.
 - Acting with an observation that is slightly out of date is accepted when
   only unrelated parts of the screen changed (a notification closing) and the
   target control is unchanged. Menu captions are read without text tags,

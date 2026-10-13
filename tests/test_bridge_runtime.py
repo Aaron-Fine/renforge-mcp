@@ -6569,6 +6569,8 @@ def test_explain_reads_state_as_data_without_running_game_code(running_bridge):
         def isNight(self):
             raise AssertionError("explain must not call game code")
 
+    Calendar.viewed = False  # a class default the instance never set
+    Calendar.week = property(lambda self: (_ for _ in ()).throw(AssertionError("no code may run")))
     store.calendar, store.lorraine_rp, store.unlocked = Calendar(), 12, {"pool"}
     store.passTime = lambda: None
     reply = running_bridge.client.explain(variables=["lorraine_rp", "calendar.dayCount", "calendar",
@@ -6580,10 +6582,26 @@ def test_explain_reads_state_as_data_without_running_game_code(running_bridge):
     assert "not data" in got["passTime"]["error"]
     assert got["missing"] == {"error": "not defined"}
     assert got["1bad"] == {"error": "not a variable name"}
+    more = running_bridge.client.explain(variables=["calendar.viewed", "calendar.week"])["variables"]
+    assert more["calendar.viewed"] == {"value": False}
+    assert more["calendar.week"] == {"error": "no field week"}
 
     names = running_bridge.globs["_renforge_condition_names"]
     assert set(names("if calendar.dayCount > 7 and not calendar.isNight() and lorraine_rp >= 10")) == {
-        "calendar.dayCount", "lorraine_rp", "calendar"}
+        "calendar.dayCount", "lorraine_rp"}
+    assert names("persistent.mod_tips_enabled and _choice_rec") == ["persistent.mod_tips_enabled", "_choice_rec"]
     values = running_bridge.globs["_renforge_explain_condition_values"](
         {"conditions": ["if lorraine_rp >= 10", "if event_available('talk', 'yard')"]})
     assert values == {"lorraine_rp": 12}
+    # A loop variable is the loop's own; an enum reads as its member.
+    import enum
+
+    class Day(enum.Enum):
+        SUNDAY = 7
+
+    store.camper, store.day = Calendar(), Day.SUNDAY
+    loop = running_bridge.globs["_renforge_explain_condition_values"]({"nodes": [
+        {"kind": "for", "text": "camper in screamingGophers"},
+        {"kind": "if", "text": "camper.currentStatus == 1"},
+        {"kind": "if", "text": "day == Day.SUNDAY"}]})
+    assert loop == {"day": "Day.SUNDAY"}

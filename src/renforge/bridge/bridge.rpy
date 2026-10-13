@@ -5126,13 +5126,11 @@ init python:
             state["truncated"] = True
             return
         where = loc or {}
-        state["entries"].append({
-            "depth": depth,
-            "kind": kind,
-            "file": where.get("file"),
-            "line": where.get("line"),
-            "text": _renforge_explain_text(text),
-        })
+        entry = {"depth": depth, "kind": kind, "line": where.get("line"), "text": _renforge_explain_text(text)}
+        if where.get("file") != state.get("file"):
+            # Entries name their file only when it differs from the result's own.
+            entry["file"] = where.get("file")
+        state["entries"].append(entry)
 
 
     def _renforge_explain_label_walk(block, depth, state):
@@ -5297,7 +5295,7 @@ init python:
         if node is None or node.__class__.__name__ != "Label":
             return {"ok": False, "error": "unknown label"}
         where = _renforge_explain_loc(node) or {}
-        state = {"entries": [], "limit": limit, "truncated": False}
+        state = {"entries": [], "limit": limit, "truncated": False, "file": where.get("file")}
         block = getattr(node, "block", None)
         fell_into = []
         hops = 0
@@ -5412,7 +5410,7 @@ init python:
         if ast is None:
             head.update({"nodes": [], "truncated": False, "reason": "screen defined in Python"})
             return head
-        state = {"entries": [], "limit": limit, "truncated": False}
+        state = {"entries": [], "limit": limit, "truncated": False, "file": where.get("file")}
         _renforge_explain_screen_walk(getattr(ast, "children", None), 0, state)
         head.update({"nodes": state["entries"], "truncated": state["truncated"]})
         return head
@@ -5532,8 +5530,14 @@ init python:
             if where is None or (where["file"], where["line"]) != wanted:
                 continue
             texts = _renforge_explain_node_texts(node)
-            found.append({"kind": node.__class__.__name__,
-                          "text": "\n".join(text for _kind, text in texts)[:4000]})
+            entry = {"kind": node.__class__.__name__,
+                     "text": "\n".join(text for _kind, text in texts)[:4000]}
+            if entry["kind"] in ("Menu", "If", "While"):
+                # What each branch does, as explain(label) would list it.
+                state = {"entries": [], "limit": 300, "truncated": False, "file": where["file"]}
+                _renforge_explain_label_walk([node], 0, state)
+                entry["statements"] = state["entries"]
+            found.append(entry)
             if len(found) >= 8:
                 break
         if not found:
@@ -5652,6 +5656,9 @@ init python:
     def _renforge_explain_value(value, depth=0):
         """A store value as data: plain values as they are, a game object as its
         simple public fields. Nothing is called, so no game code runs."""
+        import enum as _enum
+        if isinstance(value, _enum.Enum):
+            return "%s.%s" % (type(value).__name__, value.name)
         if value is None or isinstance(value, (bool, builtins.int, builtins.float, builtins.str)):
             return value
         if isinstance(value, (builtins.list, builtins.tuple, builtins.set, builtins.frozenset)):
@@ -5689,7 +5696,17 @@ init python:
             elif isinstance(fields, builtins.dict) and part in fields:
                 value = fields[part]
             else:
-                return {"error": "no field %s" % part}
+                # A plain class attribute (a default the instance never set);
+                # properties and methods are never read, since that runs code.
+                found = None
+                for cls in getattr(type(value), "__mro__", ()):
+                    if part in vars(cls):
+                        found = vars(cls)[part]
+                        break
+                if found is None or isinstance(found, (property, builtins.staticmethod, builtins.classmethod)) \
+                        or callable(found) or hasattr(found, "__get__"):
+                    return {"error": "no field %s" % part}
+                value = found
         if callable(value) or isinstance(value, types.ModuleType):
             return {"error": "not data (%s)" % _renforge_type_label(value)}
         return {"value": _renforge_explain_value(value)}
@@ -5706,9 +5723,12 @@ init python:
         except SyntaxError:
             return []
         called = builtins.set(id(node.func) for node in _ast.walk(tree) if isinstance(node, _ast.Call))
+        # The start of a dotted path (persistent in persistent.x) is not read
+        # on its own; only the whole path is.
+        inner = builtins.set(id(node.value) for node in _ast.walk(tree) if isinstance(node, _ast.Attribute))
         names = []
         for node in _ast.walk(tree):
-            if id(node) in called or not isinstance(node, (_ast.Name, _ast.Attribute)):
+            if id(node) in called or id(node) in inner or not isinstance(node, (_ast.Name, _ast.Attribute)):
                 continue
             parts, current = [], node
             while isinstance(current, _ast.Attribute):
@@ -5721,13 +5741,24 @@ init python:
     def _renforge_explain_condition_values(result):
         """Current values of the variables behind the conditions in a result."""
         texts = builtins.list(result.get("conditions") or [])
+        # Names a for loop binds are the loop's own, not store variables.
+        bound = builtins.set()
         for entry in builtins.list(result.get("nodes") or []) + builtins.list(result.get("statements") or []):
-            if isinstance(entry, builtins.dict) and entry.get("kind") in ("if", "elif", "while", "showif"):
+            if not isinstance(entry, builtins.dict):
+                continue
+            if entry.get("kind") in ("if", "elif", "while", "showif"):
                 texts.append(entry.get("text") or "")
+            elif entry.get("kind") == "for":
+                target = (entry.get("text") or "").split(" in ", 1)[0]
+                bound.update(part.strip() for part in target.replace("(", " ").replace(")", " ").split(","))
+        for text in result.get("conditions") or []:
+            if text.startswith("for "):
+                target = text[4:].split(" in ", 1)[0]
+                bound.update(part.strip() for part in target.replace("(", " ").replace(")", " ").split(","))
         values = {}
         for text in texts:
             for name in _renforge_condition_names(text):
-                if name in values or len(values) >= _RENFORGE_VALUE_FIELDS:
+                if name in values or len(values) >= _RENFORGE_VALUE_FIELDS or name.split(".")[0] in bound:
                     continue
                 read = _renforge_explain_variable(name)
                 if "value" in read:
