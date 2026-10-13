@@ -4387,9 +4387,14 @@ init python:
                               and getattr(getattr(pair[0], "widget", None), "clicked", 0) is None
                               and pair[1].get("text") == caption), None)
                 if drawn is not None:
-                    pairs.remove(drawn)
-                    enabled = False
-                    button = drawn[0].widget
+                    widget = drawn[0].widget
+                    drawn[1].update({"menu_index": index, "semantic": True, "enabled": False,
+                                     "clickable": False, "operations": ["click"]})
+                    pairs[pairs.index(drawn)] = (types.SimpleNamespace(
+                        widget=widget, screen=owner, action=action, menu_action=action,
+                        x=getattr(drawn[0], "x", None), y=getattr(drawn[0], "y", None),
+                        w=getattr(drawn[0], "w", None), h=getattr(drawn[0], "h", None)), drawn[1])
+                    continue
             focus = types.SimpleNamespace(widget=None, screen=owner, action=action, menu_action=action)
             pairs.append((focus, {"screen": name, "layer": getattr(owner, "layer", None),
                 "role": "button", "type": "button", "text": caption,

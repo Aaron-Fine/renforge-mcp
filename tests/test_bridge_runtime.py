@@ -6314,6 +6314,8 @@ def test_a_choice_the_screen_draws_without_an_action_is_disabled(running_bridge)
     assert sorted(controls) == ['Ask her to skinny-dip', 'Continue']
     assert controls['Ask her to skinny-dip']['enabled'] is False
     assert controls['Continue']['enabled'] is True
+    assert controls['Ask her to skinny-dip']['id'].startswith('choice/item/')
+    assert 'Ask her to skinny-dip' not in [item['text'] for item in snapshot.get('readout', [])]
     refused = running_bridge.client.act(interaction=12, control_id=controls['Ask her to skinny-dip']['id'])
     assert refused['ok'] is False and calls == []
 
