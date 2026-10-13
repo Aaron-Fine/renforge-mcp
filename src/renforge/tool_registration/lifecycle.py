@@ -431,7 +431,9 @@ def build_wrappers(context):
             if not result.get("ok"):
                 return {"ok": False, "error": f"the player has no save slot {name!r}; list shows player_slots"}
             return {"ok": True, "slot": name, "replaced": replaced,
-                    "next": "load this slot to play from it"}
+                    "next": ("load this slot to play from it. Ren'Py asks whether to trust a save made on "
+                             "another device: choose Yes for the save, then No for the device, which loads "
+                             "this save without trusting others.")}
 
         def _after_load(result: dict) -> dict:
             """Return the restored game's observation, so the next act can use it.
