@@ -5617,10 +5617,20 @@ init python:
             if isinstance(line, builtins.int) and not isinstance(line, bool) and line > last[0]:
                 last[0] = line
 
+        def walk(node):
+            # Without get_children: a block, and the blocks of if/menu entries.
+            visit(node)
+            for child in getattr(node, "block", None) or ():
+                walk(child)
+            for entry in list(getattr(node, "entries", None) or ()) + list(getattr(node, "items", None) or ()):
+                if _renforge_observe_is_sequence(entry) and entry and _renforge_observe_is_sequence(entry[-1]):
+                    for child in entry[-1]:
+                        walk(child)
+
         try:
             label.get_children(visit)
         except Exception:
-            pass
+            walk(label)
         return last[0]
 
 

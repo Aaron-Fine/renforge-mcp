@@ -444,22 +444,23 @@ def test_explain_text_collapses_whitespace(running_bridge):
 
 def test_explain_search_finds_text_with_its_enclosing_label(running_bridge):
     f = "game/script.rpy"
-    _set_script(running_bridge, {
-        "start": _script_node("Label", f, 1),
-        "gate": _script_node("Label", f, 10),
-    })
     code = types.SimpleNamespace(source="if not explored:\n    say('Explore at least a little')")
-    running_bridge.renpy.game.script.all_stmts = [
-        _script_node("Say", f, 2, who=None, what="Hello."),
-        _script_node("Python", f, 12, code=code),
-        _script_node("If", f, 14, entries=[("explored", [])]),
-    ]
+    hello = _script_node("Say", f, 2, who=None, what="Hello.")
+    python = _script_node("Python", f, 12, code=code)
+    check = _script_node("If", f, 14, entries=[("explored", [])])
+    _set_script(running_bridge, {
+        "start": _script_node("Label", f, 1, block=[hello]),
+        "gate": _script_node("Label", f, 10, block=[python, check]),
+    })
+    # A top-level define after the labels is in none of them.
+    after = _script_node("Define", f, 30, code=types.SimpleNamespace(source="explore_hint = 'Explore'"))
+    running_bridge.renpy.game.script.all_stmts = [hello, python, check, after]
 
     reply = running_bridge.client.explain(search="EXPLORE")
 
     assert reply["ok"] is True and reply["truncated"] is False
     assert [(m["kind"], m["line"], m["label"]) for m in reply["matches"]] == [
-        ("python", 12, "gate"), ("if", 14, "gate")]
+        ("python", 12, "gate"), ("if", 14, "gate"), ("python", 30, None)]
     assert running_bridge.client.explain(search=" ")["ok"] is False
 
 
