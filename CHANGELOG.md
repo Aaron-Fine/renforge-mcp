@@ -108,6 +108,12 @@ versioning.
 - When a game turns skipping off (`_skipping = False` in Come Home's
   battles), `act` clicks through each line instead of stopping with
   `unsupported`, clicking again if the line is still up 0.3 s later.
+- A button with a `focus_mask` (Mythos's suspect board: full-screen buttons
+  each masked to one photo) reports the region a click reaches and a proven
+  `click_point`, found by one grid of engine hit tests per interaction.
+  Before this, most photos were unclickable with whole-screen bounds.
+- An input's text is its prompt as drawn: `[mc_nick]` substituted, tags
+  removed. Image names keep their tag (`lorbook naughtydn`, not `naughtydn`).
 
 ### Added
 

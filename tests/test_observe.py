@@ -1157,3 +1157,10 @@ def test_a_bar_that_only_shows_a_value_does_not_hold_a_line():
     )
     assert snapshot["forward"] == "dismiss"
     assert snapshot["controls"][0]["operations"] == []
+
+
+def test_image_names_keep_their_tag():
+    from renforge.interaction import image_basename
+    assert image_basename(("lorbook", "naughtydn")) == "lorbook naughtydn"
+    assert image_basename("lorbook naughtydn") == "lorbook naughtydn"
+    assert image_basename("images/ui/hearticon.webp") == "hearticon.webp"

@@ -1717,6 +1717,81 @@ init python:
                 for focus in getattr(focus_module, "focus_list", ()) or ()}
 
 
+    _RENFORGE_MASK_SCAN_POINTS = 3000
+
+
+    def _renforge_has_focus_mask(widget):
+        try:
+            mask = getattr(getattr(widget, "style", None), "focus_mask", None)
+        except Exception:
+            return False
+        return mask is not None and mask is not False
+
+
+    def _renforge_scan_focus_masks(pending):
+        """Find where focus-masked buttons can be clicked.
+
+        A focus mask makes only the opaque part of a button clickable (a photo
+        on a full-screen board), so the fixed probes can miss it. One grid of
+        engine hit tests over their bounds finds each button's region.
+        """
+        # Scan once per interaction: observing again (as act does while it
+        # waits) reuses what this interaction's scan found.
+        bridge = _renforge_runtime.bridge
+        generation = getattr(bridge, "observe_generation", None)
+        cache = getattr(_renforge_runtime, "mask_scan", None)
+        if not cache or cache[0] != generation:
+            cache = (generation, {})
+            _renforge_runtime.mask_scan = cache
+        known = cache[1]
+        fresh = []
+        for widget, element in pending:
+            key = (id(widget), tuple(element["bounds"][k] for k in ("x", "y", "width", "height")))
+            if key in known:
+                if known[key] is not None:
+                    element.update(known[key])
+                    element.pop("coverage_reason", None)
+            else:
+                fresh.append((widget, element, key))
+        if not fresh:
+            return
+        pending = [(widget, element) for widget, element, _key in fresh]
+        boxes = [element["bounds"] for _widget, element in pending]
+        x0 = min(box["x"] for box in boxes)
+        y0 = min(box["y"] for box in boxes)
+        x1 = max(box["x"] + box["width"] for box in boxes)
+        y1 = max(box["y"] + box["height"] for box in boxes)
+        step = max(8, int(((x1 - x0) * (y1 - y0) / float(_RENFORGE_MASK_SCAN_POINTS)) ** 0.5) + 1)
+        found = {id(widget): [] for widget, _element in pending}
+        for y in range(y0 + step // 2, y1, step):
+            for x in range(x0 + step // 2, x1, step):
+                hit = _renforge_render_hit(x, y)
+                if hit == "unavailable":
+                    return
+                if isinstance(hit, tuple) and id(hit[1]) in found:
+                    found[id(hit[1])].append((x, y))
+        for widget, element, key in fresh:
+            points = found[id(widget)]
+            known[key] = None
+            if not points:
+                continue
+            cx = sum(x for x, _y in points) / float(len(points))
+            cy = sum(y for _x, y in points) / float(len(points))
+            px, py = min(points, key=lambda point: (point[0] - cx) ** 2 + (point[1] - cy) ** 2)
+            # The region the mask leaves clickable, not the whole button. A
+            # grid step out from the outermost hits encloses it.
+            left = max(element["bounds"]["x"], min(x for x, _y in points) - step)
+            top = max(element["bounds"]["y"], min(y for _x, y in points) - step)
+            right = min(element["bounds"]["x"] + element["bounds"]["width"], max(x for x, _y in points) + step)
+            bottom = min(element["bounds"]["y"] + element["bounds"]["height"], max(y for _x, y in points) + step)
+            element["bounds"] = {"x": left, "y": top, "width": right - left, "height": bottom - top}
+            element["click_point"] = {"x": px, "y": py}
+            element["covered"] = False
+            element["clickable"] = bool(element.get("enabled", True)) and element.get("visible") is not False
+            element.pop("coverage_reason", None)
+            known[key] = {name: element[name] for name in ("bounds", "click_point", "covered", "clickable")}
+
+
     def _renforge_mark_coverage(elements, inventory=None):
         """Ask the engine's click hit test which controls a click would reach.
 
@@ -1725,6 +1800,7 @@ init python:
         controls behind a full modal, is the remaining evidence.
         """
         focusable = _renforge_engine_focus_ids()
+        masked = []
         for focus, element in elements:
             widget = getattr(focus, "widget", None)
             enabled = bool(element.get("enabled", True))
@@ -1753,8 +1829,12 @@ init python:
             else:
                 covered = None
                 element["coverage_reason"] = "no eligible point proven by bounded focus probes"
+                if _renforge_has_focus_mask(widget):
+                    masked.append((widget, element))
             element["covered"] = covered
             element["clickable"] = enabled and element.get("visible") is not False and covered is False
+        if masked:
+            _renforge_scan_focus_masks(masked)
         return elements
 
 
@@ -3484,7 +3564,9 @@ init python:
         if _renforge_observe_is_sequence(name):
             parts = [part for part in name if isinstance(part, str) and part.strip()]
             if parts:
-                return "/".join(parts)
+                # An image name is a tag and attributes ("lorbook naughtydn"),
+                # written as Ren'Py writes it, not a path.
+                return " ".join(parts)
         child = getattr(node, "child", None)
         if child is not None and child is not node:
             found = _renforge_displayable_filename(child, depth + 1)
@@ -3961,7 +4043,8 @@ init python:
         if isinstance(scope, builtins.dict):
             prompt = scope.get("prompt")
             if isinstance(prompt, builtins.str) and prompt.strip():
-                return prompt.strip()
+                # As drawn: "[mc_nick]" substituted, text tags removed.
+                return _renforge_strip_say_tags(_renforge_render_say_text(prompt)).strip() or None
         return None
 
 

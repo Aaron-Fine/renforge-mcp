@@ -6785,3 +6785,49 @@ def test_a_bar_that_is_not_adjustable_only_shows_a_value(running_bridge):
     assert scrollbar["operations"] == ["value"] and scrollbar["scroll"] is True
     slider = apply_facts({"role": "bar"}, bar(True, changed=lambda value: None))
     assert slider["operations"] == ["value"] and "scroll" not in slider
+
+
+def test_input_prompt_is_the_text_as_drawn(running_bridge):
+    """Mythos asks "(Leave blank for [mc_nick])"; the player sees the name."""
+    renpy = running_bridge.renpy
+    renpy.substitute = lambda value: value.replace("[mc_nick]", "Kyle")
+    prompt = running_bridge.globs["_renforge_input_prompt"]
+    node = types.SimpleNamespace(scope={"prompt": "{i}Nickname?{/i} (Leave blank for [mc_nick])"})
+    assert prompt(node, None) == "Nickname? (Leave blank for Kyle)"
+
+
+def test_focus_masked_buttons_report_the_region_a_click_reaches(running_bridge, monkeypatch):
+    """Mythos's suspect board: full-screen buttons whose focus_mask is one photo."""
+    globs = running_bridge.globs
+    photo = types.SimpleNamespace(style=types.SimpleNamespace(focus_mask="tarapic mask.webp"))
+    plain = types.SimpleNamespace(style=types.SimpleNamespace(focus_mask=None))
+
+    calls = []
+
+    def hit(x, y):
+        calls.append((x, y))
+        if 1200 <= x < 1500 and 100 <= y < 500:
+            return ("displayable", photo)
+        return "none"
+
+    monkeypatch.setitem(globs, "_renforge_render_hit", hit)
+    monkeypatch.setitem(globs, "_renforge_engine_focus_ids", lambda: set())
+    screen = {"x": 0, "y": 0, "width": 1920, "height": 1080}
+    masked = {"enabled": True, "bounds": dict(screen)}
+    unmasked = {"enabled": True, "bounds": dict(screen)}
+    globs["_renforge_mark_coverage"]([(types.SimpleNamespace(widget=photo), masked),
+                                      (types.SimpleNamespace(widget=plain), unmasked)])
+    assert masked["clickable"] is True and masked["covered"] is False
+    point = masked["click_point"]
+    assert 1200 <= point["x"] < 1500 and 100 <= point["y"] < 500
+    bounds = masked["bounds"]
+    # Encloses the photo, within one grid step (about 28 px here).
+    assert 1170 <= bounds["x"] <= 1200 and 70 <= bounds["y"] <= 100
+    assert 1500 <= bounds["x"] + bounds["width"] <= 1530 and 500 <= bounds["y"] + bounds["height"] <= 530
+    # Without a mask, the probes' verdict stands.
+    assert unmasked["clickable"] is False and unmasked["bounds"] == screen
+    # Observing the same interaction again reuses the scan.
+    scanned = len(calls)
+    again = {"enabled": True, "bounds": dict(screen)}
+    globs["_renforge_mark_coverage"]([(types.SimpleNamespace(widget=photo), again)])
+    assert again["click_point"] == point and len(calls) - scanned == 9

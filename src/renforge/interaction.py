@@ -64,8 +64,9 @@ def operations_for(role: str) -> list[str]:
 
 def image_basename(image_name: Any) -> str | None:
     if isinstance(image_name, (list, tuple)):
+        # A Ren'Py image name: tag and attributes, never a path.
         parts = [part.strip() for part in image_name if isinstance(part, str) and part.strip()]
-        image_name = "/".join(parts)
+        return " ".join(parts) or None
     if not isinstance(image_name, str):
         return None
     name = image_name.strip().replace("\\", "/")
