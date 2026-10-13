@@ -464,7 +464,11 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "returns the statement there, its keyword arguments, and the if/for/use conditions enclosing it. "
             "`search` finds text in every loaded statement (dialogue, Python source, conditions, menu choices, "
             "jump targets) and returns file:line with the enclosing label, e.g. to find what gates a message. "
-            "Output is bounded by `limit`."
+            "Results for a label, screen, id, or source also carry `values`: the current values of the plain "
+            "variables their conditions read. `variables` reads named store variables or dotted fields "
+            "(`calendar.dayCount`, `persistent.seen_intro`) as data, so what is on screen can be checked "
+            "against the state of the playthrough; game objects come back as their simple public fields. "
+            "Nothing is called or evaluated. Output is bounded by `limit`."
         ),
         annotations=_ann(
             readOnlyHint=True,
@@ -480,6 +484,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "source": "A `file:line` reported as `source` by renforge_observe controls or input candidates.",
             "query": "Index only: case-insensitive substring to filter label and screen names.",
             "search": "Case-insensitive text to find in all loaded statements, including Python source.",
+            "variables": "Store variable names or dotted fields to read as data, e.g. [\"day\", \"calendar.dayCount\"].",
             "limit": "Maximum statements, nodes, or index entries to return (1-2000, default 200).",
         },
         parameter_schemas={
@@ -489,6 +494,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "source": {"type": "string"},
             "query": {"type": "string"},
             "search": {"type": "string"},
+            "variables": {"type": "array", "items": {"type": "string"}},
             "limit": _limits(1, 2000),
         },
     ),

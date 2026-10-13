@@ -5626,8 +5626,110 @@ init python:
         return {"ok": True, "search": needle, "matches": matches, "truncated": truncated}
 
 
+    _RENFORGE_VARIABLE_RE = r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*"
+    _RENFORGE_VALUE_FIELDS = 40
+
+    def _renforge_explain_value(value, depth=0):
+        """A store value as data: plain values as they are, a game object as its
+        simple public fields. Nothing is called, so no game code runs."""
+        if value is None or isinstance(value, (bool, builtins.int, builtins.float, builtins.str)):
+            return value
+        if isinstance(value, (builtins.list, builtins.tuple, builtins.set, builtins.frozenset)):
+            items = builtins.list(value)[:_RENFORGE_VALUE_FIELDS]
+            return [_renforge_explain_value(item, depth + 1) for item in items] if depth < 2 else _renforge_jsonable(items)
+        if isinstance(value, builtins.dict):
+            items = builtins.list(value.items())[:_RENFORGE_VALUE_FIELDS]
+            return {str(k): (_renforge_explain_value(v, depth + 1) if depth < 2 else _renforge_jsonable(v)) for k, v in items}
+        fields = getattr(value, "__dict__", None)
+        if isinstance(fields, builtins.dict) and depth < 1:
+            simple = {}
+            for key, item in fields.items():
+                if not isinstance(key, builtins.str) or key.startswith("_") or callable(item):
+                    continue
+                if len(simple) >= _RENFORGE_VALUE_FIELDS:
+                    break
+                simple[key] = _renforge_explain_value(item, depth + 1)
+            return {"type": _renforge_type_label(value), "fields": simple}
+        return "<%s>" % _renforge_type_label(value)
+
+    def _renforge_explain_variable(path):
+        """Read one store variable or dotted attribute path, never calling anything."""
+        import re as _re
+        if not isinstance(path, builtins.str) or not _re.fullmatch(_RENFORGE_VARIABLE_RE, path.strip()):
+            return {"error": "not a variable name"}
+        parts = path.strip().split(".")
+        store = vars(renpy.store)
+        if parts[0] not in store:
+            return {"error": "not defined"}
+        value = store[parts[0]]
+        for part in parts[1:]:
+            fields = getattr(value, "__dict__", None)
+            if isinstance(value, builtins.dict) and part in value:
+                value = value[part]
+            elif isinstance(fields, builtins.dict) and part in fields:
+                value = fields[part]
+            else:
+                return {"error": "no field %s" % part}
+        if callable(value) or isinstance(value, types.ModuleType):
+            return {"error": "not data (%s)" % _renforge_type_label(value)}
+        return {"value": _renforge_explain_value(value)}
+
+    def _renforge_condition_names(text):
+        """Variables a condition reads (names and dotted paths, not calls)."""
+        import ast as _ast
+        source = (text or "").strip()
+        for prefix in ("if ", "elif ", "while ", "showif "):
+            if source.startswith(prefix):
+                source = source[len(prefix):]
+        try:
+            tree = _ast.parse(source, mode="eval")
+        except SyntaxError:
+            return []
+        called = builtins.set(id(node.func) for node in _ast.walk(tree) if isinstance(node, _ast.Call))
+        names = []
+        for node in _ast.walk(tree):
+            if id(node) in called or not isinstance(node, (_ast.Name, _ast.Attribute)):
+                continue
+            parts, current = [], node
+            while isinstance(current, _ast.Attribute):
+                parts.append(current.attr)
+                current = current.value
+            if isinstance(current, _ast.Name):
+                names.append(".".join([current.id] + parts[::-1]))
+        return names
+
+    def _renforge_explain_condition_values(result):
+        """Current values of the variables behind the conditions in a result."""
+        texts = builtins.list(result.get("conditions") or [])
+        for entry in builtins.list(result.get("nodes") or []) + builtins.list(result.get("statements") or []):
+            if isinstance(entry, builtins.dict) and entry.get("kind") in ("if", "elif", "while", "showif"):
+                texts.append(entry.get("text") or "")
+        values = {}
+        for text in texts:
+            for name in _renforge_condition_names(text):
+                if name in values or len(values) >= _RENFORGE_VALUE_FIELDS:
+                    continue
+                read = _renforge_explain_variable(name)
+                if "value" in read:
+                    values[name] = read["value"]
+        return values
+
     def _renforge_h_explain(payload):
         payload = payload or {}
+        if payload.get("variables") is not None:
+            names = payload["variables"]
+            if isinstance(names, builtins.str) or not isinstance(names, (builtins.list, builtins.tuple)) or not names:
+                return {"ok": False, "error": "variables must be a list of names"}
+            return {"ok": True, "variables": {str(name): _renforge_explain_variable(name) for name in names[:100]}}
+        result = _renforge_h_explain_selected(payload)
+        if isinstance(result, builtins.dict) and result.get("ok") is not False:
+            values = _renforge_explain_condition_values(result)
+            if values:
+                # What the conditions above read right now.
+                result["values"] = values
+        return result
+
+    def _renforge_h_explain_selected(payload):
         selectors = [key for key in ("label", "screen", "id", "source", "search") if payload.get(key) is not None]
         if len(selectors) > 1:
             return {"ok": False, "error": "pass at most one of label, screen, id, source, search"}

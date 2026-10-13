@@ -42,6 +42,9 @@ versioning.
   `interaction`, `session_id`, `text`, `key`, `hold`, `x`, `y`, `drop`,
   `submit`, `observe`, `advance`, `max_steps`, `mode`, and `detail` options
   are gone; the `live` toolset keeps every earlier upstream tool.
+- `renforge_explain` reads playthrough state as data: `variables=[...]` reads
+  store variables and dotted fields, and explained labels, screens, and
+  controls carry `values` for the variables their conditions read.
 - Acting with an observation that is slightly out of date is accepted when
   only unrelated parts of the screen changed (a notification closing) and the
   target control is unchanged. Menu captions are read without text tags,

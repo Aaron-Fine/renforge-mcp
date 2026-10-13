@@ -195,6 +195,7 @@ class BridgeClient:
         query: str | None = None,
         search: str | None = None,
         limit: int | None = None,
+        variables: list[str] | None = None,
     ) -> dict:
         """Explain game content from the loaded syntax trees, without evaluating it.
 
@@ -217,6 +218,8 @@ class BridgeClient:
             payload["search"] = search
         if limit is not None:
             payload["limit"] = limit
+        if variables:
+            payload["variables"] = list(variables)
         return self.request("explain", payload)
 
     def eval_expr(self, expr: str) -> Any:

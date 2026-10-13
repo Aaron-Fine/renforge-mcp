@@ -6557,3 +6557,33 @@ def test_readout_follows_image_references_to_shown_text(running_bridge):
         scene_lists=types.SimpleNamespace(layers={"master": [types.SimpleNamespace(displayable=reference)]})))
     nodes = running_bridge.globs["_renforge_scene_inventory"]()["nodes"]
     assert any(node is shown for node, *_rest in nodes)
+
+
+def test_explain_reads_state_as_data_without_running_game_code(running_bridge):
+    store = running_bridge.renpy.store
+
+    class Calendar:
+        def __init__(self):
+            self.dayCount, self.period, self._secret = 3, "Morning", "hidden"
+
+        def isNight(self):
+            raise AssertionError("explain must not call game code")
+
+    store.calendar, store.lorraine_rp, store.unlocked = Calendar(), 12, {"pool"}
+    store.passTime = lambda: None
+    reply = running_bridge.client.explain(variables=["lorraine_rp", "calendar.dayCount", "calendar",
+                                                     "passTime", "missing", "1bad"])
+    got = reply["variables"]
+    assert got["lorraine_rp"] == {"value": 12}
+    assert got["calendar.dayCount"] == {"value": 3}
+    assert got["calendar"]["value"]["fields"] == {"dayCount": 3, "period": "Morning"}
+    assert "not data" in got["passTime"]["error"]
+    assert got["missing"] == {"error": "not defined"}
+    assert got["1bad"] == {"error": "not a variable name"}
+
+    names = running_bridge.globs["_renforge_condition_names"]
+    assert set(names("if calendar.dayCount > 7 and not calendar.isNight() and lorraine_rp >= 10")) == {
+        "calendar.dayCount", "lorraine_rp", "calendar"}
+    values = running_bridge.globs["_renforge_explain_condition_values"](
+        {"conditions": ["if lorraine_rp >= 10", "if event_available('talk', 'yard')"]})
+    assert values == {"lorraine_rp": 12}

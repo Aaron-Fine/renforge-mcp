@@ -551,6 +551,13 @@ keyword arguments (such as `action`), and the `if`/`for`/`use` conditions that
 enclose it. `renforge_explain` reads the loaded syntax trees and never evaluates
 anything, so it is safe to call on a live game.
 
+To check that what is on screen fits the playthrough, `renforge_explain`
+also reads state: results for a label, screen, control, or source carry
+`values`, the current values of the plain variables their conditions read,
+and `variables=["day", "calendar.dayCount"]` reads named store variables or
+dotted fields directly. Game objects come back as their simple public fields;
+functions are never called.
+
 The conventional `quick_menu` and injected `_renforge_` screens are chrome.
 Custom overlay screens remain gameplay controls: overlay registration is a
 rendering detail, not a reason to ignore a hub. Readout text does not stop
