@@ -3852,8 +3852,22 @@ init python:
         return _renforge_displayable_filename(getattr(widget, "child", None))
 
 
+    def _renforge_observe_tooltip(widget):
+        # The `tooltip` property: Ren'Py's own description of a button, often
+        # the only words an image-only button has.
+        getter = getattr(widget, "_get_tooltip", None)
+        try:
+            tip = getter() if callable(getter) else None
+        except Exception:
+            return None
+        if not isinstance(tip, builtins.str):
+            return None
+        return _renforge_strip_say_tags(tip).strip() or None
+
+
     def _renforge_observe_control_facts(widget):
         return {
+            "tooltip": _renforge_observe_tooltip(widget),
             "drag_name": _renforge_observe_drag_name(widget),
             "alternate": _renforge_observe_action_attr(widget, "alternate"),
             "hovered": _renforge_observe_action_attr(widget, "hovered"),
@@ -4930,17 +4944,13 @@ init python:
             if len(candidates) >= 64:
                 unclassified = True
                 break
-            if geometry["visible"] is False:
-                # Kept so agents know the handler exists; it is not on screen.
-                candidates.append({"screen": name, "layer": layer,
-                    "source": _renforge_source_location(node),
-                    "class": "%s.%s" % (type(node).__module__, type(node).__name__),
-                    "visible": False, "bounds": None, "bounds_reason": geometry["bounds_reason"]})
+            if geometry["visible"] is False or not pointer:
+                # Hidden or one-pixel handlers (gamepad and key listeners) have
+                # nothing to point at, and dialogue advances past them.
                 continue
             candidates.append({"screen": name, "layer": layer,
                 "source": _renforge_source_location(node),
                 "class": "%s.%s" % (type(node).__module__, type(node).__name__),
-                "pointer": pointer,
                 "reason": "custom event handler; input semantics and eligibility unknown",
                 "bounds": geometry["bounds"], "bounds_reason": geometry["bounds_reason"],
                 "visible": geometry["visible"], "modal_blocked": blocked,
@@ -5937,6 +5947,7 @@ init python:
         return {key: operation[key] for key in ("id", "active", "stop", "steps")}
 
     _RENFORGE_PROGRESS_PERIODIC_MS = 5
+    _RENFORGE_PROGRESS_RECLICK_S = 0.3
 
 
     def _renforge_periodic_interval(ms=None):
@@ -5984,9 +5995,11 @@ init python:
         # after its skip delay. Another full check would only repeat it,
         # unless the screens are being rebuilt within the same interaction.
         if (operation["enabled_generation"] == bridge.observe_generation
-                and renpy.config.skipping == "slow"
+                and (renpy.config.skipping == "slow"
+                     or _renforge_time.monotonic() - (operation.get("clicked") or 0) < _RENFORGE_PROGRESS_RECLICK_S)
                 and not getattr(renpy.display.interface, "restart_interaction", False)):
             return
+        operation["clicked"] = None
         raw = _renforge_observe_raw(False, include_readout=False)
         if not raw["stable"]:
             if (raw.get("unstable_reason") in ("pause", "transition")
@@ -6013,9 +6026,6 @@ init python:
             _renforge_progress_finish("unsupported")
             return
         if snapshot["forward"] == "dismiss":
-            if not getattr(renpy.config, "allow_skipping", True) or not getattr(renpy.store, "_skipping", True):
-                _renforge_progress_finish("unsupported")
-                return
             # Reaching a line already passed in this operation is a loop the
             # player must break (a prompt over a map, a retry after a bad
             # ending): hand control back instead of going round again.
@@ -6040,6 +6050,15 @@ init python:
                     if event.get("type") == "say" and event.get("say_id") == bridge.say_id:
                         event.update(dialogue)
                         break
+            if not getattr(renpy.config, "allow_skipping", True) or not getattr(renpy.store, "_skipping", True):
+                # The game turned skipping off (Come Home's battles): click
+                # through the line as a player would.
+                # A click in the line's first frames can be dropped; the
+                # line still being up later means it was, so click again.
+                renpy.config.skipping = None
+                operation["clicked"] = _renforge_time.monotonic()
+                renpy.exports.queue_event("dismiss")
+                return
             renpy.config.skipping = "slow"
             schedule = getattr(renpy.display.interface, "timeout", None)
             if callable(schedule):
@@ -6099,7 +6118,7 @@ init python:
             "deadline": _renforge_time.monotonic() + timeout, "max_steps": max_steps,
             "preferences": prefs, "saved_preferences": saved, "enabled_generation": None,
             "skip_delay": getattr(renpy.config, "skip_delay", None),
-            "visited": builtins.dict(),
+            "visited": builtins.dict(), "clicked": None,
         }
         # Games may hold each skipped line on screen (Stranded in Space uses
         # 150 ms); each line is already checked after it draws.
@@ -6121,6 +6140,7 @@ init python:
     def _renforge_observe_apply_facts(record, widget):
         facts = _renforge_observe_control_facts(widget)
         record["drag_name"] = facts.get("drag_name")
+        record["tooltip"] = facts.get("tooltip")
         record["alternate"] = facts.get("alternate")
         record["hovered"] = facts.get("hovered")
         record["selected"] = facts.get("selected")
@@ -6133,11 +6153,14 @@ init python:
             record["value"] = content if isinstance(content, builtins.str) else None
         if role == "bar":
             adjustment = getattr(widget, "adjustment", None)
-            operations = ["value"] if callable(getattr(adjustment, "change", None)) and getattr(adjustment, "adjustable", True) is not False else []
+            # Ren'Py makes a bar focusable only when its adjustment is
+            # adjustable; otherwise it only shows a value (a health bar).
+            adjustable = bool(getattr(adjustment, "adjustable", True))
+            operations = ["value"] if adjustable and callable(getattr(adjustment, "change", None)) else []
             # A viewport's scrollbar (Ren'Py builds it on the viewport's own
             # adjustment) has no value and no change callback: it only
             # scrolls. A slider bound to a value or callback is input.
-            if getattr(widget, "value", None) is None and getattr(adjustment, "changed", None) is None:
+            if adjustable and getattr(widget, "value", None) is None and getattr(adjustment, "changed", None) is None:
                 record["scroll"] = True
         elif role == "viewport":
             operations = ["value"] if any(callable(getattr(getattr(widget, attr, None), "change", None)) for attr in ("xadjustment", "yadjustment")) else []

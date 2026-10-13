@@ -296,6 +296,7 @@ def test_bar_viewport_and_drag_use_their_renpy_operations():
                     action="Drag",
                     alternate='ShowMenu("load")',
                     hovered="Function(ShowHint)",
+                    tooltip="Drag the token onto the board.",
                     ordinal=2,
                 ),
             ],
@@ -309,6 +310,7 @@ def test_bar_viewport_and_drag_use_their_renpy_operations():
     assert snapshot["controls"][1]["adjustment"]["y"]["value"] == 12
     assert snapshot["controls"][2]["alternate"] == 'ShowMenu("load")'
     assert snapshot["controls"][2]["hovered"] == "Function(ShowHint)"
+    assert snapshot["controls"][2]["tooltip"] == "Drag the token onto the board."
     assert guard_act(snapshot, 4, "puzzle/volume") == "value_required"
     assert guard_act(snapshot, 4, "puzzle/volume", value=4) is None
     assert guard_act(snapshot, 4, "puzzle/volume", value=True) == "value_required"
@@ -1142,3 +1144,16 @@ def test_dismiss_past_optional_controls_still_refuses_menus_and_modals():
     assert guard_dismiss(modal, 4, past_optional_controls=True) == "not_dismiss"
     menu = classify(_raw(say_dismiss=None, elements=[_element(screen="choice", menu_index=0, text="Go")]))
     assert guard_dismiss(menu, 4, past_optional_controls=True) == "not_dismiss"
+
+
+def test_a_bar_that_only_shows_a_value_does_not_hold_a_line():
+    """Come Home's health bars: ``bar value hp range max_hp`` is not adjustable."""
+    snapshot = classify(
+        _raw(
+            screens=[{"name": "hp_bars", "layer": "screens", "modal": False}],
+            elements=[_element(screen="hp_bars", role="bar", action=None, operations=[],
+                               adjustment={"value": 80, "range": 100, "step": 1, "page": 10})],
+        )
+    )
+    assert snapshot["forward"] == "dismiss"
+    assert snapshot["controls"][0]["operations"] == []

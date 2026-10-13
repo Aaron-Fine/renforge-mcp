@@ -244,6 +244,7 @@ def _public_control(control: Mapping[str, Any]) -> dict[str, Any]:
     image = control.get("image") if isinstance(control.get("image"), str) else None
     alternate = control.get("alternate") if isinstance(control.get("alternate"), str) else None
     hovered = control.get("hovered") if isinstance(control.get("hovered"), str) else None
+    tooltip = control.get("tooltip") if isinstance(control.get("tooltip"), str) else None
     selected = control.get("selected") if isinstance(control.get("selected"), bool) else None
     return {
         "id": control.get("id"),
@@ -252,6 +253,8 @@ def _public_control(control: Mapping[str, Any]) -> dict[str, Any]:
         "screen": control.get("screen"),
         "action": action,
         "image": image or None,
+        # The game's own tooltip, often the only words an image button has.
+        "tooltip": tooltip or None,
         "alternate": alternate or None,
         "hovered": hovered or None,
         "selected": selected,
@@ -281,6 +284,9 @@ def _public_control(control: Mapping[str, Any]) -> dict[str, Any]:
 
 def _is_decision(control: Mapping[str, Any]) -> bool:
     if not control.get("enabled", True):
+        return False
+    if not control.get("operations"):
+        # Nothing can be done with it (a bar that only shows a value).
         return False
     if control.get("scroll"):
         # Scrolling never ends an interaction, so a chat log or task list

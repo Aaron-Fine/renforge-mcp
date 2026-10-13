@@ -526,13 +526,13 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             'and text; renforge_explain(id=...) returns a control\'s full record. Pass observation_id to renforge_act '
             'to reject observations from another launch or rebuilt controls. Controls use widget ids or menu indices, then drag names, '
             'action summaries, image basenames, or synthetic ordinals. Action summaries include targets and '
-            'arguments, including for unlabeled buttons. operations lists the supported adapters for that '
+            'arguments, including for unlabeled buttons; tooltip is the game\'s own tooltip text. operations lists the supported adapters for that '
             'widget; adjustment reports bar values or viewport axes; draggable and droppable describe drag '
             'eligibility. Inputs outside focus_list are still inventoried. Dialogue and readout remove text '
             'tags while retaining literal braces and paragraph breaks. Only quick_menu and injected '
             '_renforge_ screens are chrome; custom overlay hubs remain gameplay controls. forward is '
             'dismiss, choose, wait, or none. An unstable snapshot is not an action token. omitted reports '
-            'focus, traversal, and readout limits; input_candidates reports unsupported custom event regions with unknown eligibility. Both progression modes stop on incomplete input discovery. Keyboard shortcuts are not fully '
+            'focus, traversal, and readout limits; input_candidates reports unsupported custom event regions on screen with unknown eligibility. Both progression modes stop on incomplete input discovery. Keyboard shortcuts are not fully '
             'inventoried.'
         ),
         annotations=_ann(

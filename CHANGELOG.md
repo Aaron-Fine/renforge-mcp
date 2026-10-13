@@ -99,6 +99,15 @@ versioning.
 - A line paused with `{w}` no longer stops `act` with `stop="loop"`: its
   later segments come from the same run of the say statement. A loop is the
   statement running again with the same words.
+- Controls carry the game's `tooltip` text, often the only words an
+  image-only button has (Come Home's battle icons).
+- `input_candidates` lists only handlers on screen. Hidden or one-pixel ones
+  (Ravager's gamepad listeners, a key listener) have nothing to point at.
+- A bar that only shows a value (`bar value hp range max_hp`, which Ren'Py
+  leaves unfocusable) has no operations and never holds a line.
+- When a game turns skipping off (`_skipping = False` in Come Home's
+  battles), `act` clicks through each line instead of stopping with
+  `unsupported`, clicking again if the line is still up 0.3 s later.
 
 ### Added
 

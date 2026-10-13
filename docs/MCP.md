@@ -716,8 +716,10 @@ Alpha inspection rasterizes completed renders; it does not re-render game
 widgets. Optional natural-text overflow measurements report unavailable when
 that size cannot be established from the completed frame.
 
-`input_candidates` reports custom event handlers whose semantics are unsupported,
-including their screen/layer and geometry when established. These regions have
+`input_candidates` reports on-screen custom event handlers whose semantics are
+unsupported, including their screen/layer and geometry when established.
+Handlers with nothing to point at (hidden, or at most one pixel, such as gamepad
+and key listeners) are left out. These regions have
 no inferred action, label, sensitivity, or clickability. Visible unresolved
 candidates set `omitted.unclassified=true`; both progression modes stop with
 `unsupported` and guarded dismiss refuses input. Known engine widgets and

@@ -5792,6 +5792,30 @@ def test_bounded_native_skip_stops_at_decisions_and_restores_preferences(running
     assert renpy._queued_events == []
 
 
+def test_progression_clicks_through_lines_when_the_game_turns_skipping_off(running_bridge, monkeypatch):
+    """Come Home sets ``_skipping = False`` in battles; a player still clicks each line."""
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    callback = renpy.config.start_interact_callbacks[0]
+    callback()
+    raw["interaction"] = bridge.observe_generation
+    renpy.store._skipping = False
+    renpy._queued_events.clear()
+    tick = running_bridge.globs["_renforge_progress_tick"]
+    tick()
+    assert bridge.progression["active"]
+    assert renpy.config.skipping is None
+    assert renpy._queued_events == ["dismiss"]
+    # One click per line, unless the line is still up a moment later.
+    tick()
+    assert renpy._queued_events == ["dismiss"]
+    bridge.progression["clicked"] -= 1
+    tick()
+    assert renpy._queued_events == ["dismiss", "dismiss"]
+    callback()
+    raw["interaction"] = bridge.observe_generation
+    assert bridge.progression["stop"] == "max_steps"
+
+
 def test_bounded_native_skip_enforces_budget_without_host_poll(running_bridge, monkeypatch):
     bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
     callback = renpy.config.start_interact_callbacks[0]
@@ -6093,9 +6117,8 @@ def test_one_pixel_custom_handler_is_a_key_listener_not_unclassified_input(runni
         children=[(_completed_render(1, 1, [listener]), 0, 0, True, True)]))
     snapshot = classify(running_bridge.client.observe(screenshot=False))
     assert snapshot['omitted']['unclassified'] is False
-    [candidate] = snapshot['input_candidates']
-    assert candidate['pointer'] is False
-    assert candidate['class'].endswith('.KeyListener')
+    # Nothing to point at, so it is not listed either.
+    assert snapshot['input_candidates'] == []
 
 
 def test_custom_displayables_holding_renpy_actions_are_controls(running_bridge):
@@ -6729,3 +6752,36 @@ def test_explain_reads_state_as_data_without_running_game_code(running_bridge):
         {"kind": "if", "text": "camper.currentStatus == 1"},
         {"kind": "if", "text": "day == Day.SUNDAY"}]})
     assert loop == {"day": "Day.SUNDAY"}
+
+
+def test_control_facts_carry_the_buttons_tooltip(running_bridge):
+    """Image-only buttons are often described only by Ren'Py's ``tooltip`` property."""
+    facts = running_bridge.globs["_renforge_observe_control_facts"]
+
+    class Button:
+        def __init__(self, tip):
+            self._tooltip = tip
+
+        def _get_tooltip(self):
+            return self._tooltip
+
+    assert facts(Button("{b}Attack{/b} a single enemy."))["tooltip"] == "Attack a single enemy."
+    assert facts(Button(("not", "text")))["tooltip"] is None
+    assert facts(object())["tooltip"] is None
+
+
+def test_a_bar_that_is_not_adjustable_only_shows_a_value(running_bridge):
+    """``bar value hp range max_hp`` leaves the adjustment unadjustable, as Ren'Py's focus does."""
+    apply_facts = running_bridge.globs["_renforge_observe_apply_facts"]
+
+    def bar(adjustable, changed=None):
+        adjustment = types.SimpleNamespace(value=40, range=100, step=1, page=10, adjustable=adjustable,
+                                           changed=changed, change=lambda value: None)
+        return types.SimpleNamespace(adjustment=adjustment, value=None)
+
+    health = apply_facts({"role": "bar"}, bar(None))
+    assert health["operations"] == [] and "scroll" not in health
+    scrollbar = apply_facts({"role": "bar"}, bar(True))
+    assert scrollbar["operations"] == ["value"] and scrollbar["scroll"] is True
+    slider = apply_facts({"role": "bar"}, bar(True, changed=lambda value: None))
+    assert slider["operations"] == ["value"] and "scroll" not in slider
