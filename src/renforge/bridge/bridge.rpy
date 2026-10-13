@@ -6019,16 +6019,19 @@ init python:
             # Reaching a line already passed in this operation is a loop the
             # player must break (a prompt over a map, a retry after a bad
             # ending): hand control back instead of going round again.
-            # The same statement showing the same words; a scripted loop that
-            # counts ("Line [n].") moves on by itself and is not one.
+            # The same statement showing the same words, run again; a scripted
+            # loop that counts ("Line [n].") moves on by itself and is not one.
+            # A line paused with {w} shows again from the same run of its say
+            # statement (same say_id), so it is not one either.
             where = raw.get("statement") or {}
             words = raw.get("dialogue") or {}
             spot = (where.get("file"), where.get("line"), raw.get("label"), words.get("who"), words.get("what"))
             if where.get("file") is not None:
-                if spot in operation["visited"]:
+                said = operation["visited"].get(spot)
+                if said is not None and said != bridge.say_id:
                     _renforge_progress_finish("loop")
                     return
-                operation["visited"].add(spot)
+                operation["visited"][spot] = bridge.say_id
             operation["enabled_generation"] = bridge.observe_generation
             # Save the rendered copy before the engine moves to another line.
             dialogue = raw.get("dialogue")
@@ -6096,7 +6099,7 @@ init python:
             "deadline": _renforge_time.monotonic() + timeout, "max_steps": max_steps,
             "preferences": prefs, "saved_preferences": saved, "enabled_generation": None,
             "skip_delay": getattr(renpy.config, "skip_delay", None),
-            "visited": builtins.set(),
+            "visited": builtins.dict(),
         }
         # Games may hold each skipped line on screen (Stranded in Space uses
         # 150 ms); each line is already checked after it draws.

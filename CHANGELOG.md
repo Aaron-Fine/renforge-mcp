@@ -96,6 +96,9 @@ versioning.
 - Speaker names drop Ren'Py text tags like the line itself, so a nameless
   voice written `{noalt}{/noalt}` (Ravager) has no `who`. Readout no longer
   repeats the say window's name and line, which `dialogue` already carries.
+- A line paused with `{w}` no longer stops `act` with `stop="loop"`: its
+  later segments come from the same run of the say statement. A loop is the
+  statement running again with the same words.
 
 ### Added
 

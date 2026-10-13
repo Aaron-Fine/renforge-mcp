@@ -6556,10 +6556,20 @@ def test_progression_hands_back_when_it_comes_round_to_a_line_again(running_brid
     bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
     raw["statement"], raw["label"] = {"file": "game/map.rpy", "line": 12}, "where_to"
     bridge.progression["max_steps"] = 10
-    for _ in range(2):
-        renpy.config.start_interact_callbacks[0]()  # the next interaction
+
+    def next_interaction():
+        renpy.config.start_interact_callbacks[0]()
         raw["interaction"] = bridge.observe_generation
         running_bridge.globs["_renforge_progress_tick"]()
+
+    # A line paused with {w} shows again from the same run of its say
+    # statement (Ravager's kobold lines): not a loop.
+    next_interaction()
+    next_interaction()
+    assert bridge.progression["active"] is True
+    # The say statement running again with the same words is one.
+    bridge.say_id += 1
+    next_interaction()
     assert bridge.progression["active"] is False
     assert bridge.progression["stop"] == "loop"
 
