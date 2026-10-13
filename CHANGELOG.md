@@ -93,6 +93,9 @@ versioning.
   `call` returned (a hub reported `_call_determinehinttext_2`) and after
   loading a save whose `after_load` calls other labels. `explain` search no
   longer puts a top-level `define` inside the label above it.
+- Speaker names drop Ren'Py text tags like the line itself, so a nameless
+  voice written `{noalt}{/noalt}` (Ravager) has no `who`. Readout no longer
+  repeats the say window's name and line, which `dialogue` already carries.
 
 ### Added
 

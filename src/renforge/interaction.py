@@ -406,7 +406,8 @@ def crossed_transcript(events: list[Any], frames: list[Any]) -> list[dict[str, A
         text = strip_text_tags(what)
         if not text:
             return
-        speaker = who.strip() if isinstance(who, str) and who.strip() else None
+        # Speaker names carry text tags too ({noalt}{/noalt} for a nameless voice).
+        speaker = strip_text_tags(who).strip() or None if isinstance(who, str) else None
         key = (speaker, text)
         if occurrence is not None:
             if occurrence in seen_occurrences:
@@ -458,6 +459,8 @@ def _dialogue(raw: Mapping[str, Any]) -> dict[str, Any] | None:
     if not isinstance(dialogue, Mapping):
         return None
     who = dialogue.get("who") if isinstance(dialogue.get("who"), str) else None
+    if isinstance(who, str):
+        who = strip_text_tags(who).strip() or None
     what = dialogue.get("what") if isinstance(dialogue.get("what"), str) else None
     if isinstance(what, str):
         what = strip_text_tags(what) or None
@@ -497,6 +500,14 @@ def _readout(raw: Mapping[str, Any]) -> list[dict[str, Any]]:
                 record["bounds"] = cleaned
         records.append(record)
     return records
+
+
+def _without_dialogue(readout: list[dict[str, Any]], dialogue: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Drop readout that only repeats the say window's name and line; ``dialogue`` has them."""
+    if not dialogue:
+        return readout
+    said = {dialogue.get("who"), dialogue.get("what")} - {None}
+    return [record for record in readout if record.get("text") not in said]
 
 
 def _statement(raw: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -596,7 +607,7 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
         "forward": forward,
         "controls": controls,
         "chrome": chrome,
-        "readout": _readout(raw),
+        "readout": _without_dialogue(_readout(raw), _dialogue(raw)),
         "input_candidates": list(raw.get("input_candidates") or []),
         "frame_hash": frame_hash or None,
         "frame_id": raw.get("frame_id"),

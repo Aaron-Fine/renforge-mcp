@@ -74,6 +74,18 @@ def test_dialogue_what_drops_text_tags():
     literal = classify(_raw(dialogue={"who": None, "what": "Use {{b}} here"}))
     assert literal["dialogue"]["what"] == "Use {b} here"
 
+    # The say window's own texts are dialogue, not readout as well (Ravager).
+    repeated = classify(_raw(dialogue={"who": "Adeline", "what": "A fine name."},
+                             readout=[{"screen": "say", "text": "Adeline"},
+                                      {"screen": "say", "text": "A fine name."},
+                                      {"screen": "day_overlay", "text": "13"}]))
+    assert [r["text"] for r in repeated["readout"]] == ["13"]
+
+    # Ravager's nameless narrator voice is a name made only of tags.
+    nameless = classify(_raw(dialogue={"who": "{noalt}{/noalt}", "what": "She smiles."}))
+    assert nameless["dialogue"] == {"who": None, "what": "She smiles."}
+    assert classify(_raw(dialogue={"who": "{b}Adeline{/b}", "what": "Hi."}))["dialogue"]["who"] == "Adeline"
+
 
 def test_readout_does_not_change_forward_or_become_a_control():
     snapshot = classify(
