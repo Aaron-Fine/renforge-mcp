@@ -1620,6 +1620,13 @@ def test_viewport_content_is_readout_not_its_label(running_bridge):
     # A button inside the viewport is still a control, and its text is not readout.
     assert any(c["role"] == "button" for c in snapshot["controls"])
 
+    # A viewport outside the focus list (TDI's tips panel) is found by its
+    # adjustments; its content is still readout, not its label.
+    renpy.display.focus.focus_list[:] = [focus]
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    viewport = next(c for c in snapshot["controls"] if c["role"] == "viewport")
+    assert viewport["text"] is None
+
 
 def test_say_tags_are_removed_before_the_snapshot(running_bridge):
     from renforge.observe import classify

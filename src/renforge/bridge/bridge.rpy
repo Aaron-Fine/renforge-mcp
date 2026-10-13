@@ -6102,7 +6102,8 @@ init python:
             record = {
                 "screen": screen_name,
                 "role": kind,
-                "text": _renforge_focus_text(widget) or None,
+                # A viewport's content is readout, not its label.
+                "text": None if _renforge_observe_normalize_role(kind) == "viewport" else (_renforge_focus_text(widget) or None),
                 "enabled": enabled,
                 "clickable": enabled,
                 "covered": False,
