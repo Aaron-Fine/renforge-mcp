@@ -153,6 +153,9 @@ versioning.
   an empty-block label (`label start:` with the story unindented beneath, as
   in Found in Translation). Observations read `after_load` after a load there,
   and explain search gave such lines no label.
+- An image button whose image is a dynamic image reports the image it
+  resolved to (`player1_avatar_idle`), not its `[player_skin]_avatar_idle`
+  template. Found in Inanna's Revenge.
 
 ### Added
 

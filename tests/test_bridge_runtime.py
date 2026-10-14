@@ -6516,6 +6516,23 @@ def test_an_action_list_that_takes_a_save_screenshot_is_menu_chrome(running_brid
     assert chrome([Show()]) is False
 
 
+def test_a_dynamic_image_reads_as_the_image_it_resolved_to(running_bridge):
+    """Inanna's Revenge: an imagebutton idle of "[player_skin]_avatar_idle"."""
+    filename = running_bridge.globs["_renforge_displayable_filename"]
+
+    class ImageReference:
+        def __init__(self, name):
+            self.name = name
+
+    class DynamicImage:
+        def __init__(self, name, raw_target=None):
+            self.name, self.raw_target, self.target = name, raw_target, None
+
+    assert filename(DynamicImage("[player_skin]_avatar_idle", ImageReference(("mc_dark", "avatar_idle")))) == "mc_dark avatar_idle"
+    # Not resolved yet: the template is all there is.
+    assert filename(DynamicImage("[player_skin]_avatar_idle")) == "[player_skin]_avatar_idle"
+
+
 def test_a_click_sound_does_not_make_a_menu_button_a_decision(running_bridge):
     """Astreon's menu buttons each run Play("sound", ...) before their real action."""
     chrome = running_bridge.globs["_renforge_engine_chrome_action"]

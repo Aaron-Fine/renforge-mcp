@@ -3571,6 +3571,15 @@ init python:
         filename = getattr(node, "filename", None)
         if isinstance(filename, str) and filename.strip():
             return filename.strip()
+        # A DynamicImage's name is its template ("[player_skin]_avatar_idle");
+        # the image it resolved to is what is drawn.
+        if node.__class__.__name__ == "DynamicImage":
+            for attr in ("raw_target", "target"):
+                resolved = getattr(node, attr, None)
+                if resolved is not None and resolved is not node:
+                    found = _renforge_displayable_filename(resolved, depth + 1)
+                    if found:
+                        return found
         name = getattr(node, "name", None)
         if isinstance(name, str) and name.strip() and name not in (
             "image",
