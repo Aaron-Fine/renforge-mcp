@@ -1070,6 +1070,11 @@ def test_settle_accepts_a_screen_that_keeps_changing_within_one_interaction():
         lambda shot: _raw(interaction=3, observation_id="f%d" % next(flicker), stable=False),
         time.monotonic() + 0.3, screenshot=False)
     assert status == "timeout" and result is None
+    # Inside a pause when the budget ends: the pause is the current state.
+    result, status, _error = settle(
+        lambda shot: _raw(interaction=4, stable=False, unstable_reason="pause"),
+        time.monotonic() + 0.2, screenshot=True)
+    assert status == "ready" and result["unstable_reason"] == "pause"
 
 
 def test_dismiss_progression_stops_before_unclassified_input():

@@ -200,6 +200,10 @@ versioning.
   within one stable interaction (a music room whose timer rebuilds its
   buttons, Desert Stalker). It waited for two identical observations that
   never came, so each act took the full 30 s and returned no observation.
+- When `act`'s budget ends inside a pause or transition, its final
+  observation is that current state (`stable=false` with `unstable_reason`)
+  instead of none with `observation_status="timeout"` (Nightmares of the
+  Moon's intro, with a 2 s hard pause at the end of the budget).
 - Ren'Py's parse-error screen is a `game_error` too (its first error line), and
   a launch that wrote `errors.txt` fails with `GAME_STARTUP_ERROR` even though
   the bridge came up, so a recompile that clashes with archived scripts is

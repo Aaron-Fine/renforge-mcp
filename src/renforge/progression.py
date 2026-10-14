@@ -77,6 +77,10 @@ def settle(fetch, deadline, *, screenshot=True):
         else:
             previous = identity if last["stable"] else None
         time.sleep(min(POLL_SECONDS, max(0, deadline - time.monotonic())))
+    if last is not None and not last["stable"] and last.get("unstable_reason") in ("pause", "transition"):
+        # The budget ended inside a pause or transition: that is the current
+        # state, and its unstable_reason says so. Continuing waits it out.
+        return last, "ready", None
     return None, "timeout", "final observation did not settle within the budget"
 
 
