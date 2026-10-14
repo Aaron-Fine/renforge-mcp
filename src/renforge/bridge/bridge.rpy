@@ -5142,7 +5142,8 @@ init python:
         # entered goes stale when a call returns, and after a load whose
         # after_load label calls others.
         try:
-            label = _renforge_enclosing_label(statement["file"], statement["line"]) if statement else None
+            label = (_renforge_enclosing_label(statement["file"], statement["line"], falls_through=True)
+                     if statement else None)
         except Exception:
             label = None
         if label is None and bridge is not None:
@@ -5810,22 +5811,37 @@ init python:
         return labels
 
 
-    def _renforge_enclosing_label(file_name, line):
+    def _renforge_enclosing_label(file_name, line, falls_through=False):
         """The innermost label whose block holds ``file_name:line``, or None.
 
         A top-level define, screen, or init block after a label is in no label.
+        A story statement outside every label block (``label start:`` with an
+        empty block, the story written unindented below it) is reached by
+        falling through the label before it; ``falls_through`` names that
+        label.
         """
         if not isinstance(file_name, builtins.str) or not isinstance(line, builtins.int):
             return None
         if file_name.endswith(".rpyc"):
             file_name = file_name[:-1]
         enclosing = None
+        preceding = None
         for first, last, name in _renforge_label_lines().get(file_name, ()):
             if first > line:
                 break
+            preceding = name
             if line <= last:
                 enclosing = name
+        if enclosing is None and falls_through:
+            return preceding
         return enclosing
+
+
+    # Statements that only run in story flow, never at init time.
+    _RENFORGE_STORY_STATEMENTS = frozenset((
+        "Say", "Menu", "Scene", "Show", "Hide", "With", "Jump", "Call", "Return",
+        "Pass", "UserStatement", "If", "While",
+    ))
 
 
     def _renforge_explain_search(needle, limit):
@@ -5846,7 +5862,9 @@ init python:
                 truncated = True
                 break
             where = _renforge_explain_loc(node) or {}
-            enclosing = _renforge_enclosing_label(where.get("file"), where.get("line") or 0)
+            enclosing = _renforge_enclosing_label(
+                where.get("file"), where.get("line") or 0,
+                falls_through=node.__class__.__name__ in _RENFORGE_STORY_STATEMENTS)
             kind, text = found[0]
             at = text.casefold().find(wanted)
             snippet = text[max(0, at - 60):at + len(needle) + 60]

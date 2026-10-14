@@ -990,6 +990,10 @@ def test_observe_dismiss_guard_and_stale_act(running_bridge):
     explain = running_bridge.globs["_renforge_enclosing_label"]
     assert explain("game/script.rpy", 20) is None
     assert explain("game/script.rpy", 31) == "helper"
+    # A story line below an empty-block label runs by falling through it
+    # (Found in Translation: `label start:` with the story unindented below).
+    assert explain("game/script.rpy", 20, falls_through=True) == "gate"
+    assert explain("game/script.rpy", 0, falls_through=True) is None
 
     queued = list(renpy._queued_events)
     stale = running_bridge.client.dismiss_if(interaction=0)

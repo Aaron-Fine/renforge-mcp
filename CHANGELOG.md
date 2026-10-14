@@ -149,6 +149,10 @@ versioning.
   or `OpenURL`, so they were gameplay controls beside the real Start button;
   they are chrome now. Nested action lists (`action [Play(...)], OpenURL(...)`)
   are flattened as Ren'Py runs them.
+- `label` names the label a story line falls through from when it sits below
+  an empty-block label (`label start:` with the story unindented beneath, as
+  in Found in Translation). Observations read `after_load` after a load there,
+  and explain search gave such lines no label.
 
 ### Added
 
