@@ -254,6 +254,10 @@ versioning.
   chrome, so the observation had no controls and `forward="none"`. A HUD kept
   up, the quick menu, and Ren'Py's game-menu screens keep such buttons as
   chrome.
+- A launch that times out reports the last lines of the log.txt it wrote as
+  `details.log_tail`. A log that stops at window or GL setup (`Windowed
+  mode.`, `Maximum texture size`, a shader cache line) means the window never
+  opened, as with an X11 window while the screen is locked.
 
 ### Added
 

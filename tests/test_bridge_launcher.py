@@ -1357,6 +1357,7 @@ def test_editor_launch_failure_cleans_resources_and_closes_coordinator(
         launch_with_bridge(sdk, project, editor=True, startup_timeout=0.0)
 
     assert excinfo.value.code == "BRIDGE_CONNECTION_TIMEOUT"
+    assert excinfo.value.details["log_tail"] == []
     assert coordinator_calls["init"] == 1
     assert coordinator_calls["start"] == 1
     assert coordinator_calls["close"] == 1
@@ -2272,3 +2273,15 @@ def test_startup_timeout_defaults_and_reads_the_environment(monkeypatch):
     for bad in ("", "soon", "0", "-5", "inf", "nan"):
         monkeypatch.setenv(launcher.STARTUP_TIMEOUT_ENV, bad)
         assert launcher.default_startup_timeout() == 180.0
+
+
+def test_log_tail_reports_where_this_launch_stopped(tmp_path: Path) -> None:
+    from renforge.bridge.launcher import _log_tail
+
+    log = tmp_path / "log.txt"
+    assert _log_tail(tmp_path, 0) == []
+    log.write_text("﻿Ren'Py 8.0.3\n\nScreen sizes: virtual=(1920, 1080)\nWindowed mode.\n", encoding="utf-8")
+    assert _log_tail(tmp_path, 0) == ["Ren'Py 8.0.3", "Screen sizes: virtual=(1920, 1080)", "Windowed mode."]
+    assert _log_tail(tmp_path, 0, lines=1) == ["Windowed mode."]
+    # A log left by an earlier run says nothing about this launch.
+    assert _log_tail(tmp_path, log.stat().st_mtime_ns + 1) == []
