@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Any, Final
 
+from .guard import guard_block, guard_rpy
 from ..launch_env import (
     LaunchError,
     detect_environment,
@@ -384,7 +385,7 @@ def bridge_payload() -> bytes:
     marker = '"__RENFORGE_INTERACTION_SOURCE__"'
     if template.count(marker) != 1:
         raise ValueError("bridge must contain exactly one gameplay contract marker")
-    return template.replace(marker, repr(source)).encode("utf-8")
+    return guard_block(template.replace(marker, repr(source))).encode("utf-8")
 
 
 def _editor_screen_sources() -> list[Path]:
@@ -406,10 +407,10 @@ def _editor_payload() -> bytes:
     path — the whole ownership contract stays as narrow as it was — while the
     sources stay split for the people writing them.
     """
-    parts = [_EDITOR_RESOURCE.read_bytes()]
+    parts = [_EDITOR_RESOURCE.read_text(encoding="utf-8")]
     for path in _editor_screen_sources():
-        parts.append(b"\n\n" + path.read_bytes())
-    return b"".join(parts)
+        parts.append("\n\n" + path.read_text(encoding="utf-8"))
+    return guard_rpy("".join(parts)).encode("utf-8")
 
 
 def _editor_asset_sources() -> list[tuple[str, Path]]:

@@ -1627,10 +1627,13 @@ def test_injected_payload_is_the_sum_of_every_source_file() -> None:
     assert screens, "expected the region screens to live in their own files"
     assert {path.name for path in screens} >= {"rf_toolbar.rpy", "rf_tree.rpy"}
 
-    payload = _editor_payload()
-    assert payload.startswith(_EDITOR_RESOURCE.read_bytes())
+    from renforge.bridge.guard import guard_rpy
+
+    # Each source arrives with its init python blocks guarded (guard.py).
+    payload = _editor_payload().decode("utf-8")
+    assert payload.startswith(guard_rpy(_EDITOR_RESOURCE.read_text(encoding="utf-8")))
     for path in screens:
-        assert path.read_bytes() in payload
+        assert guard_rpy(path.read_text(encoding="utf-8")) in payload
 
     # Order must not drift with the filesystem, or the digest changes for no reason.
     assert [path.name for path in screens] == sorted(path.name for path in screens)

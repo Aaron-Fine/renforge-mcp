@@ -129,6 +129,13 @@ versioning.
   Desire ship stale `.rpyc` files whose first recompile raises a duplicate
   translation error. Launched games also get an editor that opens nothing, so
   a crash no longer opens `traceback.txt` on the user's desktop.
+- The injected bridge and Live Editor no longer read builtins or their own
+  imports from the game's store. Eternum defines `id` as a Character, so every
+  observation failed with "Character expects its what argument to be a
+  string"; a game's `default types = [...]` would also have replaced the
+  bridge's `types` module, and the bridge's imports overwrote game variables
+  with the same names. The injected copy binds each to a private `_rfb_` name
+  (`renforge/bridge/guard.py`) without changing line numbers.
 
 ### Added
 

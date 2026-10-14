@@ -30,9 +30,28 @@ def _load_bridge_body():
     return "\n".join(line[4:] if line.startswith("    ") else line for line in lines[1:])
 
 
+class _GameCharacter:
+    """A game's ``define id = Character("Id")``; calling it would say a line."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def __call__(self, what, *args, **kwargs):
+        raise AssertionError("the bridge called the game's %r Character" % self.name)
+
+
+def _game_store_names():
+    """Store variables real games define over builtins and the bridge's imports."""
+    names = {name: _GameCharacter(name) for name in ("id", "max", "min", "len", "type", "map", "next", "all")}
+    names.update(types=["sword", "shield"], json={"save": 1})
+    return names
+
+
 def _load_editor_body():
+    from renforge.bridge.guard import guard_rpy
+
     raw = Path(__file__).resolve().parents[1] / "src/renforge/bridge/editor.rpy"
-    lines = raw.read_text(encoding="utf-8").splitlines()
+    lines = guard_rpy(raw.read_text(encoding="utf-8")).splitlines()
     start = lines.index("init 1100 python:")
     body = []
     for line in lines[start + 1 :]:
@@ -285,8 +304,10 @@ def running_bridge(tmp_path, monkeypatch):
 
     sys.modules.pop("_renforge_runtime", None)
 
-    globs = {"__name__": "bridge_rpy", "renpy": renpy}
+    globs = {"__name__": "bridge_rpy", "renpy": renpy, **_game_store_names()}
     exec(compile(_load_bridge_body(), "bridge.rpy", "exec"), globs)
+    # The bridge never replaces a game's own store variables.
+    assert globs["types"] == ["sword", "shield"] and globs["json"] == {"save": 1}
 
     runtime = sys.modules.get("_renforge_runtime")
     bridge = getattr(runtime, "bridge", None)
