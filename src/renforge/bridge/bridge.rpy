@@ -4806,6 +4806,27 @@ init python:
         say_dismiss = _renforge_runtime.interaction.normalize_say_dismiss(dismiss)
         return screens, say_dismiss, inventory["truncated"], screen_nodes
 
+    def _renforge_mark_restored_screens():
+        """Screens a save restores were shown before it was made, so kept up.
+
+        Loading builds new screen objects, which would otherwise look shown by
+        the first interaction after the load.
+        """
+        bridge = _renforge_runtime.bridge
+        if bridge is None:
+            return
+        try:
+            layers = renpy.game.context().scene_lists.layers
+        except Exception:
+            return
+        first_seen = builtins.dict(getattr(bridge, "screen_first_seen", None) or {})
+        for entries in layers.values():
+            for entry in entries:
+                node = getattr(entry, "displayable", None)
+                if node.__class__.__name__ == "ScreenDisplayable":
+                    first_seen[id(node)] = -1
+        bridge.screen_first_seen = first_seen
+
     def _renforge_observe_record_screen(node, layer_name, screens, seen_screens, kept_up=False):
         name = getattr(node, "screen_name", None)
         if _renforge_observe_is_sequence(name):
@@ -8208,6 +8229,11 @@ init python:
             renpy.config.quit_callbacks = quit_callbacks
         if not any(getattr(callback, "__name__", "") == "_renforge_on_quit" for callback in quit_callbacks):
             quit_callbacks.append(_renforge_on_quit)
+        after_load = getattr(renpy.config, "after_load_callbacks", None)
+        if isinstance(after_load, builtins.list) and not any(
+                getattr(callback, "__name__", "") == "_renforge_mark_restored_screens"
+                for callback in after_load):
+            after_load.append(_renforge_mark_restored_screens)
 
     def renforge_start_bridge():
         existing = getattr(_renforge_runtime, "bridge", None)

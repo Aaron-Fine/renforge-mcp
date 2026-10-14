@@ -553,12 +553,15 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
     say_dismiss = normalize_say_dismiss(raw.get("say_dismiss"))
     modal = any(screen["modal"] for screen in screens)
     decisions = [control for control in controls if _is_decision(control)]
-    if say_dismiss == "dismiss" and not modal and _dialogue(raw) is not None:
+    first_pause = _dialogue(raw) is None and raw.get("seen") is False
+    if say_dismiss == "dismiss" and not modal and (_dialogue(raw) is not None or first_pause):
         # Ren'Py ends this line on a plain click. Buttons on screens kept up
         # from earlier lines (a phone or codex HUD) are not what this line
         # waits for, so they stay controls rather than a choice. Screens that
         # belong to this moment (shown with the line, or the interaction's
-        # own) still stop it.
+        # own) still stop it. A pause with no line is clicked past the same
+        # way the first time (a title card during a cutscene); one already
+        # passed is a hub the game keeps coming back to, so it is a choice.
         kept_up = {screen["name"] for screen in screens if screen["kept_up"]}
         decisions = [control for control in decisions if control.get("screen") not in kept_up]
     omitted = raw.get("omitted") if isinstance(raw.get("omitted"), Mapping) else {}

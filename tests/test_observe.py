@@ -1121,6 +1121,18 @@ def test_hud_buttons_kept_up_from_earlier_lines_do_not_hold_a_clickable_line():
     assert classify(_raw(elements=hud, screens=screens, dialogue=None))["forward"] == "choose"
 
 
+def test_a_first_pause_with_only_hud_buttons_is_clicked_past():
+    # Artifice: `show text "Atrium Blanc"` then `pause`, under a kept-up HUD button.
+    hud = [_element(screen="character_menu_button", action="ShowMenu('character_info_menu')")]
+    screens = [{"name": "character_menu_button", "layer": "screens", "modal": False, "kept_up": True}]
+    card = classify(_raw(elements=hud, screens=screens, dialogue=None, seen=False))
+    assert card["forward"] == "dismiss"
+    assert [c["screen"] for c in card["controls"]] == ["character_menu_button"]  # still usable
+    # A pause the game already came back to is a hub waiting on those buttons.
+    assert classify(_raw(elements=hud, screens=screens, dialogue=None, seen=True))["forward"] == "choose"
+    assert classify(_raw(elements=hud, screens=screens, dialogue=None))["forward"] == "choose"
+
+
 def test_a_scrolling_panel_beside_a_line_does_not_hold_it():
     # Come Home's livestream chat: a viewport and its scrollbar, re-shown with the line.
     chat = [_element(screen="stream", role="viewport", scroll=True),

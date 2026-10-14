@@ -6618,6 +6618,28 @@ def test_a_shown_screen_counts_as_kept_up_from_the_next_interaction(running_brid
     assert kept_up(hud, ScreenDisplayable("say", True)) == {"phone_button": True, "say": False}
 
 
+def test_screens_a_save_restores_count_as_kept_up(running_bridge, monkeypatch):
+    """Loading rebuilds screen objects; the HUD in the save was shown before it."""
+    import sys
+
+    class ScreenDisplayable:
+        def __init__(self, name, transient):
+            self.screen_name, self.transient, self.layer, self.modal = (name, None), transient, "screens", False
+
+    renpy = running_bridge.renpy
+    bridge = sys.modules["_renforge_runtime"].bridge
+    globs = running_bridge.globs
+    hud, say = ScreenDisplayable("character_menu_button", False), ScreenDisplayable("say", True)
+    entries = [types.SimpleNamespace(displayable=hud), types.SimpleNamespace(displayable=object())]
+    context = types.SimpleNamespace(scene_lists=types.SimpleNamespace(layers={"screens": entries}))
+    monkeypatch.setattr(renpy, "game", types.SimpleNamespace(context=lambda: context), raising=False)
+    bridge.observe_generation = 40
+    globs["_renforge_mark_restored_screens"]()
+    inventory = {"nodes": [(node, "screens", None, None, ()) for node in (hud, say)], "truncated": False}
+    screens = globs["_renforge_collect_interaction"](inventory)[0]
+    assert {s["name"]: s["kept_up"] for s in screens} == {"character_menu_button": True, "say": False}
+
+
 @pytest.mark.parametrize("phase_main_menu,label,expected", [
     (True, "chapter2", "out_of_context"),
     (False, "chapter2", "jump"),

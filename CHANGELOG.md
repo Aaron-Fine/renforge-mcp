@@ -117,6 +117,11 @@ versioning.
 - A button's label skips text under a transform at alpha or zoom 0, which
   Ren'Py doesn't draw. Heaven's Door's menu read "Start New Content! Start"
   because each button holds a hidden hover card; it now reads "Start".
+- A plain `pause` with no line (a location card in a cutscene) is clicked
+  past like a line when the only buttons on screen are kept up from earlier
+  (a HUD), the first time it comes up; a pause the game returns to is still a
+  hub that stops as a choice. Screens restored by loading a save count as kept
+  up, so a HUD no longer stops the first line after a load. Found in Artifice.
 
 ### Added
 
