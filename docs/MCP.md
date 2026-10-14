@@ -147,7 +147,10 @@ returns `code="UNSUPPORTED_RENPY_VERSION"`,
 `phase="checking_runtime_compatibility"`, and details containing the detected
 version, selected version, minimum version, and incompatibility source. The agent
 should stop for that game. Selecting a newer SDK does not bypass a legacy game's
-engine requirement. Projects without bundled engine metadata use the normal
+engine requirement. A 7.5/8.0 build that lists both engines counts as 8.x
+only when it ships a Python 3 runtime (`lib/py3-*`); with only `lib/py2-*` its
+own launcher runs the Python 2 engine its scripts are written for, so it is
+refused. Projects without bundled engine metadata use the normal
 configured stable SDK, which must also be 8.0 or newer. The same restriction
 applies to autopilot and the low-level bridge launcher.
 

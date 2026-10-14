@@ -163,7 +163,8 @@ def _sdk_internal_version(root: Path) -> str | None:
     Releases from 8.1 onward write ``version = '8.1.2.23090503'`` in
     ``renpy/vc_version.py``. Ren'Py 8.0 writes only a numeric ``vc_version``
     there and keeps the triple in ``renpy/__init__.py``, once for the Python 2
-    line and once for Python 3. The Python 3 triple is the one this bridge runs.
+    line and once for Python 3. The Python 3 triple is the one this bridge
+    runs, unless the build ships only Python 2 runtimes.
     """
     version_file = root / "renpy" / "vc_version.py"
     try:
@@ -171,7 +172,7 @@ def _sdk_internal_version(root: Path) -> str | None:
     except (OSError, UnicodeError):
         text = ""
     match = re.search(
-        r"(?m)^\s*version\s*=\s*(['\"])(?P<version>\d+\.\d+\.\d+[^'\"]*)\1",
+        r"(?m)^\s*version\s*=\s*[uU]?(['\"])(?P<version>\d+\.\d+\.\d+[^'\"]*)\1",
         text,
     )
     if match is not None:
@@ -190,7 +191,18 @@ def _sdk_internal_version(root: Path) -> str | None:
         tuples.append((triple, found.group(4)))
     if not tuples:
         return None
-    triple, build = max(tuples, key=lambda item: item[0])
+    # A dual 7.5/8.0 build runs on Python 3 only when it ships a py3 runtime.
+    # With only lib/py2-* its launcher starts the Python 2 engine, the one
+    # its scripts are written for.
+    pick = max
+    try:
+        runtimes = [entry.name for entry in (root / "lib").iterdir()]
+    except OSError:
+        runtimes = []
+    if (any(name.startswith("py2-") for name in runtimes)
+            and not any(name.startswith("py3-") for name in runtimes)):
+        pick = min
+    triple, build = pick(tuples, key=lambda item: item[0])
     version = ".".join(str(part) for part in triple)
     if build is not None:
         version = f"{version}.{build}"

@@ -12,6 +12,7 @@ import errno
 import json
 import math
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -852,11 +853,28 @@ def _scripts_compiled_since(project_root: Path, since_ns: int) -> bool:
     return False
 
 
+def _game_error_line(summary: str) -> str:
+    """The line that says what went wrong in a Ren'Py error report.
+
+    traceback.txt ends its short report with the exception; errors.txt (a
+    script that does not parse) lists ``File "...", line N: message`` entries
+    and ends with the version and date.
+    """
+    lines = [line.strip() for line in summary.splitlines() if line.strip()]
+    script_errors = [line for line in lines if re.match(r'^File ".+", line \d+: ', line)]
+    if script_errors:
+        return script_errors[0]
+    exceptions = [line for line in lines if re.match(r"^[A-Za-z_][\w.]*(Error|Exception|Exit)\b", line)]
+    if exceptions:
+        return exceptions[-1]
+    return lines[-1] if lines else ""
+
+
 def _raise_game_error(report: dict[str, str]) -> None:
     text = report["text"]
     # The short report comes first; the full traceback follows a rule line.
     summary = text.split("-- Full Traceback", 1)[0].strip()
-    last = next((line.strip() for line in reversed(summary.splitlines()) if line.strip()), "")
+    last = _game_error_line(summary)
     raise LaunchError(
         "GAME_STARTUP_ERROR",
         f"The game stopped on an error before the bridge came up: {last}",

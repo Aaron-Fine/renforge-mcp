@@ -808,6 +808,24 @@ def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkey
     assert drivers == ["wayland,x11"]
 
 
+def test_the_error_line_is_read_from_either_kind_of_report() -> None:
+    from renforge.bridge.launcher import _game_error_line
+
+    errors = (
+        "I'm sorry, but errors were detected in your script.\n\n"
+        'File "game/01base_stats.rpy", line 123: invalid syntax\n'
+        '    raise TypeError, "Supplied value"\n\n'
+        "Ren'Py Version: Ren'Py 8.0.3.22090809\nTue Oct 13 20:56:14 2026\n"
+    )
+    assert _game_error_line(errors) == 'File "game/01base_stats.rpy", line 123: invalid syntax'
+    traceback = (
+        "I'm sorry, but an uncaught exception occurred.\n\nWhile running game code:\n"
+        '  File "game/tl/x.rpy", line 6, in script\n    old "Language"\n'
+        'Exception: A translation for "Language" already exists.\n'
+    )
+    assert _game_error_line(traceback) == 'Exception: A translation for "Language" already exists.'
+
+
 def test_an_old_game_error_report_does_not_fail_a_launch(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)

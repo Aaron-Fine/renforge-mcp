@@ -171,6 +171,12 @@ versioning.
   the modal screen, which read as "covered by a modal", so `act` refused both
   and the game could not be started. Only a modal screen above the button
   covers it now; the focus-mask scan finds where it can be clicked.
+- A 7.5/8.0 dual build that ships only Python 2 runtimes (`lib/py2-*`) is
+  its 7.x engine and is refused like other pre-8 games. Special Harem Class
+  was launched on 8.0.3 and stopped on Python 2 syntax errors. A Python 2
+  build's `version = u'7.7.3...'` is read too (Price of Power had no detected
+  version). `GAME_STARTUP_ERROR` messages quote the error line of either
+  report kind, not the trailing date.
 
 ### Added
 

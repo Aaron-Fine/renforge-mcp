@@ -174,6 +174,30 @@ def test_renpy_8_0_version_tuple_identifies_the_python3_line(tmp_path: Path) -> 
     assert sdk.bundled_engine_version(root) == "8.0.3"
 
 
+def test_a_dual_build_with_only_python2_runtimes_is_its_python2_engine(tmp_path: Path) -> None:
+    """Special Harem Class ships 7.5.3/8.0.3 with lib/py2-* only; its scripts are Python 2."""
+    root = tmp_path / "game"
+    (root / "renpy").mkdir(parents=True)
+    (root / "renpy" / "vc_version.py").write_text("vc_version = 22090809\n")
+    (root / "renpy" / "__init__.py").write_text(
+        "if PY2:\n    version_tuple = (7, 5, 3, vc_version)\nelse:\n    version_tuple = (8, 0, 3, vc_version)\n",
+        encoding="utf-8",
+    )
+    for runtime in ("py2-linux-x86_64", "py2-windows-x86_64", "python2.7"):
+        (root / "lib" / runtime).mkdir(parents=True)
+    assert sdk._sdk_internal_version(root).startswith("7.5.3")
+    (root / "lib" / "py3-linux-x86_64").mkdir()
+    assert sdk._sdk_internal_version(root).startswith("8.0.3")
+
+
+def test_a_python2_build_records_its_version_as_a_unicode_literal(tmp_path: Path) -> None:
+    """Price of Power (7.7.3): `version = u'7.7.3.24061702'`."""
+    root = tmp_path / "game"
+    (root / "renpy").mkdir(parents=True)
+    (root / "renpy" / "vc_version.py").write_text("branch = u'fix'\nversion = u'7.7.3.24061702'\n")
+    assert sdk._sdk_internal_version(root) == "7.7.3.24061702"
+
+
 def test_newer_same_minor_patch_satisfies_older_request(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
