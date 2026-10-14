@@ -720,6 +720,49 @@ def test_game_error_report_during_startup_fails_before_timeout(monkeypatch, tmp_
     assert "Full Traceback" not in excinfo.value.details["report"]
 
 
+def test_a_launch_that_compiled_scripts_and_stopped_on_an_error_is_retried_once(monkeypatch, tmp_path: Path) -> None:
+    """Eden, Found in Translation: the compiling launch raises, the next one loads fine."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    (project_root / "game").mkdir(exist_ok=True)
+    launches = {"count": 0}
+
+    def fake_popen(*_args, **kwargs):
+        launches["count"] += 1
+        if launches["count"] == 1:
+            (project_root / "game" / "tl.rpyc").write_bytes(b"fresh")
+            (project_root / "traceback.txt").write_text(
+                "While running game code:\nException: A translation for \"Language\" already exists.\n",
+                encoding="utf-8")
+        else:
+            _write_bridge_info(project_root, kwargs["env"])
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("renforge.bridge.launcher._GAME_ERROR_GRACE_S", 0.0)
+
+    session = launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert launches["count"] == 2
+    assert "already exists" in session.startup_warning
+    session.close(timeout=0.1)
+
+    # Without compiled scripts the error is the game's own: no retry.
+    launches["count"] = 0
+    (project_root / "traceback.txt").unlink()
+
+    def failing_popen(*_args, **_kwargs):
+        launches["count"] += 1
+        (project_root / "traceback.txt").write_text("Exception: boom %d\n" % launches["count"], encoding="utf-8")
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", failing_popen)
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert excinfo.value.code == "GAME_STARTUP_ERROR" and launches["count"] == 1
+
+
 def test_an_old_game_error_report_does_not_fail_a_launch(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)

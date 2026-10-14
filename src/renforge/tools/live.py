@@ -288,6 +288,7 @@ def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
                 "editor": bool(getattr(session, "editor", task.requested_editor)),
                 "elapsed_ms": elapsed_ms,
                 **_isolation_result(session),
+                **_startup_warning(session),
             }
         except Exception:
             # Stale ready: initiate close and report closing/failure.
@@ -703,6 +704,7 @@ def launch_game(
     if home_path is not None:
         result["home"] = str(home_path)
     result.update(_isolation_result(session_obj))
+    result.update(_startup_warning(session_obj))
     if session_obj.headless:
         # Running under xvfb-run: no visible window, but the bridge (state,
         # screenshots, input) works normally.
@@ -2116,6 +2118,12 @@ def _tail_project_file(project_root: Path, filename: str, max_lines: int = 100) 
     except OSError:
         return None
     return {"name": filename, "tail": "".join(lines), "mtime": mtime}
+
+
+def _startup_warning(session: Any) -> dict[str, str]:
+    """A launch that only succeeded on retry says why (see launch_with_bridge)."""
+    warning = getattr(session, "startup_warning", None)
+    return {"startup_warning": warning} if isinstance(warning, str) and warning else {}
 
 
 def _error_files(project_path: str) -> dict:

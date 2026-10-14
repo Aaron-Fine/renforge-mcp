@@ -127,8 +127,13 @@ versioning.
   `GAME_STARTUP_ERROR` and the game's `traceback.txt`/`errors.txt` report,
   instead of waiting out the 180 s startup timeout. Astreon and Driven by
   Desire ship stale `.rpyc` files whose first recompile raises a duplicate
-  translation error. Launched games also get an editor that opens nothing, so
-  a crash no longer opens `traceback.txt` on the user's desktop.
+  translation error. When Ren'Py compiled changed scripts during that launch,
+  it is retried once (the next launch loads the fresh `.rpyc` files and starts)
+  and the ready result carries `startup_warning` with the first error. Four of
+  the first ten games swept (Astreon, Driven by Desire, Eden, Found in
+  Translation) only started this way. Launched games also get an editor that
+  opens nothing, so a crash no longer opens `traceback.txt` on the user's
+  desktop.
 - The injected bridge and Live Editor no longer read builtins or their own
   imports from the game's store. Eternum defines `id` as a Character, so every
   observation failed with "Character expects its what argument to be a

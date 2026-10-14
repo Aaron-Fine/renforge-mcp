@@ -563,6 +563,7 @@ class BridgeSession:
         self.cleanup_savedir = cleanup_savedir
         self.environment = environment or {}
         self.startup_ms = startup_ms
+        self.startup_warning: str | None = None
         self.phases = phases or []
         self.editor = editor_coordinator is not None
         self.isolation = isolation
@@ -838,6 +839,19 @@ def _new_game_error(project_root: Path, before: dict[str, tuple[int, int] | None
     return None
 
 
+def _scripts_compiled_since(project_root: Path, since_ns: int) -> bool:
+    """Whether Ren'Py wrote any .rpyc under game/ since ``since_ns``."""
+    for directory, _dirs, files in os.walk(project_root / "game"):
+        for name in files:
+            if name.endswith(".rpyc"):
+                try:
+                    if os.stat(os.path.join(directory, name)).st_mtime_ns >= since_ns:
+                        return True
+                except OSError:
+                    continue
+    return False
+
+
 def _raise_game_error(report: dict[str, str]) -> None:
     text = report["text"]
     # The short report comes first; the full traceback follows a rule line.
@@ -852,7 +866,8 @@ def _raise_game_error(report: dict[str, str]) -> None:
             "players too; an error raised while compiling changed scripts may not "
             "recur on the next launch."
         ),
-        details={"file": report["file"], "report": summary[-4000:]},
+        details={"file": report["file"], "report": summary[-4000:],
+                 "scripts_compiled": bool(report.get("scripts_compiled"))},
     )
 
 
@@ -1059,6 +1074,7 @@ def _launch_after_project_lock(
 
     _phase("starting_renpy")
     error_stamps = _game_error_stamps(project.root)
+    spawned_ns = time.time_ns()
     try:
         process = subprocess.Popen(
             command,
@@ -1111,6 +1127,8 @@ def _launch_after_project_lock(
             if game_error is None:
                 game_error = _new_game_error(project.root, error_stamps)
                 game_error_seen = time.monotonic()
+                if game_error is not None:
+                    game_error["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns)
             elif time.monotonic() - game_error_seen >= _GAME_ERROR_GRACE_S:
                 _raise_game_error(game_error)
             if process.poll() is not None:
@@ -1231,7 +1249,30 @@ def _launch_after_project_lock(
 
 
 
-def launch_with_bridge(
+def launch_with_bridge(sdk: RenpySdk, project: RenpyProject, **options: Any) -> BridgeSession:
+    """Launch a bridge while exclusively owning this project's artifacts.
+
+    Ren'Py recompiles a script whose source differs from its .rpyc. Some games
+    ship such sources (stale translations), and the compiling launch can stop
+    on an error the next launch, which loads the fresh .rpyc, does not raise.
+    That launch is retried once; the session's ``startup_warning`` keeps the
+    first error.
+    """
+    try:
+        return _launch_with_bridge_once(sdk, project, **options)
+    except LaunchError as exc:
+        if exc.code != "GAME_STARTUP_ERROR" or not (exc.details or {}).get("scripts_compiled"):
+            raise
+        first = exc
+    session = _launch_with_bridge_once(sdk, project, **options)
+    session.startup_warning = (
+        f"The first launch compiled changed scripts and stopped on an error, "
+        f"so the game was launched again: {first.message}"
+    )
+    return session
+
+
+def _launch_with_bridge_once(
     sdk: RenpySdk,
     project: RenpyProject,
     *,
@@ -1250,7 +1291,6 @@ def launch_with_bridge(
     home: str | None = None,
     editor: bool = False,
 ) -> BridgeSession:
-    """Launch a bridge while exclusively owning this project's artifacts."""
     require_supported_runtime(sdk.version, project_root=project.abs_root)
     if startup_timeout is None:
         startup_timeout = default_startup_timeout()
