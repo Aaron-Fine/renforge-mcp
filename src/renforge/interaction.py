@@ -271,6 +271,8 @@ def _public_control(control: Mapping[str, Any]) -> dict[str, Any]:
         "droppable": control.get("droppable"),
         # Only scrolls what the screen shows (a viewport or its scrollbar).
         "scroll": control.get("scroll") is True,
+        # Runs only NullAction or sound/state actions: a click changes nothing.
+        "inert": control.get("inert") is True,
         "operations": list(control.get("operations") or []),
         "enabled": enabled,
         "clickable": clickable,
@@ -293,6 +295,10 @@ def _is_decision(control: Mapping[str, Any]) -> bool:
         return False
     if not control.get("operations"):
         # Nothing can be done with it (a bar that only shows a value).
+        return False
+    if control.get("inert"):
+        # A click does nothing (NullAction, a click sound), so a pause
+        # showing such buttons is still clicked past.
         return False
     if control.get("scroll"):
         # Scrolling never ends an interaction, so a chat log or task list

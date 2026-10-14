@@ -7188,3 +7188,21 @@ def test_button_label_skips_text_the_game_keeps_hidden(running_bridge, monkeypat
     monkeypatch.setitem(globs, "_renforge_observe_text_string", lambda node: node.text[0])
     button = Fixed(Transform(Text("Start")), Transform(Fixed(Text("New Content!"), Text("Start")), alpha=0.0))
     assert globs["_renforge_child_text"](button) == "Start"
+
+
+def test_a_button_that_does_nothing_on_click_is_inert(running_bridge):
+    """A tutorial shows decorative image buttons with action NullAction()."""
+    inert = running_bridge.globs["_renforge_inert_action"]
+    namespace = {}
+    source = "".join("class %s(object):\n    def __call__(self):\n        return None\n" % name
+                     for name in ("NullAction", "Play", "SelectedIf", "Jump"))
+    exec(compile(source, "renpy/common/00action_other.rpy", "exec"), namespace)
+    null, play, selected, jump = (namespace[name]() for name in ("NullAction", "Play", "SelectedIf", "Jump"))
+    assert inert([null]) is True
+    assert inert([null, play, selected]) is True
+    assert inert([null, jump]) is False
+    assert inert([]) is False  # no action at all is reported as disabled instead
+    # A game class that merely shares the name is the game's own action.
+    game = {}
+    exec(compile("class NullAction(object):\n    def __call__(self):\n        return 1\n", "game/x.rpy", "exec"), game)
+    assert inert([game["NullAction"]()]) is False

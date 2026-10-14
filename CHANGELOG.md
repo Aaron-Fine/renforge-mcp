@@ -259,6 +259,10 @@ versioning.
   that quits on its own platform check says why only there. A log that stops at window or GL setup (`Windowed
   mode.`, `Maximum texture size`, a shader cache line) means the window never
   opened, as with an X11 window while the screen is locked.
+- A button whose click does nothing (`NullAction()`, or only a sound or a
+  selected/sensitive state) is `inert` and never a decision, so a `pause`
+  beside a tutorial's decorative icons is clicked past instead of stopping
+  with `forward="choose"`.
 - Continuing a line that a modal screen holds (a stats page opened from a
   HUD) names that screen in `hint` and says to close it. The hint was
   missing whenever the refused click past the line left a reply behind.

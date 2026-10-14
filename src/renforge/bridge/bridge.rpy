@@ -4386,6 +4386,18 @@ init python:
         return True
 
 
+    def _renforge_inert_action(actions):
+        """True when every action is NullAction or a neutral engine action.
+
+        NullAction exists to give a button hover effects and does nothing on
+        a click (a tutorial's decorative icons), so it never ends a pause.
+        """
+        return bool(actions) and all(
+            type(action).__name__ in _RENFORGE_NEUTRAL_ACTIONS | {"NullAction"}
+            and _renforge_engine_class(type(action))
+            for action in actions)
+
+
     def _renforge_engine_class(cls):
         """True when the class is defined in Ren'Py's common library."""
         code = next((getattr(value, "__code__", None) for value in vars(cls).values()
@@ -4483,8 +4495,11 @@ init python:
                     break
             record["widget_id"] = _renforge_observe_widget_id(focus, widget, inventory["named"])
             record["source"] = _renforge_source_location(widget)
-            if _renforge_engine_chrome_action(_renforge_action_list(_renforge_focus_action_value(focus))):
+            actions = _renforge_action_list(_renforge_focus_action_value(focus))
+            if _renforge_engine_chrome_action(actions):
                 record["chrome"] = True
+            elif _renforge_inert_action(actions):
+                record["inert"] = True
             record["type"] = _renforge_focus_type(focus, widget)
             record["coordinate_space"] = "logical"
             record["zorder"] = _renforge_focus_zorder(focus, widget, len(pairs))

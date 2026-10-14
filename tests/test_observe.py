@@ -1333,3 +1333,12 @@ def test_continue_names_a_modal_screen_holding_a_line(monkeypatch, say_dismiss, 
     result = live.play("/tmp/renforge-modal-line", "o1", timeout=0.2)
 
     assert result["hint"].startswith(expected)
+
+
+def test_a_pause_beside_buttons_that_do_nothing_is_dismissed():
+    elements = [_element(screen="tutorial", role="imagebutton", text=None, inert=True,
+                         image_name="book_locked.png", operations=["click"])]
+    screens = [{"name": "tutorial", "layer": "screens", "modal": False}]
+    snapshot = classify(_raw(dialogue=None, screens=screens, elements=elements))
+    assert snapshot["forward"] == "dismiss"
+    assert snapshot["controls"][0]["inert"] is True
