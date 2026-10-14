@@ -17,6 +17,38 @@ section is a historical harness proposal, not the current implementation plan.
 Its unchecked items have broader acceptance criteria; existing observe/action/
 progression tools already implement parts of that proposal.
 
+## Real-game hardening sweep (2026-10-13)
+
+Every Ren'Py game in the local library (about 60: ~45 downloaded builds, ~18
+Steam installs) was driven through the `play` toolset by a generic sweep
+(launch, start from the main menu, continue, type names, pick choices and
+buttons, save/load, explain), three passes over current code. Fixes are
+generic; the games are only where each case turned up (see CHANGELOG).
+
+- [x] Launch: game errors during startup fail fast (`GAME_STARTUP_ERROR`) with
+  the report, also when the bridge starts on the parse-error screen; a launch
+  that failed while recompiling changed scripts is retried once; a shaped
+  presplash Wayland cannot open is relaunched under X11; crashes never open
+  the user's editor; Python 2 builds (dual 7.5/8.0, `u'...'` versions) are
+  detected as their 7.x engine and refused.
+- [x] Bridge isolation: builtins and the bridge's imports are private names in
+  the injected copy (a game's `id` Character broke every observation); bridge
+  objects are never revertable (a save could pickle the bridge).
+- [x] Perception: kept-up HUDs on a first pause and after loads; click sounds
+  and nested action lists in chrome; interface buttons as the choice when
+  nothing else moves on; choice buttons that wrap their item in a callback;
+  masked buttons on their own modal screen; dynamic image names; key
+  bindings to a click; fall-through labels; game exceptions and parse errors
+  as `game_error`.
+- [x] Progression: subroutine lines called from different places are not
+  loops; short pauses cannot stay pending; screens that keep changing settle;
+  screenshots bound 5x faster so time-budget stops keep their final frame.
+- [ ] Intermittent: one "timed out waiting for a frame" mid-progression in
+  Secrets and Promises did not reproduce; watch for it.
+- [ ] Games that open with only interface buttons on the main menu (no Start,
+  play from saves) report `forward="none"`; an agent has to pick Load from
+  chrome.
+
 ## Agent play loop simplification (2026-10-12)
 
 Goal: the five-tool loop the playthroughs actually used (`session`, `observe`,
