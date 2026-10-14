@@ -1182,7 +1182,15 @@ def act(
             result["hint"] = "Observe before deciding whether to retry; the input may have taken effect."
         if isinstance(result.get("observation"), dict):
             result["observation"] = _observation_from_reply(result["observation"])
-            result["observation_status"] = "ready" if result["observation"].get("stable") else "timeout"
+            if result["action_outcome"] == "refused":
+                # A refusal returns at once with the current state: nothing
+                # timed out, even when that state is mid-pause.
+                result["observation_status"] = "ready"
+                if result.get("error") == "unstable":
+                    result.setdefault("hint", "The game is in a pause or transition that ends by itself; "
+                                              "observe again in a moment, or continue without an id.")
+            else:
+                result["observation_status"] = "ready" if result["observation"].get("stable") else "timeout"
         if result.get("ok") is False or result.get("error") or not (observe or advance):
             return result
         if advance:

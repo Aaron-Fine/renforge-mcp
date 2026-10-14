@@ -997,6 +997,24 @@ def test_stale_action_returns_classified_fresh_observation(monkeypatch):
     assert result["action_outcome"] == "refused"
     assert result["observation"]["interaction"] == 5
     assert "controls" in result["observation"]
+    assert result["observation_status"] == "ready"
+
+
+def test_an_unstable_refusal_reports_its_current_observation_as_ready(monkeypatch):
+    """Eden: a key pressed during a splash-screen pause is refused at once."""
+    from renforge.tools import live
+
+    class Client:
+        def act(self, **kwargs):
+            return {"ok": False, "error": "unstable",
+                    "observation": _raw(stable=False, unstable_reason="pause", dialogue=None)}
+
+    monkeypatch.setattr(live, "_client", lambda path: Client())
+    result = live.act("/tmp/unstable-action", 4, key="escape", screenshot=False)
+    assert result["action_outcome"] == "refused"
+    assert result["observation_status"] == "ready"
+    assert result["observation"]["unstable_reason"] == "pause"
+    assert "observe again" in result["hint"]
 
 
 def test_gameplay_png_is_bounded_and_hashes_returned_bytes():

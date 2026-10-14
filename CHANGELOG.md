@@ -156,6 +156,10 @@ versioning.
 - An image button whose image is a dynamic image reports the image it
   resolved to (`player1_avatar_idle`), not its `[player_skin]_avatar_idle`
   template. Found in Inanna's Revenge.
+- An `act` refused because the game is mid-pause reports
+  `observation_status="ready"` with the current observation and a hint to
+  observe again, instead of `timeout`; the refusal is immediate and nothing
+  timed out (Eden's splash screen).
 
 ### Added
 
