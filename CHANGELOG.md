@@ -144,6 +144,11 @@ versioning.
   bridge's `types` module, and the bridge's imports overwrote game variables
   with the same names. The injected copy binds each to a private `_rfb_` name
   (`renforge/bridge/guard.py`) without changing line numbers.
+- A click sound does not make an interface button a story decision. Astreon's
+  main-menu buttons run `Play("sound", ...)` with `ShowMenu("load")`, `Quit`,
+  or `OpenURL`, so they were gameplay controls beside the real Start button;
+  they are chrome now. Nested action lists (`action [Play(...)], OpenURL(...)`)
+  are flattened as Ren'Py runs them.
 
 ### Added
 

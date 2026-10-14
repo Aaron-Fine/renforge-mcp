@@ -4261,15 +4261,27 @@ init python:
     ))
 
 
+    # Engine actions that change no game state a story choice could depend on.
+    _RENFORGE_NEUTRAL_ACTIONS = frozenset((
+        "SensitiveIf", "SelectedIf", "Play", "Queue", "Stop", "PauseAudio",
+    ))
+
+
     _RENFORGE_GAME_MENU_SCREENS = frozenset((
         None, "game_menu", "save", "load", "preferences", "history", "help", "about",
     ))
 
 
     def _renforge_action_list(action):
+        """The actions a button runs, flattened as Ren'Py's run() nests lists."""
         if action is None:
             return []
-        return builtins.list(action) if _renforge_observe_is_sequence(action) else [action]
+        if not _renforge_observe_is_sequence(action):
+            return [action]
+        flat = []
+        for item in action:
+            flat.extend(_renforge_action_list(item))
+        return flat
 
 
     def _renforge_engine_chrome_action(actions):
@@ -4285,10 +4297,11 @@ init python:
         if any(type(action).__name__ == "FileTakeScreenshot" and _renforge_engine_class(type(action))
                for action in actions):
             return True
-        # SensitiveIf/SelectedIf only set a button's state; running them does
-        # nothing, so they do not make a menu button a story decision.
+        # SensitiveIf/SelectedIf only set a button's state, and a click sound
+        # (Play("sound", ...)) only plays; neither makes a menu button a story
+        # decision.
         actions = [action for action in actions
-                   if not (type(action).__name__ in ("SensitiveIf", "SelectedIf")
+                   if not (type(action).__name__ in _RENFORGE_NEUTRAL_ACTIONS
                            and _renforge_engine_class(type(action)))]
         if not actions:
             return False

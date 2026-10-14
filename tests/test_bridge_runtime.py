@@ -6512,6 +6512,23 @@ def test_an_action_list_that_takes_a_save_screenshot_is_menu_chrome(running_brid
     assert chrome([Show()]) is False
 
 
+def test_a_click_sound_does_not_make_a_menu_button_a_decision(running_bridge):
+    """Astreon's menu buttons each run Play("sound", ...) before their real action."""
+    chrome = running_bridge.globs["_renforge_engine_chrome_action"]
+    namespace = {}
+    source = "".join("class %s(object):\n    screen = 'load'\n    def __call__(self):\n        return None\n" % name
+                     for name in ("Play", "ShowMenu", "OpenURL", "Jump"))
+    exec(compile(source, "renpy/common/00action_audio.rpy", "exec"), namespace)
+    play, show_menu, open_url, jump = (namespace[name]() for name in ("Play", "ShowMenu", "OpenURL", "Jump"))
+    assert chrome([play, show_menu]) is True
+    assert chrome([play, open_url]) is True
+    assert chrome([play, jump]) is False
+    assert chrome([play]) is False  # a sound button on its own is the game's
+    # Ren'Py runs nested action lists: action [Play(...)], OpenURL(...)
+    action_list = running_bridge.globs["_renforge_action_list"]
+    assert chrome(action_list(([play], open_url))) is True
+
+
 def test_isolated_session_turns_transitions_off_once(running_bridge, monkeypatch):
     renpy = running_bridge.renpy
     renpy.store._preferences = types.SimpleNamespace(transitions=2)
