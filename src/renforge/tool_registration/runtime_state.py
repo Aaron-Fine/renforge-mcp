@@ -224,6 +224,7 @@ def build_wrappers(context):
         max_depth: int = 3,
         max_items: int = 50,
         max_output_bytes: int = 8192,
+        authorize: bool = False,
     ) -> dict:
         """Wait for exactly one label, screen, or expression condition.
 
@@ -266,6 +267,7 @@ def build_wrappers(context):
                 "max_depth": max_depth,
                 "max_items": max_items,
                 "max_output_bytes": max_output_bytes,
+                "authorize": authorize,
             },
             project_root=project_path,
             fn=_wait,

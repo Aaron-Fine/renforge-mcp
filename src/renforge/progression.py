@@ -131,7 +131,7 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, betwe
                 if not snapshot["stable"]:
                     now = time.monotonic()
                     unstable_since = unstable_since if unstable_since is not None else now
-                    # Secrets and Promises: a {w=1.0}{nw} line stayed a "pause"
+                    # A {w=1.0}{nw} line stayed a "pause"
                     # for the whole budget, yet one click moved it on.
                     if (nudge is not None and not nudged and now - unstable_since > STUCK_PAUSE_SECONDS
                             and snapshot.get("unstable_reason") == "pause" and snapshot.get("say_dismiss") == "dismiss"):

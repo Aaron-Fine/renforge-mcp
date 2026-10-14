@@ -30,6 +30,8 @@ Covered tools:
 - `renforge_launch`, `renforge_jump`, `renforge_new_game` — isolated launches (`savedir=temporary` / omitted) are mutating; `savedir=existing`, `home=existing`, or a host save/HOME path is destructive and needs `authorize=true` in enforce mode
 - `renforge_editor` — classified by `action` (`status` observational, `select`/`save` mutating)
 - `renforge_eval` — always `open_world` when `expr` is a non-empty string
+- `renforge_wait_until` — `open_world` with an `expr` condition (it runs in the game, like a scenario `wait` step); `observational` for a label or screen
+- `renforge_set_var` — `mutating`
 - `renforge_run_scenario` — classified by the highest-risk step, including nested `control` actions
 
 ## Authorization

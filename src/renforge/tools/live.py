@@ -1311,8 +1311,18 @@ def play(
         if observed.get("game_error"):
             result["hint"] = ("The game raised an exception (observation.game_error) and shows Ren'Py's "
                               "error screen: choose its Rollback, Ignore, or Quit control.")
-        elif progress.get("stop") == "choose" and not progress.get("steps") and not clicked_past:
-            result["hint"] = "Nothing to continue: the game is waiting for one of its controls."
+        elif (progress.get("stop") == "choose" and not progress.get("steps")
+              and not (clicked_past or {}).get("ok")):
+            # A line that ends on a click, held only by a modal screen shown
+            # over it (a stats page opened from a HUD), continues once that
+            # screen closes.
+            over = [screen.get("name") for screen in observed.get("screens") or ()
+                    if isinstance(screen, dict) and screen.get("modal") is True]
+            if over and observed.get("dialogue") and observed.get("say_dismiss") == "dismiss":
+                result["hint"] = (f"The line waits under the modal screen {', '.join(map(str, over))}: "
+                                  "close it with one of its controls, then continue.")
+            else:
+                result["hint"] = "Nothing to continue: the game is waiting for one of its controls."
         return result
     if not isinstance(control_id, str) or not control_id:
         return {"ok": False, "error": "id must be a control id or key/<name>"}

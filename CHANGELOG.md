@@ -254,6 +254,28 @@ versioning.
   chrome, so the observation had no controls and `forward="none"`. A HUD kept
   up, the quick menu, and Ren'Py's game-menu screens keep such buttons as
   chrome.
+- A launch that times out, or whose game exits before the bridge starts,
+  reports the last lines of the log.txt it wrote as `details.log_tail`. A game
+  that quits on its own platform check says why only there. A log that stops at window or GL setup (`Windowed
+  mode.`, `Maximum texture size`, a shader cache line) means the window never
+  opened, as with an X11 window while the screen is locked.
+- `renforge_wait_until` with an `expr` condition is open-world under
+  `RENFORGE_POLICY=enforce` and takes `authorize`, like a scenario `wait`
+  step; it was unmanaged, so enforce mode ran its Python unasked.
+  `renforge_set_var` is classified mutating. A session launch always uses its
+  own HOME, even when `RENFORGE_ISOLATION=existing`.
+- Launches that reach the player's saves are classified as destructive more
+  reliably: host save paths match case-insensitively (on Windows and macOS
+  `~/library/renpy` is the player's `~/Library/RenPy`), and a custom `home`
+  whose Ren'Py save folder resolves into the player's tree counts too, as
+  does a save path inside any game's `game/saves`, not only this project's.
+- A button whose click does nothing (`NullAction()`, or only a sound or a
+  selected/sensitive state) is `inert` and never a decision, so a `pause`
+  beside a tutorial's decorative icons is clicked past instead of stopping
+  with `forward="choose"`.
+- Continuing a line that a modal screen holds (a stats page opened from a
+  HUD) names that screen in `hint` and says to close it. The hint was
+  missing whenever the refused click past the line left a reply behind.
 
 ### Added
 

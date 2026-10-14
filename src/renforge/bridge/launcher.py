@@ -842,6 +842,22 @@ def _new_game_error(project_root: Path, before: dict[str, tuple[int, int] | None
     return None
 
 
+def _log_tail(project_root: Path, since_ns: int, lines: int = 8) -> list[str]:
+    """The last lines of the log.txt this launch wrote, or [] for an older one.
+
+    Where the log stops says how far startup got: at window or GL setup the
+    window never opened, which a launch timeout alone does not say.
+    """
+    path = project_root / "log.txt"
+    try:
+        if path.stat().st_mtime_ns < since_ns:
+            return []
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return []
+    return [line.rstrip() for line in text.splitlines() if line.strip()][-lines:]
+
+
 def _scripts_compiled_since(project_root: Path, since_ns: int) -> bool:
     """Whether Ren'Py wrote any .rpyc under game/ since ``since_ns``."""
     for directory, _dirs, files in os.walk(project_root / "game"):
@@ -1161,7 +1177,8 @@ def _launch_after_project_lock(
                 err = stderr_reader.tail().decode("utf-8", "replace")
                 combined = (out + "\n" + err).lower()
                 code = "RENPY_PROCESS_EXITED"
-                suggested = "Inspect traceback.txt / errors.txt in the project root."
+                suggested = ("Read details.log_tail (a game can quit on its own checks and say why only "
+                             "there), then traceback.txt / errors.txt in the project root.")
                 if "audio" in combined and ("fail" in combined or "error" in combined):
                     code = "AUDIO_INITIALIZATION_FAILED"
                     suggested = "Relaunch with audio='dummy'."
@@ -1173,7 +1190,8 @@ def _launch_after_project_lock(
                     f"Game exited (rc={process.returncode}) before the bridge came up.",
                     phase="starting_renpy",
                     suggested_fix=suggested,
-                    details={"stdout": out[-4000:], "stderr": err[-4000:], "returncode": process.returncode},
+                    details={"stdout": out[-4000:], "stderr": err[-4000:], "returncode": process.returncode,
+                             "log_tail": _log_tail(project.root, spawned_ns)},
                 )
             try:
                 info = read_bridge_info(
@@ -1268,12 +1286,14 @@ def _launch_after_project_lock(
         f"Bridge did not come up within {startup_timeout}s",
         phase="waiting_for_bridge",
         suggested_fix=(
-            "Increase timeout, check the project launches manually, or inspect log.txt. "
-            "If log.txt ends at 'Windowed mode.', the window could not open: an X11 "
-            "window never opens while the screen is locked (Ren'Py 8.0 has no Wayland "
-            "support), so unlock the screen or use display='xvfb'."
+            "Increase timeout, check the project launches manually, or read "
+            "details.log_tail. If log.txt ends during window or GL setup ('Windowed "
+            "mode.', 'Maximum texture size', a shader cache line), the window could "
+            "not open: an X11 window never opens while the screen is locked (Ren'Py "
+            "8.0 has no Wayland support), so unlock the screen or use display='xvfb'."
         ),
-        details={"phases": phases, "environment": capabilities.to_dict()},
+        details={"phases": phases, "environment": capabilities.to_dict(),
+                 "log_tail": _log_tail(project.root, spawned_ns)},
     )
 
 

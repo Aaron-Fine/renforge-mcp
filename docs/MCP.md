@@ -928,6 +928,7 @@ Recommended practices:
 | An MCP tool is missing | Update RenForge, then restart the MCP session to reload its catalogue. |
 | Launch fails with `GAME_STARTUP_ERROR` | The game stopped on Ren'Py's error screen before the bridge started; `details.report` holds its `traceback.txt`. Players see the same error. A launch that failed while recompiling changed scripts is already retried once. |
 | A ready launch carries `startup_warning` | The first attempt failed and a second one started: a recompile error that did not recur, or a shaped presplash that SDL's Wayland driver cannot open (the game then runs under X11, which needs an unlocked screen). |
+| Launch fails with `BRIDGE_CONNECTION_TIMEOUT` | `details.log_tail` shows where startup stopped. If it ends during window or GL setup (`Windowed mode.`, `Maximum texture size`), the window never opened: X11 windows do not open while the screen is locked, so unlock it or launch with `display='xvfb'`. |
 
 ## Quick verification
 

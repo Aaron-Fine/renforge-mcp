@@ -74,14 +74,14 @@ def test_dialogue_what_drops_text_tags():
     literal = classify(_raw(dialogue={"who": None, "what": "Use {{b}} here"}))
     assert literal["dialogue"]["what"] == "Use {b} here"
 
-    # The say window's own texts are dialogue, not readout as well (Ravager).
+    # The say window's own texts are dialogue, not readout as well.
     repeated = classify(_raw(dialogue={"who": "Adeline", "what": "A fine name."},
                              readout=[{"screen": "say", "text": "Adeline"},
                                       {"screen": "say", "text": "A fine name."},
                                       {"screen": "day_overlay", "text": "13"}]))
     assert [r["text"] for r in repeated["readout"]] == ["13"]
 
-    # Ravager's nameless narrator voice is a name made only of tags.
+    # A nameless narrator voice is a name made only of tags.
     nameless = classify(_raw(dialogue={"who": "{noalt}{/noalt}", "what": "She smiles."}))
     assert nameless["dialogue"] == {"who": None, "what": "She smiles."}
     assert classify(_raw(dialogue={"who": "{b}Adeline{/b}", "what": "Hi."}))["dialogue"]["who"] == "Adeline"
@@ -1001,7 +1001,7 @@ def test_stale_action_returns_classified_fresh_observation(monkeypatch):
 
 
 def test_an_unstable_refusal_reports_its_current_observation_as_ready(monkeypatch):
-    """Eden: a key pressed during a splash-screen pause is refused at once."""
+    """A key pressed during a splash-screen pause is refused at once."""
     from renforge.tools import live
 
     class Client:
@@ -1054,7 +1054,7 @@ def test_settle_rejects_departing_stable_frame(monkeypatch):
 
 
 def test_settle_accepts_a_screen_that_keeps_changing_within_one_interaction():
-    """Desert Stalker's music room: a timer rebuilds its buttons every frame."""
+    """A music room: a timer rebuilds its buttons every frame."""
     from renforge.progression import settle
     import itertools
     import time
@@ -1078,7 +1078,7 @@ def test_settle_accepts_a_screen_that_keeps_changing_within_one_interaction():
 
 
 def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch):
-    """Secrets and Promises: a {w=1.0}{nw} line stayed a "pause" until act ran out of time."""
+    """A {w=1.0}{nw} line stayed a "pause" until act ran out of time."""
     import time
     from renforge import progression
     monkeypatch.setattr(progression, "STUCK_PAUSE_SECONDS", 0.05)
@@ -1136,7 +1136,7 @@ def test_process_failure_preserves_last_observation_without_confirming_an_end(mo
 
 
 def test_a_poll_that_fails_once_does_not_truncate_the_transcript(monkeypatch):
-    """Love Sucks: a busy main thread timed out one poll; the next resumed from the cursor."""
+    """A busy main thread timed out one poll; the next resumed from the cursor."""
     from types import SimpleNamespace
     from renforge.tools import live
     from renforge.bridge.client import BridgeError
@@ -1216,7 +1216,7 @@ def test_hud_buttons_kept_up_from_earlier_lines_do_not_hold_a_clickable_line():
 
 
 def test_a_first_pause_with_only_hud_buttons_is_clicked_past():
-    # Artifice: `show text "Atrium Blanc"` then `pause`, under a kept-up HUD button.
+    # `show text "Title Card"` then `pause`, under a kept-up HUD button.
     hud = [_element(screen="character_menu_button", action="ShowMenu('character_info_menu')")]
     screens = [{"name": "character_menu_button", "layer": "screens", "modal": False, "kept_up": True}]
     card = classify(_raw(elements=hud, screens=screens, dialogue=None, seen=False))
@@ -1228,7 +1228,7 @@ def test_a_first_pause_with_only_hud_buttons_is_clicked_past():
 
 
 def test_interface_buttons_are_the_choice_when_nothing_else_moves_the_game():
-    """The Power of Truth: `call screen` disclaimer whose buttons are MainMenu() and Quit()."""
+    """A `call screen` disclaimer whose buttons are MainMenu() and Quit()."""
     buttons = [_element(screen="disclaimer", action="MainMenu", chrome=True),
                _element(screen="disclaimer", action="Quit", chrome=True)]
     screens = [{"name": "disclaimer", "layer": "screens", "modal": False}]
@@ -1248,7 +1248,7 @@ def test_interface_buttons_are_the_choice_when_nothing_else_moves_the_game():
 
 
 def test_an_exception_screen_is_reported_as_a_game_error():
-    """Love Sucks: a game exception showed as an ordinary screen to choose from."""
+    """A game exception showed as an ordinary screen to choose from."""
     from renforge.interaction import progression_boundary
     error = {"message": "NameError: name 'visitedGhost' is not defined", "traceback_file": "traceback.txt"}
     buttons = [_element(screen="_exception", action="Partial", text="Ignore"),
@@ -1261,7 +1261,7 @@ def test_an_exception_screen_is_reported_as_a_game_error():
 
 
 def test_a_scrolling_panel_beside_a_line_does_not_hold_it():
-    # Come Home's livestream chat: a viewport and its scrollbar, re-shown with the line.
+    # A livestream chat: a viewport and its scrollbar, re-shown with the line.
     chat = [_element(screen="stream", role="viewport", scroll=True),
             _element(screen="stream", role="bar", text="viewport vertical scroll", scroll=True)]
     screens = [{"name": "say", "layer": "screens", "modal": False},
@@ -1286,7 +1286,7 @@ def test_dismiss_past_optional_controls_still_refuses_menus_and_modals():
 
 
 def test_a_bar_that_only_shows_a_value_does_not_hold_a_line():
-    """Come Home's health bars: ``bar value hp range max_hp`` is not adjustable."""
+    """Health bars: ``bar value hp range max_hp`` is not adjustable."""
     snapshot = classify(
         _raw(
             screens=[{"name": "hp_bars", "layer": "screens", "modal": False}],
@@ -1303,3 +1303,42 @@ def test_image_names_keep_their_tag():
     assert image_basename(("lorbook", "naughtydn")) == "lorbook naughtydn"
     assert image_basename("lorbook naughtydn") == "lorbook naughtydn"
     assert image_basename("images/ui/hearticon.webp") == "hearticon.webp"
+
+
+@pytest.mark.parametrize(
+    ("say_dismiss", "expected"),
+    [
+        ("dismiss", "The line waits under the modal screen stats_page: close it"),
+        (None, "Nothing to continue: the game is waiting for one of its controls."),
+    ],
+)
+def test_continue_names_a_modal_screen_holding_a_line(monkeypatch, say_dismiss, expected):
+    from renforge.tools import live
+
+    observed = {
+        "observation_id": "o1",
+        "interaction": 3,
+        "forward": "choose",
+        "say_dismiss": say_dismiss,
+        "dialogue": {"who": "Sis", "what": "Forgot something?"},
+        "screens": [{"name": "say"}, {"name": "stats_page", "modal": True}],
+    }
+    monkeypatch.setattr(live, "observe", lambda *_a, **_k: dict(observed))
+    # The bridge refuses to click past a line a modal screen holds.
+    monkeypatch.setattr(live, "_with_client", lambda *_a, **_k: {"ok": False, "error": "modal"})
+    monkeypatch.setattr(live, "advance_until", lambda *_a, **_k: {
+        "ok": True, "stop": "choose", "steps": 0, "observation": dict(observed),
+        "observation_status": "ready"})
+
+    result = live.play("/tmp/renforge-modal-line", "o1", timeout=0.2)
+
+    assert result["hint"].startswith(expected)
+
+
+def test_a_pause_beside_buttons_that_do_nothing_is_dismissed():
+    elements = [_element(screen="tutorial", role="imagebutton", text=None, inert=True,
+                         image_name="book_locked.png", operations=["click"])]
+    screens = [{"name": "tutorial", "layer": "screens", "modal": False}]
+    snapshot = classify(_raw(dialogue=None, screens=screens, elements=elements))
+    assert snapshot["forward"] == "dismiss"
+    assert snapshot["controls"][0]["inert"] is True

@@ -944,7 +944,7 @@
             }
           ],
           "default": null,
-          "description": "Expression condition to evaluate and await success. Evaluated repeatedly during waiting."
+          "description": "Expression condition to evaluate and await success. Evaluated repeatedly during waiting. It runs Python in the game, so it is open-world like `renforge_eval`."
         },
         "timeout": {
           "default": 30.0,
@@ -1005,6 +1005,11 @@
           "maximum": 2000000,
           "minimum": 64,
           "type": "integer"
+        },
+        "authorize": {
+          "default": false,
+          "description": "An `expr` condition runs Python in the game: pass true when RENFORGE_POLICY=enforce.",
+          "type": "boolean"
         }
       },
       "required": [

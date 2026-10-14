@@ -175,7 +175,7 @@ def test_renpy_8_0_version_tuple_identifies_the_python3_line(tmp_path: Path) -> 
 
 
 def test_a_dual_build_with_only_python2_runtimes_is_its_python2_engine(tmp_path: Path) -> None:
-    """Special Harem Class ships 7.5.3/8.0.3 with lib/py2-* only; its scripts are Python 2."""
+    """A dual 7.5.3/8.0.3 build with lib/py2-* only; its scripts are Python 2."""
     root = tmp_path / "game"
     (root / "renpy").mkdir(parents=True)
     (root / "renpy" / "vc_version.py").write_text("vc_version = 22090809\n")
@@ -191,7 +191,7 @@ def test_a_dual_build_with_only_python2_runtimes_is_its_python2_engine(tmp_path:
 
 
 def test_a_python2_build_records_its_version_as_a_unicode_literal(tmp_path: Path) -> None:
-    """Price of Power (7.7.3): `version = u'7.7.3.24061702'`."""
+    """A Python 2 build records `version = u'7.7.3.24061702'`."""
     root = tmp_path / "game"
     (root / "renpy").mkdir(parents=True)
     (root / "renpy" / "vc_version.py").write_text("branch = u'fix'\nversion = u'7.7.3.24061702'\n")

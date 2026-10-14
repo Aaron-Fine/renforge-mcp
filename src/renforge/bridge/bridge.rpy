@@ -67,7 +67,7 @@ init python:
 
     # The plain object: `object` in init python is Ren'Py's RevertableObject,
     # whose changes go into the rollback log, and saving would then pickle the
-    # bridge's queue and locks (Stranded in Space: "cannot pickle
+    # bridge's queue and locks ("cannot pickle
     # '_thread.lock' object ... requests.mutex").
     class _RenforgeRequest(builtins.object):
         # NB: no __slots__ — Ren'Py forbids slotted classes in init python
@@ -1877,7 +1877,7 @@ init python:
             elif "modal" in hits and not (
                     # A miss inside the widget's own modal screen: the screen
                     # grabbed a point the widget's focus mask left open
-                    # (Nightmares of the Moon's full-screen masked buttons).
+                    # (full-screen masked buttons).
                     widget is not None and inventory is not None
                     and _renforge_engine_modal_blocked(widget, inventory) is False):
                 covered = True
@@ -4364,7 +4364,7 @@ init python:
         if not actions:
             return False
         # Showing or hiding a screen beside an interface action is that
-        # button's own indicator: Love Sucks' fast-forward button runs
+        # button's own indicator: a fast-forward button that runs
         # Show("fastHide") with Skip(). Skip only turns sensitive while
         # skipping is allowed, so as a decision it stopped progression (which
         # allows skipping) at once.
@@ -4384,6 +4384,18 @@ init python:
             if not _renforge_engine_class(cls):
                 return False
         return True
+
+
+    def _renforge_inert_action(actions):
+        """True when every action is NullAction or a neutral engine action.
+
+        NullAction exists to give a button hover effects and does nothing on
+        a click (a tutorial's decorative icons), so it never ends a pause.
+        """
+        return bool(actions) and all(
+            type(action).__name__ in _RENFORGE_NEUTRAL_ACTIONS | {"NullAction"}
+            and _renforge_engine_class(type(action))
+            for action in actions)
 
 
     def _renforge_engine_class(cls):
@@ -4425,7 +4437,7 @@ init python:
         """A Function action handed the menu item or its action as an argument.
 
         A choice screen may route each item through its own callback
-        (Light of my Life: ``action Function(menu_choice_intercept,
+        (``action Function(menu_choice_intercept,
         menu_item=i)``); that button is the item.
         """
         for action in _renforge_action_list(container):
@@ -4483,8 +4495,11 @@ init python:
                     break
             record["widget_id"] = _renforge_observe_widget_id(focus, widget, inventory["named"])
             record["source"] = _renforge_source_location(widget)
-            if _renforge_engine_chrome_action(_renforge_action_list(_renforge_focus_action_value(focus))):
+            actions = _renforge_action_list(_renforge_focus_action_value(focus))
+            if _renforge_engine_chrome_action(actions):
                 record["chrome"] = True
+            elif _renforge_inert_action(actions):
+                record["inert"] = True
             record["type"] = _renforge_focus_type(focus, widget)
             record["coordinate_space"] = "logical"
             record["zorder"] = _renforge_focus_zorder(focus, widget, len(pairs))
@@ -4598,7 +4613,7 @@ init python:
                     "action": _renforge_observe_format_action(value) if value is not None else None,
                     **geometry})
         # A screen's `key "mousedown_1" action ...` makes a click anywhere its
-        # control (Stranded in Space's laptop tutorial advances only so). Act's
+        # control (a tutorial screen that advances only so). Act's
         # key/ pseudo-controls press keyboard keys, so a left-click binding is
         # listed as a control that runs its action.
         keymap_type = getattr(behavior, "Keymap", None)
@@ -4646,7 +4661,7 @@ init python:
                                                         or getattr(node, "clicked", None), action)), None)
             if button is None:
                 # A choice screen can draw an item as a button with no action
-                # (TDI: `textbutton i.caption action None sensitive False` for
+                # (`textbutton i.caption action None sensitive False` for
                 # disabled=...). That button is the item: it cannot be chosen.
                 drawn = next((pair for pair in pairs
                               if getattr(pair[0], "screen", None) is owner
@@ -4957,7 +4972,7 @@ init python:
         """Keep the restored-screen hook in config.after_load_callbacks.
 
         A game may assign its own list during init, after the bridge added
-        the hook (IA2: ``config.after_load_callbacks = [after_load_setup_custom]``).
+        the hook (``config.after_load_callbacks = [after_load_setup_custom]``).
         """
         after_load = getattr(renpy.config, "after_load_callbacks", None)
         if isinstance(after_load, builtins.list) and not any(
@@ -6370,7 +6385,7 @@ init python:
                     and getattr(renpy.store, "_skipping", True)):
                 # The game moves on by itself, and skipping ends pauses and
                 # transitions as Ren'Py's own skip does. Never judge the
-                # screens behind it: they may be about to go (TDI's
+                # screens behind it: they may be about to go (a
                 # "show black; pause 0.5; jump" leaves the old hub up).
                 renpy.config.skipping = "slow"
                 operation["enabled_generation"] = bridge.observe_generation
@@ -6396,7 +6411,7 @@ init python:
             # loop that counts ("Line [n].") moves on by itself and is not one.
             # A line paused with {w} shows again from the same run of its say
             # statement (same say_id), so it is not one either.
-            # A subroutine called from different places (a "Moan" label each
+            # A subroutine called from different places (a shared voice label each
             # scene line calls) runs its line again as the story moves on, so
             # where it was called from is part of the spot.
             where = raw.get("statement") or {}
@@ -6418,7 +6433,7 @@ init python:
                         event.update(dialogue)
                         break
             if not getattr(renpy.config, "allow_skipping", True) or not getattr(renpy.store, "_skipping", True):
-                # The game turned skipping off (Come Home's battles): click
+                # The game turned skipping off (in a battle, say): click
                 # through the line as a player would.
                 # A click in the line's first frames can be dropped; the
                 # line still being up later means it was, so click again.
@@ -6487,7 +6502,7 @@ init python:
             "skip_delay": getattr(renpy.config, "skip_delay", None),
             "visited": builtins.dict(), "clicked": None,
         }
-        # Games may hold each skipped line on screen (Stranded in Space uses
+        # Games may hold each skipped line on screen (one uses
         # 150 ms); each line is already checked after it draws.
         if bridge.progression["skip_delay"] is not None:
             renpy.config.skip_delay = 0

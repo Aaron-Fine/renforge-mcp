@@ -525,3 +525,41 @@ def test_import_finds_the_save_folder_the_running_game_names(tmp_path: Path, hos
     assert (dest / "1-1-LT1.save").read_bytes() == b"SLOT"
     assert (host_saves / "1-1-LT1.save").read_bytes() == b"SLOT"
 
+
+
+def test_host_save_paths_match_regardless_of_case(tmp_path: Path, monkeypatch, host_save_root: Path) -> None:
+    """On a case-insensitive filesystem ~/library/renpy is the player's ~/Library/RenPy."""
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    host = tmp_path / "home"
+    user_saves = host_save_root / "renforge-demo"
+    user_saves.mkdir(parents=True)
+    recased = Path(str(user_saves).swapcase()) if sys.platform != "win32" else Path(str(user_saves).upper())
+    assert path_exposes_user_saves(recased, home=host) is True
+    assert launch_exposes_user_saves(savedir=str(recased), home="temporary") is True
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_a_home_whose_save_folder_links_into_the_players_is_destructive(
+    tmp_path: Path, monkeypatch, host_save_root: Path
+) -> None:
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    host_save_root.mkdir(parents=True)
+    fake_home = tmp_path / "fake-home"
+    linked = fake_home / host_save_root.relative_to(tmp_path / "home")
+    linked.parent.mkdir(parents=True)
+    linked.symlink_to(host_save_root, target_is_directory=True)
+    assert launch_exposes_user_saves(savedir="temporary", home=str(fake_home)) is True
+    clean_home = tmp_path / "clean-home"
+    clean_home.mkdir()
+    assert launch_exposes_user_saves(savedir="temporary", home=str(clean_home)) is False
+
+
+def test_another_games_save_folder_exposes_player_saves(tmp_path: Path, monkeypatch, host_save_root: Path) -> None:
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    other = tmp_path / "OtherGame" / "Game" / "saves"
+    other.mkdir(parents=True)
+    assert launch_exposes_user_saves(savedir=str(other), home="temporary", project_path=str(tmp_path / "this")) is True
+    assert launch_exposes_user_saves(savedir=str(other / "slot-dir"), home="temporary") is True
+    scratch = tmp_path / "scratch" / "saves"
+    scratch.mkdir(parents=True)
+    assert launch_exposes_user_saves(savedir=str(scratch), home="temporary") is False

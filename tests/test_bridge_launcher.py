@@ -692,7 +692,7 @@ def test_allowlisted_bridge_startup_error_fails_before_timeout(monkeypatch, tmp_
 
 
 def test_game_error_report_during_startup_fails_before_timeout(monkeypatch, tmp_path: Path) -> None:
-    """Astreon: a translation error at init shows Ren'Py's error screen, so no bridge."""
+    """A translation error at init shows Ren'Py's error screen, so no bridge."""
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)
     report = (
@@ -722,7 +722,7 @@ def test_game_error_report_during_startup_fails_before_timeout(monkeypatch, tmp_
 
 
 def test_a_launch_that_compiled_scripts_and_stopped_on_an_error_is_retried_once(monkeypatch, tmp_path: Path) -> None:
-    """Eden, Found in Translation: the compiling launch raises, the next one loads fine."""
+    """The compiling launch raises, the next one loads fine."""
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)
     (project_root / "game").mkdir(exist_ok=True)
@@ -766,7 +766,7 @@ def test_a_launch_that_compiled_scripts_and_stopped_on_an_error_is_retried_once(
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the Wayland driver default is Linux-only")
 def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkeypatch, tmp_path: Path) -> None:
-    """Inanna's Revenge, Island Echoes: a transparent presplash needs a shaped window."""
+    """A transparent presplash needs a shaped window."""
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.delenv("SDL_VIDEODRIVER", raising=False)
@@ -820,7 +820,7 @@ def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkey
 
 
 def test_a_launch_whose_scripts_do_not_parse_fails_even_with_the_bridge_up(monkeypatch, tmp_path: Path) -> None:
-    """Fleeting Memories: the compiling launch shows _parse_errors; the bridge still starts."""
+    """The compiling launch shows _parse_errors; the bridge still starts."""
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)
     (project_root / "game").mkdir(exist_ok=True)
@@ -1357,6 +1357,7 @@ def test_editor_launch_failure_cleans_resources_and_closes_coordinator(
         launch_with_bridge(sdk, project, editor=True, startup_timeout=0.0)
 
     assert excinfo.value.code == "BRIDGE_CONNECTION_TIMEOUT"
+    assert excinfo.value.details["log_tail"] == []
     assert coordinator_calls["init"] == 1
     assert coordinator_calls["start"] == 1
     assert coordinator_calls["close"] == 1
@@ -2272,3 +2273,36 @@ def test_startup_timeout_defaults_and_reads_the_environment(monkeypatch):
     for bad in ("", "soon", "0", "-5", "inf", "nan"):
         monkeypatch.setenv(launcher.STARTUP_TIMEOUT_ENV, bad)
         assert launcher.default_startup_timeout() == 180.0
+
+
+def test_log_tail_reports_where_this_launch_stopped(tmp_path: Path) -> None:
+    from renforge.bridge.launcher import _log_tail
+
+    log = tmp_path / "log.txt"
+    assert _log_tail(tmp_path, 0) == []
+    log.write_text("﻿Ren'Py 8.0.3\n\nScreen sizes: virtual=(1920, 1080)\nWindowed mode.\n", encoding="utf-8")
+    assert _log_tail(tmp_path, 0) == ["Ren'Py 8.0.3", "Screen sizes: virtual=(1920, 1080)", "Windowed mode."]
+    assert _log_tail(tmp_path, 0, lines=1) == ["Windowed mode."]
+    # A log left by an earlier run says nothing about this launch.
+    assert _log_tail(tmp_path, log.stat().st_mtime_ns + 1) == []
+
+
+def test_a_game_that_quits_on_its_own_check_says_why_in_log_tail(monkeypatch, tmp_path: Path) -> None:
+    """Some builds check their platform and quit, saying why only in log.txt."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, root = _make_project(tmp_path)
+
+    def fake_popen(*_args, **_kwargs):
+        process = _FakeProcess()
+        process.returncode = 86
+        (root / "log.txt").write_text("Loading persistent took 1 ms\nPlatform runtime unavailable.\n", encoding="utf-8")
+        return process
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project)
+
+    assert excinfo.value.code == "RENPY_PROCESS_EXITED"
+    assert excinfo.value.details["log_tail"][-1] == "Platform runtime unavailable."
+    assert "log_tail" in excinfo.value.suggested_fix

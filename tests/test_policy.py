@@ -322,3 +322,17 @@ def test_denied_open_world_scenario_steps_never_run(monkeypatch, tmp_path) -> No
     )
     assert allowed_payload == {"ok": True}
     assert len(calls) == 1
+
+
+def test_wait_until_expression_is_open_world_like_a_scenario_wait() -> None:
+    """Its expr runs Python in the game, so enforce mode asks for authorization."""
+    assert classify("renforge_wait_until", {"expr": "renpy.version"}) == (
+        "renforge_wait_until.expr", RISK_OPEN_WORLD)
+    assert classify("renforge_wait_until", {"label": "start", "expr": None}) == (
+        "renforge_wait_until", RISK_OBSERVATIONAL)
+    assert classify("renforge_wait_until", {"expr": "  "}) == ("renforge_wait_until", RISK_MALFORMED)
+    assert classify("renforge_set_var", {"name": "day", "value": 3}) == ("renforge_set_var", RISK_MUTATING)
+    env = {"RENFORGE_POLICY": MODE_ENFORCE}
+    assert evaluate("renforge_wait_until", {"expr": "True"}, environ=env).decision == "deny"
+    assert evaluate("renforge_wait_until", {"expr": "True", "authorize": True}, environ=env).decision == "allow"
+    assert evaluate("renforge_wait_until", {"screen": "say"}, environ=env).decision == "allow"

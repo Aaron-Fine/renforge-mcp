@@ -1110,7 +1110,10 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "project_path": "Project root with active live session.",
             "label": "Target label to wait for; provide either label, screen, or expression.",
             "screen": "Target screen name to wait for.",
-            "expr": "Expression condition to evaluate and await success. Evaluated repeatedly during waiting.",
+            "expr": (
+                "Expression condition to evaluate and await success. Evaluated repeatedly during waiting. "
+                "It runs Python in the game, so it is open-world like `renforge_eval`."
+            ),
             "timeout": "Maximum wait time, a finite value between 0 and 120 seconds.",
             "interval": "Polling interval in seconds.",
             "state_profile": "Returned state shape: `minimal`, `interaction`, `debug`, or `full`.",
@@ -1118,6 +1121,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "max_depth": "Maximum object nesting depth in compact state, from 0 through 20.",
             "max_items": "Maximum list/map items in compact state, from 1 through 10000.",
             "max_output_bytes": "Payload cap for the result, from 64 through 2000000 bytes.",
+            "authorize": "An `expr` condition runs Python in the game: pass true when RENFORGE_POLICY=enforce.",
         },
         parameter_schemas={
             "timeout": _limits(0, 120),

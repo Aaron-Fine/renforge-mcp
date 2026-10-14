@@ -2,7 +2,7 @@
 
 ``init python`` code runs with the game's store as its globals, so a bare
 ``id(node)`` in the bridge finds a game's ``define id = Character("Id")``
-before the builtin (Eternum), and a game's ``default types = [...]`` replaces
+before the builtin (a game that defines ``id`` as a Character), and a game's ``default types = [...]`` replaces
 the ``types`` module the bridge imported. Rewriting the bridge source at
 injection time binds each builtin and each top-level import to a private
 ``_rfb_`` name, which no game defines, while the source stays plain Python.

@@ -383,7 +383,10 @@ def build_wrappers(context):
                 # Saves stay apart from the player's own but survive relaunches.
                 from ..state import project_state_dir
                 saves = project_state_dir(project_path) / "saves"
-                result = _start_launch(project_path, editor=False, savedir=str(saves),
+                # HOME is always the session's own, even when the server's
+                # RENFORGE_ISOLATION=existing would default it to the player's:
+                # the policy classifies this launch as isolated.
+                result = _start_launch(project_path, editor=False, savedir=str(saves), home="temporary",
                                        start_label=label.strip() if label else None)
                 if label and isinstance(result, dict):
                     result["start_label"] = label.strip()
