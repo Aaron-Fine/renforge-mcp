@@ -137,7 +137,8 @@ versioning.
   Translation) only started this way. A game whose presplash has transparent
   corners (a shaped window, which SDL's Wayland driver cannot create) exited
   at once; it is now launched again with X11 (Inanna's Revenge, Island
-  Echoes). Launched games also get an editor that
+  Echoes; on Ren'Py 8.5 the error carries no message, Apocalypse and
+  Bunkered with Femboy). Launched games also get an editor that
   opens nothing, so a crash no longer opens `traceback.txt` on the user's
   desktop.
 - The injected bridge and Live Editor no longer read builtins or their own

@@ -1304,7 +1304,9 @@ def _shaped_presplash_failed(exc: LaunchError, extra_env: dict[str, str] | None)
     if (extra_env or {}).get("SDL_VIDEODRIVER") or os.environ.get("SDL_VIDEODRIVER"):
         return False  # the user chose the driver
     stderr = str((exc.details or {}).get("stderr") or "")
-    return "presplash" in stderr and "Invalid window" in stderr
+    # Ren'Py 8.5 bundles its own pygame, whose error carries no message.
+    return "presplash" in stderr and "Window" in stderr and (
+        "Invalid window" in stderr or "pygame.error" in stderr or "pygame_sdl2.error" in stderr)
 
 
 def _launch_with_bridge_once(

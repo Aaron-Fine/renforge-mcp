@@ -787,7 +787,9 @@ def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkey
             process.stdout = _Stream(b"")
             process.stderr = _Stream(
                 b'  File "renpy/display/presplash.py", line 131, in start\n'
-                b"pygame_sdl2.error.error: Invalid window\n")
+                b"    window = pygame.display.Window(\n"
+                b'  File "renpy/pygame/display.pyx", line 176, in renpy.pygame.display.Window.__init__\n'
+                b"renpy.pygame.error.error\n")
         else:
             _write_bridge_info(project_root, kwargs["env"])
         return process
@@ -800,6 +802,13 @@ def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkey
     assert drivers == ["wayland,x11", "x11"]
     assert "Wayland" in session.startup_warning
     session.close(timeout=0.1)
+
+    # Ren'Py 8.4's pygame_sdl2 says "Invalid window".
+    from renforge.bridge.launcher import _shaped_presplash_failed
+    older = LaunchError("DISPLAY_START_FAILED", "exited", phase="starting_renpy", details={"stderr": (
+        '  File "renpy/display/presplash.py", line 131, in start\n'
+        "    window = pygame_sdl2.display.Window(\npygame_sdl2.error.error: Invalid window\n")})
+    assert _shaped_presplash_failed(older, None) is True
 
     # A driver the user chose is theirs: no retry.
     drivers.clear()
