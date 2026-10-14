@@ -304,8 +304,13 @@ def running_bridge(tmp_path, monkeypatch):
 
     sys.modules.pop("_renforge_runtime", None)
 
-    globs = {"__name__": "bridge_rpy", "renpy": renpy, **_game_store_names()}
+    class RevertableObject(object):
+        """Ren'Py's store `object`: its changes are logged for rollback and saved."""
+
+    globs = {"__name__": "bridge_rpy", "renpy": renpy, "object": RevertableObject, **_game_store_names()}
     exec(compile(_load_bridge_body(), "bridge.rpy", "exec"), globs)
+    # Runtime state is never a revertable object, so saves never pickle it.
+    assert not isinstance(sys.modules["_renforge_runtime"].bridge, RevertableObject)
     # The bridge never replaces a game's own store variables.
     assert globs["types"] == ["sword", "shield"] and globs["json"] == {"save": 1}
 

@@ -206,6 +206,10 @@ versioning.
   at Rollback, Ignore, or Quit. Before, Love Sucks: Night Two's error screen
   read as an ordinary choice and continuing said only "waiting for one of its
   controls".
+- The bridge's runtime objects derive from the plain `object`, not Ren'Py's
+  store `object` (`RevertableObject`). Their changes went into the rollback
+  log, so a save could try to pickle the bridge's queue: "cannot pickle
+  '_thread.lock' object ... requests.mutex" (Stranded in Space).
 - Action summaries name a mangled common-library class as written:
   `MusicRoomPlay("...")`, not `_m1_00musicroom__MusicRoomPlay("...")`.
 - When nothing else moves the game on, interface buttons on the

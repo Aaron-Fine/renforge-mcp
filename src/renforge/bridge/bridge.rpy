@@ -65,7 +65,11 @@ init python:
     exec(compile("__RENFORGE_INTERACTION_SOURCE__", "renforge/interaction.py", "exec"),
          _renforge_runtime.interaction.__dict__)
 
-    class _RenforgeRequest(object):
+    # The plain object: `object` in init python is Ren'Py's RevertableObject,
+    # whose changes go into the rollback log, and saving would then pickle the
+    # bridge's queue and locks (Stranded in Space: "cannot pickle
+    # '_thread.lock' object ... requests.mutex").
+    class _RenforgeRequest(builtins.object):
         # NB: no __slots__ — Ren'Py forbids slotted classes in init python
         # (they are incompatible with its rollback machinery).
         def __init__(self, command, payload):
@@ -75,7 +79,7 @@ init python:
             self.result = None
             self.error = None
 
-    class _RenforgeBridge(object):
+    class _RenforgeBridge(builtins.object):
         def __init__(self, host, port, token, project_root, session_id):
             self.host = host
             self.port = port
