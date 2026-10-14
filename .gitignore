@@ -42,6 +42,7 @@ docs/*
 !docs/LIVE_EDITOR.md
 !docs/CLOUD_ENVIRONMENT.md
 !docs/POLICY.md
+!docs/SANDBOX_TESTS.md
 !docs/superpowers/
 !docs/superpowers/specs/
 !docs/superpowers/specs/*.md
@@ -90,3 +91,6 @@ screens
 
 # Local isolated development worktrees
 .worktrees/
+
+# Sandbox contract test diagnostics
+/.sandbox-test-artifacts/

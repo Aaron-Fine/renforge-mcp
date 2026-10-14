@@ -20,7 +20,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from ..autopilot import autopilot as _autopilot
 from ..bridge.client import BridgeClient, BridgeError
@@ -33,7 +33,19 @@ from ..effect_wait import expected_events_for_action
 from ..effect_wait import wait_for_effect as _wait_for_business_effect
 from ..launch_env import LaunchError
 from ..project import RenpyProject
-from ..sdk import get_or_install_sdk
+from ..save_isolation import (
+    apply_launch_isolation_defaults,
+    agent_session_id,
+    import_host_slots,
+    isolation_report,
+    isolation_is_renforge_owned,
+    launch_request_is_renforge_owned,
+    location_is_renforge_owned,
+    list_host_slots,
+    path_exposes_user_saves,
+)
+from ..sdk import get_or_install_sdk, require_supported_runtime
+from ..state import project_state_dir
 from ..state_compact import (
     apply_serialization_limits,
     compact_state,
@@ -44,6 +56,7 @@ from ..scene_diff import diff_scenes
 from ..scene_measure import measure_geometry
 from ..scene_wireframe import render_wireframe
 from ..util import write_json_atomic
+from ..util.files import PrivatePathError, ensure_nofollow_directory
 
 _SESSIONS: dict[str, BridgeSession] = {}
 _LAUNCH_RESPONSE_WAIT_SECONDS = 20.0
@@ -58,10 +71,13 @@ class _LaunchTask:
     ``closed``. Cancellation is ``failed`` with ``LAUNCH_CANCELLED``.
     """
 
-    def __init__(self, project_root: Path, *, requested_editor: bool = True) -> None:
+    def __init__(self, project_root: Path, *, requested_editor: bool = True,
+                 requirements: Mapping[str, bool] | None = None) -> None:
         self.project_root = Path(project_root)
         self.started = time.monotonic()
         self.requested_editor = requested_editor
+        # What the starting launch was asked for; a second request must match.
+        self.requirements = dict(requirements) if requirements is not None else None
         self.finished: float | None = None
         self.cancel_event = threading.Event()
         self.done_event = threading.Event()
@@ -269,6 +285,8 @@ def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
                 "current_label": state.get("current_label"),
                 "editor": bool(getattr(session, "editor", task.requested_editor)),
                 "elapsed_ms": elapsed_ms,
+                **_isolation_result(session),
+                **_startup_warning(session),
             }
         except Exception:
             # Stale ready: initiate close and report closing/failure.
@@ -306,7 +324,14 @@ def start_launch(
     *,
     wait_timeout: float = _LAUNCH_RESPONSE_WAIT_SECONDS,
     editor: bool = True,
+    requirements: Mapping[str, bool] | None = None,
 ) -> dict[str, Any]:
+    """Start ``launch`` in the background, or report the launch already starting.
+
+    ``requirements`` (from :func:`launch_requirements`) are kept on the task: a
+    request that arrives while it starts is refused, rather than told to poll,
+    when the starting launch would give it a session it may not have.
+    """
     project = RenpyProject(Path(project_path))
     key = _key(project.root)
     should_start = False
@@ -314,11 +339,16 @@ def start_launch(
         _prune_launches(time.monotonic())
         task = _LAUNCHES.get(key)
         if task is None or task.done_event.is_set():
-            task = _LaunchTask(project.root, requested_editor=editor)
+            task = _LaunchTask(project.root, requested_editor=editor, requirements=requirements)
             _LAUNCHES[key] = task
             should_start = True
 
     if not should_start:
+        if requirements is not None:
+            started = task.requirements
+            refused = _reuse_refusal(isolated=bool(started and started.get("isolated")), wanted=requirements)
+            if refused is not None:
+                return refused
         result = _launch_task_status(task)
         result.update(
             ok=False,
@@ -359,12 +389,15 @@ def launch_status(project_path: str) -> dict[str, Any]:
                     "status": "ready",
                     "current_label": state.get("current_label"),
                     "editor": bool(getattr(session, "editor", False)),
+                    **_isolation_result(session),
+                    "isolated": _owned_session_isolated(session),
                 }
             except Exception:
                 pass
 
     try:
-        state = _client(project_path).get_state()
+        external = _client(project_path)
+        state = external.get_state()
     except Exception:
         return {
             "ok": True,
@@ -372,6 +405,7 @@ def launch_status(project_path: str) -> dict[str, Any]:
             "status": "idle",
             "message": "No launch is active for this project.",
         }
+    # Status hands out no session, but says what a caller would be driving.
     return {
         "ok": True,
         "ready": True,
@@ -379,12 +413,42 @@ def launch_status(project_path: str) -> dict[str, Any]:
         "external": True,
         "current_label": state.get("current_label"),
         "editor": False,
+        "isolated": _external_session_isolated(external),
     }
 
 
 def _key(project_path: str | Path) -> str:
     canonical = Path(project_path).expanduser().resolve()
     return os.path.normcase(str(canonical))
+
+
+def _owned_session(project_path: str | Path) -> BridgeSession | None:
+    return _SESSIONS.get(_key(project_path))
+
+
+def _isolation_result(session: Any) -> dict[str, Any]:
+    isolation = getattr(session, "isolation", None)
+    artifact_id = getattr(session, "session_id", None)
+    session_id = agent_session_id(artifact_id)
+    result: dict[str, Any] = {}
+    if isolation is not None:
+        report = isolation_report(isolation, session_id=session_id)
+        result.update(report)
+        isolation_obj = report.get("isolation") or {}
+        if isolation_obj.get("savedir"):
+            result["savedir"] = isolation_obj["savedir"]
+        if isolation_obj.get("home"):
+            result["home"] = isolation_obj["home"]
+        return result
+    if session_id:
+        result["session_id"] = session_id
+    savedir = getattr(session, "temporary_savedir", None)
+    home = getattr(session, "temporary_home", None)
+    if savedir is not None:
+        result["savedir"] = str(savedir)
+    if home is not None:
+        result["home"] = str(home)
+    return result
 
 
 def _client(project_path: str | Path) -> BridgeClient:
@@ -425,6 +489,51 @@ def _session_mode_mismatch(
     }
 
 
+def launch_requirements(
+    project_path: str | Path,
+    *,
+    savedir: str | None = None,
+    home: str | None = None,
+    persistent: str | None = None,
+    preferences: str | None = None,
+) -> dict[str, bool]:
+    """What a launch request may be given: ``isolated`` means RenForge-owned folders only."""
+    defaults = apply_launch_isolation_defaults(savedir=savedir, home=home, persistent=persistent,
+                                               preferences=preferences)
+    return {"isolated": launch_request_is_renforge_owned(project_path=project_path, **defaults)}
+
+
+def _reuse_refusal(*, isolated: bool, wanted: Mapping[str, bool]) -> dict[str, Any] | None:
+    """Why a running or starting session must not be handed to a request, if it must not.
+
+    A request that needs no authorization gets only a session in RenForge's
+    own folders.
+    """
+    if not (wanted.get("isolated") and not isolated):
+        return None
+    message = ("The running game keeps its saves or HOME outside RenForge's own folders (the player's "
+               "saves, or a folder an earlier launch was authorized for), but this launch asked for an "
+               "isolated session. Stop it and launch again, or repeat the earlier launch's savedir and "
+               "home with authorize=true to use it.")
+    return {"ok": False, "ready": False, "code": "SESSION_ISOLATION_MISMATCH",
+            "phase": "validating_session_mode", "message": message, "error": message}
+
+
+def _owned_session_isolated(session: Any) -> bool:
+    isolation = getattr(session, "isolation", None)
+    return isolation is not None and isolation_is_renforge_owned(isolation)
+
+
+def _external_session_isolated(client: BridgeClient) -> bool:
+    """Whether a bridge this process did not start keeps to RenForge's folders; an older one is assumed not to."""
+    try:
+        info = client.session_info()
+    except Exception:
+        return False
+    return all(isinstance(value, str) and value and location_is_renforge_owned(value)
+               for value in (info.get("savedir"), info.get("home")))
+
+
 def launch_game(
     project_path: str,
     version: str = "stable",
@@ -434,17 +543,25 @@ def launch_game(
     display: str = "auto",
     audio: str = "auto",
     savedir: str | None = None,
-    persistent: str = "existing",
+    persistent: str | None = None,
     cleanup_on_stop: bool = True,
     timeout: float | None = None,
     session: dict[str, Any] | None = None,
     cancel_event: threading.Event | None = None,
+    home: str | None = None,
+    preferences: str | None = None,
 ) -> dict:
     """Launch the project with the bridge injected, or reuse a live session.
 
     ``display`` / ``audio`` default to ``auto`` (native when available, else
-    Xvfb + dummy SDL audio). Pass a ``session`` object or individual kwargs to
-    isolate saves (``savedir='temporary'``) and persistent state.
+    Xvfb + dummy SDL audio). Saves, preferences, and HOME default to isolated
+    temporary locations so the session cannot read or write the user's normal
+    Ren'Py state. Pass ``savedir='existing'`` (and optionally
+    ``home='existing'``) to use the game's normal save location, or set
+    ``RENFORGE_ISOLATION=existing`` to change the server-wide default.
+    A running session is reused only when it does not expose the player's
+    saves, or a folder only an authorized launch may use, to a request that
+    did not ask for them.
     """
     try:
         project = RenpyProject(Path(project_path))
@@ -457,13 +574,30 @@ def launch_game(
             "message": f"{type(exc).__name__}: {exc}",
         }
 
+    try:
+        require_supported_runtime(version, project_root=project.abs_root)
+    except LaunchError as exc:
+        return exc.to_dict()
+    except (ValueError, TypeError) as exc:
+        return {"ok": False, "code": "INVALID_RENPY_VERSION",
+                "phase": "checking_runtime_compatibility", "error": str(exc), "message": str(exc)}
+
     session_cfg = dict(session or {})
-    savedir = session_cfg.get("savedir", savedir)
-    persistent = str(session_cfg.get("persistent", persistent) or "existing")
+    isolation_defaults = apply_launch_isolation_defaults(
+        savedir=session_cfg.get("savedir", savedir),
+        home=session_cfg.get("home", home),
+        persistent=session_cfg.get("persistent", persistent),
+        preferences=session_cfg.get("preferences", preferences),
+    )
+    savedir = isolation_defaults["savedir"]
+    home = isolation_defaults["home"]
+    persistent = isolation_defaults["persistent"]
+    preferences = isolation_defaults["preferences"]
     if isinstance(session_cfg.get("cleanup_on_stop"), bool):
         cleanup_on_stop = session_cfg["cleanup_on_stop"]
-    preferences = str(session_cfg.get("preferences", "existing") or "existing")
     requested_editor = bool(editor)
+    wanted = launch_requirements(project.root, savedir=savedir, home=home, persistent=persistent,
+                                 preferences=preferences)
 
     key = _key(project.root)
     existing = _SESSIONS.get(key)
@@ -482,6 +616,9 @@ def launch_game(
         # answers; otherwise tear it down (a warp needs a fresh --warp launch,
         # and a dead process must be reaped so it does not linger as a zombie).
         if warp is None and existing.process.poll() is None:
+            refused = _reuse_refusal(isolated=_owned_session_isolated(existing), wanted=wanted)
+            if refused is not None:
+                return refused
             try:
                 state = existing.client.get_state()
                 return {
@@ -490,6 +627,7 @@ def launch_game(
                     "ready": True,
                     "current_label": state.get("current_label"),
                     "editor": existing_editor,
+                    **_isolation_result(existing),
                 }
             except Exception:
                 pass  # unreachable session; fall through and relaunch
@@ -535,6 +673,9 @@ def launch_game(
                         "Launch from this RenForge process with editor=true instead."
                     ),
                 )
+            refused = _reuse_refusal(isolated=_external_session_isolated(external), wanted=wanted)
+            if refused is not None:
+                return refused
             return {
                 "ok": True,
                 "already_running": True,
@@ -575,11 +716,11 @@ def launch_game(
             "persistent": persistent,
             "cleanup_on_stop": cleanup_on_stop,
             "preferences": preferences,
+            "home": home,
         }
         if warp is not None:
             launch_kwargs["warp"] = warp
-        if savedir is not None:
-            launch_kwargs["savedir"] = savedir
+        launch_kwargs["savedir"] = savedir
         if timeout is not None:
             launch_kwargs["startup_timeout"] = float(timeout)
         launch_signature = inspect.signature(launch_with_bridge)
@@ -625,6 +766,11 @@ def launch_game(
         pass
     if session_obj.temporary_savedir is not None:
         result["savedir"] = str(session_obj.temporary_savedir)
+    home_path = getattr(session_obj, "temporary_home", None)
+    if home_path is not None:
+        result["home"] = str(home_path)
+    result.update(_isolation_result(session_obj))
+    result.update(_startup_warning(session_obj))
     if session_obj.headless:
         # Running under xvfb-run: no visible window, but the bridge (state,
         # screenshots, input) works normally.
@@ -1047,20 +1193,32 @@ def saves(
     slot: str | None = None,
     extra_info: str | None = None,
     regexp: str | None = None,
+    slots: list[str] | None = None,
 ) -> dict:
-    """Save, load, or list named save slots through the running bridge."""
-    if action not in {"save", "load", "list"}:
-        return {"ok": False, "error": "action must be one of: save, load, list"}
+    """Save, load, or list named save slots, or copy selected host slots in."""
+    if action not in {"save", "load", "list", "list_user", "import"}:
+        return {
+            "ok": False,
+            "error": "action must be one of: save, load, list, list_user, import",
+        }
 
     if action in {"save", "load"}:
         if not isinstance(slot, str) or not slot.strip():
             return {"ok": False, "error": "slot is required for action '%s'" % action}
+        if slots is not None:
+            return {"ok": False, "error": "slots is only valid for action 'import'"}
+    elif action == "import":
+        if slot is not None and (not isinstance(slot, str) or not slot.strip()):
+            return {"ok": False, "error": "slot must be a non-empty string"}
     elif slot is not None:
-        return {"ok": False, "error": "slot is only valid for save or load"}
+        return {"ok": False, "error": "slot is only valid for save, load, or import"}
+
+    if action != "import" and slots is not None:
+        return {"ok": False, "error": "slots is only valid for action 'import'"}
 
     if action == "save":
         if regexp is not None:
-            return {"ok": False, "error": "regexp is only valid for action 'list'"}
+            return {"ok": False, "error": "regexp is only valid for list, list_user, or import"}
         if extra_info is not None and not isinstance(extra_info, str):
             return {"ok": False, "error": "extra_info must be a string"}
         return _with_client(
@@ -1072,14 +1230,61 @@ def saves(
         if extra_info is not None:
             return {"ok": False, "error": "extra_info is only valid for action 'save'"}
         if regexp is not None:
-            return {"ok": False, "error": "regexp is only valid for action 'list'"}
+            return {"ok": False, "error": "regexp is only valid for list, list_user, or import"}
         return _with_client(project_path, lambda client: client.load_slot(slot))
 
     if extra_info is not None:
         return {"ok": False, "error": "extra_info is only valid for action 'save'"}
     if regexp is not None and not isinstance(regexp, str):
         return {"ok": False, "error": "regexp must be a string"}
-    return _with_client(project_path, lambda client: client.list_slots(regexp=regexp))
+
+    if action == "list":
+        return _with_client(project_path, lambda client: client.list_slots(regexp=regexp))
+
+    try:
+        project = RenpyProject(Path(project_path))
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    if action == "list_user":
+        return list_host_slots(project.root, regexp=regexp)
+
+    session = _owned_session(project.root)
+    destination = getattr(session, "temporary_savedir", None) if session is not None else None
+    isolation = getattr(session, "isolation", None) if session is not None else None
+    savedir_mode = getattr(isolation, "savedir_mode", None)
+    if session is None or destination is None:
+        return {
+            "ok": False,
+            "code": "NO_ISOLATED_SESSION",
+            "error": "import requires an isolated launch; call renforge_launch first",
+        }
+    # Only a temporary session's own savedir takes imports. A savedir=<path>
+    # launch and an import are each mutating, so allowing the path would let
+    # the two together copy the player's saves anywhere without authorize.
+    session_root = getattr(isolation, "session_root", None)
+    if (
+        savedir_mode != "temporary"
+        or session_root is None
+        or not Path(destination).resolve().is_relative_to(Path(session_root).resolve())
+        or path_exposes_user_saves(destination, project_path=project.root)
+    ):
+        return {
+            "ok": False,
+            "code": "SAVE_IMPORT_NOT_ISOLATED",
+            "error": ("import copies only into a temporary session's own savedir; "
+                      "launch with savedir=temporary (the default)"),
+        }
+    return import_host_slots(
+        project.root,
+        destination,
+        slot=slot,
+        slots=slots,
+        regexp=regexp,
+    )
 
 
 def _filter_narrative_choices(raw_choices: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1590,6 +1795,12 @@ def _tail_project_file(project_root: Path, filename: str, max_lines: int = 100) 
     return {"name": filename, "tail": "".join(lines), "mtime": mtime}
 
 
+def _startup_warning(session: Any) -> dict[str, str]:
+    """A launch that only succeeded on retry says why (see launch_with_bridge)."""
+    warning = getattr(session, "startup_warning", None)
+    return {"startup_warning": warning} if isinstance(warning, str) and warning else {}
+
+
 def _error_files(project_path: str) -> dict:
     project_root = Path(project_path).expanduser().resolve()
     files = []
@@ -1765,7 +1976,10 @@ def run_autopilot(project_path: str, version: str = "stable", max_runs: int = 16
     """Explore the game's branches and return a coverage/crash report."""
     try:
         project = RenpyProject(Path(project_path))
+        require_supported_runtime(version, project_root=project.abs_root)
         sdk = get_or_install_sdk(version, project_root=project.abs_root)
+    except LaunchError as exc:
+        return exc.to_dict()
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     # Autopilot launches its own throwaway sessions; free any manual one first.
@@ -2156,16 +2370,10 @@ _SCENE_SNAPSHOT_MAX_BYTES = 2_000_000
 
 
 def _scene_snapshot_dir(project_path: str) -> Path:
-    project_root = Path(project_path).expanduser().resolve()
-    directory = project_root
-    for name in (".renforge", "scenes"):
-        directory = directory / name
-        if directory.is_symlink():
-            raise ValueError("scene snapshot directory must not be a symlink: %s" % directory)
-        directory.mkdir(exist_ok=True)
-        if not directory.resolve().is_relative_to(project_root):
-            raise ValueError("scene snapshot directory escapes the project: %s" % directory)
-    return directory
+    try:
+        return ensure_nofollow_directory(project_state_dir(project_path) / "scenes")
+    except PrivatePathError as exc:
+        raise ValueError("scene snapshot directory is unsafe: %s" % exc) from exc
 
 
 def _scene_snapshot_name(name: str) -> str:

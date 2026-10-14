@@ -25,9 +25,12 @@ runs. Denied calls return a structured `POLICY_DENIED` payload and never reach
 Covered tools:
 
 - `renforge_control` — classified by `action`
-- `renforge_saves` — classified by `action`
+- `renforge_saves` — classified by `action` (`list` observational, `save` mutating, `load` destructive; `list_user` and `import` destructive, because they read the player's own saves)
+- `renforge_launch`, `renforge_jump`, `renforge_new_game` — isolated launches (`savedir=temporary` / omitted) are mutating; `savedir=existing`, `home=existing`, a host save/HOME path, or any other `savedir`/`home` path outside the RenForge state folder (the shared temp dir included) is destructive and needs `authorize=true` in enforce mode (the game writes saves, persistent data, and config there)
 - `renforge_editor` — classified by `action` (`status` observational, `select`/`save` mutating)
 - `renforge_eval` — always `open_world` when `expr` is a non-empty string
+- `renforge_wait_until` — `open_world` with an `expr` condition (it runs in the game, like a scenario `wait` step); `observational` for a label or screen
+- `renforge_set_var` — `mutating`
 - `renforge_run_scenario` — classified by the highest-risk step, including nested `control` actions
 
 ## Authorization

@@ -7,9 +7,82 @@ versioning.
 
 ### Added
 
+- Launches are isolated from the player's Ren'Py state by default. One
+  disposable session root holds saves, multipersistent data, persistent data,
+  preferences, HOME, XDG directories, and temporary files; a `python early`
+  adapter installs that single save location before persistent data and
+  preferences load. `renforge_launch`, `renforge_jump`, `renforge_new_game`,
+  autopilot, the dashboard, and the low-level launcher all use it. The ready
+  payload carries `session_id` and an `isolation` object. `savedir`, `home`,
+  `persistent`, and `preferences` select other modes; `savedir=existing`
+  (the player's own saves) is destructive and needs `authorize=true` under
+  `RENFORGE_POLICY=enforce`, as does a save path in the player's tree (matched
+  case-insensitively) or in any game's `game/saves`, or a `home` whose Ren'Py
+  save folder resolves into it. Any other `savedir` or `home` path outside
+  the RenForge state folder is destructive too, since the game writes its
+  saves, persistent data, and config there. A launch that needs no
+  authorization reuses a running game, or joins one that is starting, only
+  when that game keeps its saves and HOME in RenForge's own folders
+  (`SESSION_ISOLATION_MISMATCH` otherwise); the policy gate and this check
+  share one rule. A game this server did not start reports its save folder
+  and HOME through the bridge's `session_info`, and `renforge_launch_status`
+  reports `isolated`. `renforge_autopilot` always launches isolated.
+- `renforge_saves` gains `list_user` (the player's slots) and `import` (copy
+  selected slots into a temporary session's own savedir; a session launched
+  with `savedir=<path>` is refused). Both read the player's own saves, so both
+  need `authorize=true` under `RENFORGE_POLICY=enforce`. They read only the
+  one folder of the Ren'Py save root that the game's `config.save_directory`
+  names, and a `game/saves` inside the project.
+- Linux sandbox contract tests (Bubblewrap and fuse-overlayfs, shell guests
+  only) with their own CI job. They are test infrastructure, not a security
+  boundary and not on the launch path; see `docs/SANDBOX_TESTS.md`.
+
 ### Changed
 
+- RenForge keeps its per-project state outside the game folder, under
+  `RENFORGE_STATE_DIR` or `$XDG_STATE_HOME/renforge/projects/<name>-<hash>/`
+  (`~/.local/state/renforge`, `%LOCALAPPDATA%\renforge` on Windows). Opening
+  or launching a project no longer creates `<project>/.renforge`; only an
+  owner-written `.renforge/policy.json` is still read from the project (#111).
+- `version="stable"` runs a game on the engine it shipped with: the project's
+  `renforge.json` `renpy_version`, else `renpy/vc_version.py`, else
+  `game/script_version.txt`. A cached SDK is reused only for the same
+  major.minor with the same or a newer patch.
+- Runtime launch needs Ren'Py 8.0 or newer. Older games, and 7.5/8.0 builds
+  that ship only a Python 2 runtime, are refused with
+  `UNSUPPORTED_RENPY_VERSION` before any SDK download or injection.
+- Launches in a Wayland session use `SDL_VIDEODRIVER=wayland,x11` so games
+  start while the screen is locked. The startup deadline defaults to 180 s and
+  reads `RENFORGE_STARTUP_TIMEOUT`.
+
 ### Fixed
+
+- A game that stops on Ren'Py's error screen during startup (an exception,
+  or scripts that do not parse) fails the launch at once with
+  `GAME_STARTUP_ERROR` and the report, instead of timing out. A failure while
+  compiling changed scripts is retried once; the session's `startup_warning`
+  keeps the first error.
+- A shaped (transparent) presplash that SDL's Wayland driver cannot open is
+  retried under X11.
+- A crash never opens `traceback.txt` in the user's editor.
+- The injected bridge and editor no longer read builtins or imports a game can
+  shadow (a game that defines `id` or `len` as a Character, or `types` as a
+  list), and no longer overwrite game variables of the same name. The
+  bridge's private names survive a script reload, so a Live Editor save no
+  longer closes the bridge.
+- Bridge objects are never revertable, so saving a game that rolls back no
+  longer fails to pickle the bridge's locks.
+- Ren'Py 8.0 and 8.1: the bridge registers its label callback, and loads and
+  restarts reach the engine.
+- Lint, compile dumps, translation runs, and shadow lint no longer write the
+  player's persistent data; lint parses Ren'Py 8's `file.rpy:12 message`
+  lines.
+- `renforge_wait_until` with an `expr` condition is open-world under
+  `RENFORGE_POLICY=enforce` and takes `authorize`, like a scenario `wait`
+  step; it was unmanaged, so enforce mode ran its Python unasked.
+  `renforge_set_var` is classified mutating.
+- A launch that times out, or whose game exits before the bridge starts,
+  reports the last lines of the log.txt it wrote as `details.log_tail`.
 
 ## [0.7.3] - 2026-10-07
 

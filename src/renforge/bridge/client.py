@@ -58,7 +58,7 @@ class BridgeClient:
         """Build a client from private control-directory bridge metadata.
 
         The running bridge publishes host/port/token under
-        ``<project_root>/.renforge/control/bridge.json`` on startup.
+        ``<project state>/control/bridge.json`` on startup.
         """
         # Local import avoids the cycle: control.py imports BridgeProtocolError.
         from renforge.bridge.control import read_bridge_info
@@ -184,6 +184,11 @@ class BridgeClient:
             result["ok"] = False
             return result
         return reply
+
+    def session_info(self) -> dict:
+        """``savedir`` and ``home`` of the running game's bridge."""
+        reply = self._checked("session_info")
+        return {"savedir": reply.get("savedir"), "home": reply.get("home")}
 
     def eval_expr(self, expr: str) -> Any:
         return self._checked("eval", {"expr": expr})["value"]

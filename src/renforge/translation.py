@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .project import RenpyProject
+from .save_isolation import renpy_tool_environment
 from .sdk import RenpySdk
 from .util.subprocess import run_command
 
@@ -62,7 +63,8 @@ def list_languages(project_path: str | Path) -> list[str]:
 def generate_translations(sdk: RenpySdk, project: RenpyProject, language: str, *, timeout: int = 180) -> dict[str, Any]:
     """Generate/update translation files for ``language`` (writes game/tl/<language>/)."""
     command = project.renpy_command(sdk, ("translate", language))
-    result = run_command(command, timeout=timeout)
+    with renpy_tool_environment() as env:
+        result = run_command(command, timeout=timeout, env=env)
     return {
         "ok": result.returncode == 0,
         "language": language,
@@ -75,7 +77,8 @@ def generate_translations(sdk: RenpySdk, project: RenpyProject, language: str, *
 def translation_stats(sdk: RenpySdk, project: RenpyProject, language: str, *, timeout: int = 180) -> dict[str, Any]:
     """Report missing dialogue/string counts for ``language`` (no files written)."""
     command = project.renpy_command(sdk, ("translate", language, "--count"))
-    result = run_command(command, timeout=timeout)
+    with renpy_tool_environment() as env:
+        result = run_command(command, timeout=timeout, env=env)
     match = _COUNT_RE.search(result.stdout) or _COUNT_RE.search(result.stderr)
     stats: dict[str, Any] = {
         "ok": result.returncode == 0,
@@ -94,7 +97,8 @@ def translation_stats(sdk: RenpySdk, project: RenpyProject, language: str, *, ti
 def export_dialogue(sdk: RenpySdk, project: RenpyProject, language: str = "None", *, timeout: int = 180) -> dict[str, Any]:
     """Export the game's dialogue as plain text."""
     command = project.renpy_command(sdk, ("dialogue", language, "--text"))
-    result = run_command(command, timeout=timeout)
+    with renpy_tool_environment() as env:
+        result = run_command(command, timeout=timeout, env=env)
     return {
         "ok": result.returncode == 0,
         "language": language,

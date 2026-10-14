@@ -16,8 +16,9 @@ init python:
     #   RENFORGE_BRIDGE_SESSION_ID   required 32-lowercase-hex session id
     #   RENFORGE_BRIDGE_PROJECT_ROOT required canonical absolute project root
     #   RENFORGE_BRIDGE_PORT         default 0 (an ephemeral port is chosen)
+    #   RENFORGE_BRIDGE_CONTROL_DIR  private control folder, outside the game
     # The launcher reserves starting metadata at
-    #   <project>/.renforge/control/bridge.json
+    #   <control dir>/bridge.json
     # Before serving, the bridge validates that record and publishes ready.
 
     import base64
@@ -32,7 +33,9 @@ init python:
     import struct
     import sys
     import threading
-    import time
+    # `time` is a store field. Games use that name for their own clock, which
+    # replaces the module before a label callback runs.
+    import time as _renforge_time
     import types
 
     try:
@@ -53,7 +56,10 @@ init python:
     if not hasattr(_renforge_runtime, "bridge"):
         _renforge_runtime.bridge = None
 
-    class _RenforgeRequest(object):
+    # The plain object: `object` in init python is Ren'Py's RevertableObject,
+    # whose changes go into the rollback log, and saving would then pickle the
+    # bridge's queue and locks ("cannot pickle '_thread.lock' object").
+    class _RenforgeRequest(builtins.object):
         # NB: no __slots__ — Ren'Py forbids slotted classes in init python
         # (they are incompatible with its rollback machinery).
         def __init__(self, command, payload):
@@ -63,7 +69,7 @@ init python:
             self.result = None
             self.error = None
 
-    class _RenforgeBridge(object):
+    class _RenforgeBridge(builtins.object):
         def __init__(self, host, port, token, project_root, session_id):
             self.host = host
             self.port = port
@@ -94,7 +100,7 @@ init python:
             record = {
                 "seq": self.event_seq,
                 "type": kind,
-                "timestamp": time.time(),
+                "timestamp": _renforge_time.time(),
             }
             if self.current_correlation_id is not None:
                 record["correlation_id"] = self.current_correlation_id
@@ -507,6 +513,12 @@ init python:
 
     def _renforge_h_get_audio_state_handler(payload):
         return {"ok": True, "channels": _renforge_h_get_audio_state(payload)}
+
+    def _renforge_h_session_info(payload):
+        """What a server reusing this game must check: where are its saves and HOME."""
+        savedir = getattr(renpy.config, "savedir", None)
+        home = os.environ.get("USERPROFILE" if os.name == "nt" else "HOME")
+        return {"ok": True, "savedir": savedir if isinstance(savedir, str) else None, "home": home or None}
 
     def _renforge_h_eval(payload):
         expr = (payload or {}).get("expr", "")
@@ -1211,7 +1223,15 @@ init python:
             return {"ok": False, "error": "save loading is unavailable"}
 
         def _do_load():
-            load(slot)
+            try:
+                load(slot)
+            except Exception as exc:
+                if _renforge_is_script_control_flow(exc):
+                    # The engine restarts into the loaded game after the reply.
+                    _renforge_emit_business("load.completed", slot=slot, restored_label=None)
+                    setattr(exc, "renforge_result", {"ok": True, "slot": slot,
+                        "restored_label": None, "restarting": True})
+                raise
 
         _renforge_invoke(_do_load)
         bridge = _renforge_runtime.bridge
@@ -1709,7 +1729,11 @@ init python:
         if _renforge_is_end_interaction(exc):
             return True
         game = getattr(renpy, "game", None)
-        for name in ("JumpException", "CallException"):
+        # Loading, restarting, and quitting work by raising these. Before 8.2
+        # there is no invoke_in_main_thread, so a load runs inside the drain.
+        for name in ("JumpException", "JumpOutException", "CallException",
+                     "RestartContext", "RestartTopContext", "FullRestartException",
+                     "UtterRestartException", "QuitException"):
             signal = getattr(game, name, None)
             if isinstance(signal, type) and isinstance(exc, signal):
                 return True
@@ -3100,6 +3124,7 @@ init python:
     _RENFORGE_HANDLERS = {
         "ping": _renforge_h_ping,
         "get_state": _renforge_h_get_state,
+        "session_info": _renforge_h_session_info,
         "get_metrics": _renforge_h_get_metrics_handler,
         "get_audio_state": _renforge_h_get_audio_state_handler,
         "inspect_screen": _renforge_h_inspect_screen,
@@ -3310,13 +3335,17 @@ init python:
                 return False
         return True
 
+    def _renforge_bridge_control_dir(project_root):
+        # RenForge keeps its state outside the game; the launcher says where.
+        import os as _os
+        configured = (_os.environ.get("RENFORGE_BRIDGE_CONTROL_DIR") or "").strip()
+        if configured:
+            return configured
+        return _os.path.join(project_root, ".renforge", "control")
+
     def _renforge_bridge_info_path(project_root):
         import os as _os
-        return _os.path.join(project_root, ".renforge", "control", "bridge.json")
-
-    def _renforge_bridge_control_dir(project_root):
-        import os as _os
-        return _os.path.join(project_root, ".renforge", "control")
+        return _os.path.join(_renforge_bridge_control_dir(project_root), "bridge.json")
 
     def _renforge_bridge_win_create_file(path, access, share_mode, creation_disposition, flags_and_attrs):
         import ctypes as _ctypes
@@ -3844,8 +3873,8 @@ init python:
         import os as _os
         import stat as _stat
 
-        renforge_dir = _os.path.join(project_root, ".renforge")
-        control_dir = _os.path.join(renforge_dir, "control")
+        control_dir = _renforge_bridge_control_dir(project_root)
+        renforge_dir = _os.path.dirname(control_dir)
         # Reject symlink/reparse ancestors before accepting control contents.
         if _renforge_bridge_path_is_symlink(renforge_dir):
             raise OSError("renforge directory must not be a symlink")
@@ -4338,7 +4367,21 @@ init python:
                 return previous(short_msg, full_msg, traceback_fn)
             return False  # not handled: let Ren'Py show its normal error screen
 
-        renpy.config.label_callbacks.append(_renforge_on_label)
+        # 8.1+ runs the list. 8.0 runs the single ``label_callback`` and has
+        # no list; assigning one would not be called.
+        label_callbacks = getattr(renpy.config, "label_callbacks", None)
+        # `list` in init python is RevertableList, so a config list fails that check.
+        if isinstance(label_callbacks, builtins.list):
+            label_callbacks.append(_renforge_on_label)
+        elif hasattr(renpy.config, "label_callback"):
+            previous_label = renpy.config.label_callback
+
+            def _renforge_on_label_compat(name, abnormal=False):
+                _renforge_on_label(name, abnormal)
+                if callable(previous_label):
+                    return previous_label(name, abnormal)
+
+            renpy.config.label_callback = _renforge_on_label_compat
         renpy.config.all_character_callbacks.append(_renforge_on_say)
         bridge.prev_exception_handler = renpy.config.exception_handler
         renpy.config.exception_handler = _renforge_exception_handler

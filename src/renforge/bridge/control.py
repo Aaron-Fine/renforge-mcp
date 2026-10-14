@@ -16,8 +16,8 @@ from renforge.util.files import (
     ensure_private_directory,
     read_regular_file_nofollow,
 )
+from renforge.state import control_dir
 
-_CONTROL_DIR_PARTS: Final[tuple[str, str]] = (".renforge", "control")
 _BRIDGE_INFO_NAME: Final[str] = "bridge.json"
 _BRIDGE_INFO_MAX_BYTES: Final[int] = 16 * 1024
 _BRIDGE_HOST: Final[str] = "127.0.0.1"
@@ -58,7 +58,7 @@ class BridgeInfo:
 
 
 def ensure_control_dir(project_root: Path) -> Path:
-    """Create or validate ``<canonical-root>/.renforge/control`` as a private directory."""
+    """Create or validate ``<project state>/control`` as a private directory."""
     root = _canonical_project_root(project_root)
     control = _control_dir(root)
     try:
@@ -165,7 +165,7 @@ def _canonical_project_root(project_root: Path) -> Path:
 
 
 def _control_dir(project_root: Path) -> Path:
-    return project_root.joinpath(*_CONTROL_DIR_PARTS)
+    return control_dir(project_root)
 
 
 def _bridge_info_path(project_root: Path) -> Path:

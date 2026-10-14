@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from renforge.state import project_state_dir
 from renforge.bridge.client import BridgeClient, BridgeError, BridgeProtocolError
 
 
@@ -78,7 +79,7 @@ def run_editor_say_who_style_position_live_scenario(
     gui_source_initial = gui_path.read_bytes()
     screens_source_initial = fixture_path.read_bytes()
 
-    transaction_root = fixture_path.parent.parent / ".renforge" / "editor-transactions"
+    transaction_root = project_state_dir(fixture_path.parent.parent) / "editor-transactions"
     if transaction_root.exists():
         import shutil
         try:

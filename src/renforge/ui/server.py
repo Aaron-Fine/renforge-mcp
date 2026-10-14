@@ -29,6 +29,7 @@ from .graph import build_story_map, resolve_game_file_path, resolve_warp_target
 from .errors import error_response
 from .poller import poll_bridge
 from .ws import WebSocketHub, build_ws_envelope
+from ..state import project_state_dir
 
 
 def _renforge_version() -> str:
@@ -68,7 +69,7 @@ def _as_dict(value: Any) -> dict[str, Any]:
 
 
 def _read_autopilot(project_root: Path) -> dict[str, Any]:
-    path = project_root / ".renforge" / "autopilot.json"
+    path = project_state_dir(project_root) / "autopilot.json"
     if not path.exists():
         return {"ok": False, "error": "coverage file not found"}
     try:
@@ -654,6 +655,10 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             project_path,
             _worker,
             editor=bool(launch_kwargs.get("editor", True)),
+            requirements=live.launch_requirements(
+                project_path,
+                **{field: launch_kwargs.get(field) for field in ("savedir", "home", "persistent", "preferences")},
+            ),
         )
 
     async def warp(request: Request):
@@ -685,9 +690,11 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             display=str(payload.get("display") or "auto"),
             audio=str(payload.get("audio") or "auto"),
             savedir=payload.get("savedir"),
-            persistent=str(payload.get("persistent") or "existing"),
+            persistent=payload.get("persistent"),
             cleanup_on_stop=bool(payload.get("cleanup_on_stop", True)),
             timeout=payload.get("timeout"),
+            home=payload.get("home"),
+            preferences=payload.get("preferences"),
         )
         return JSONResponse(result)
 
@@ -720,7 +727,9 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
         display = payload.get("display", "auto")
         audio = payload.get("audio", "auto")
         savedir = payload.get("savedir")
-        persistent = payload.get("persistent", "existing")
+        persistent = payload.get("persistent")
+        home = payload.get("home")
+        preferences = payload.get("preferences")
         cleanup_on_stop = payload.get("cleanup_on_stop", True)
         timeout = payload.get("timeout")
         if not isinstance(version, str) or not version:
@@ -765,12 +774,26 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 status_code=400,
                 details={"savedir": savedir},
             )
-        if not isinstance(persistent, str) or not persistent:
+        if persistent is not None and (not isinstance(persistent, str) or not persistent):
             return error_response(
                 code="launch_persistent_invalid",
                 error="persistent must be a non-empty string",
                 status_code=400,
                 details={"persistent": persistent},
+            )
+        if home is not None and not isinstance(home, str):
+            return error_response(
+                code="launch_home_invalid",
+                error="home must be a string",
+                status_code=400,
+                details={"home": home},
+            )
+        if preferences is not None and (not isinstance(preferences, str) or not preferences):
+            return error_response(
+                code="launch_preferences_invalid",
+                error="preferences must be a non-empty string",
+                status_code=400,
+                details={"preferences": preferences},
             )
         if not isinstance(cleanup_on_stop, bool):
             return error_response(
@@ -797,6 +820,8 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             persistent=persistent,
             cleanup_on_stop=cleanup_on_stop,
             timeout=float(timeout) if timeout is not None else None,
+            home=home,
+            preferences=preferences,
         )
         return JSONResponse(result)
 

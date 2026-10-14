@@ -1,7 +1,7 @@
 """Launch a Ren'Py project with the RenForge bridge injected.
 
 Injects ``bridge.rpy`` into ``<project>/game/``, starts the game, waits for the
-bridge to publish ready metadata under ``<project>/.renforge/control/bridge.json``,
+bridge to publish ready metadata under ``<project state>/control/bridge.json``,
 and returns a connected :class:`~renforge.bridge.client.BridgeClient`. Closing the
 session force-kills the game and removes owned control metadata and injected files.
 """
@@ -10,18 +10,20 @@ from __future__ import annotations
 
 import errno
 import json
+import math
 import os
+import re
 import secrets
 import shutil
 import signal
 import subprocess
 import sys  # retained for tests that patch renforge.bridge.launcher.sys
-import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
+from .guard import guard_block, guard_rpy
 from ..launch_env import (
     LaunchError,
     detect_environment,
@@ -29,7 +31,8 @@ from ..launch_env import (
     resolve_display_strategy,
 )
 from ..project import RenpyProject
-from ..sdk import RenpySdk
+from ..save_isolation import LaunchIsolation, resolve_launch_isolation
+from ..sdk import RenpySdk, require_supported_runtime
 from .artifacts import (
     ArtifactOwnershipError,
     allocate_and_materialize,
@@ -39,6 +42,7 @@ from .client import BridgeClient, BridgeConfig, BridgeProtocolError
 from .control import read_bridge_info, write_starting_bridge_info
 from ..editor import BridgeRuntimeProbe, EditorCoordinator, EditorEndpoint
 from ..util.files import PrivatePathError, ensure_private_directory
+from ..state import control_dir
 
 _BRIDGE_RESOURCE: Path = Path(__file__).parent / "bridge.rpy"
 _EDITOR_RESOURCE: Path = Path(__file__).parent / "editor.rpy"
@@ -51,6 +55,21 @@ _EDITOR_SUPPORTED_LANGUAGES: tuple[str, ...] = ("en", "zh-CN")
 _EDITOR_CJK_LANGUAGES: frozenset[str] = frozenset({"zh-CN"})
 
 _BRIDGE_STARTUP_ERROR_PREFIX: str = "RENFORGE_BRIDGE_STARTUP_ERROR="
+STARTUP_TIMEOUT_ENV: str = "RENFORGE_STARTUP_TIMEOUT"
+# Launch runs in the background and a process that exits fails at once, so
+# this only bounds a game that hangs. The first run of a large game can spend
+# well over a minute building caches.
+DEFAULT_STARTUP_TIMEOUT: float = 180.0
+
+
+def default_startup_timeout() -> float:
+    """Server-wide startup deadline: ``RENFORGE_STARTUP_TIMEOUT`` seconds, or 180."""
+    raw = os.environ.get(STARTUP_TIMEOUT_ENV, "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_STARTUP_TIMEOUT
+    return value if math.isfinite(value) and value > 0 else DEFAULT_STARTUP_TIMEOUT
 _BRIDGE_STARTUP_ERROR_CODES: frozenset[str] = frozenset(
     {
         "BRIDGE_MANIFEST_PUBLICATION_FAILED",
@@ -67,13 +86,13 @@ class _LockPathUnsafe(Exception):
 class ProjectBridgeLock:
     """A non-blocking, process-wide lock for one project's bridge artifacts.
 
-    Owns ``<canonical-root>/.renforge/control/bridge.lock``. ``acquire()``
+    Owns ``<project state>/control/bridge.lock``. ``acquire()``
     validates/creates the private control directory before touching the lock.
     """
 
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root)
-        self.path = self.project_root / ".renforge" / "control" / "bridge.lock"
+        self.path = control_dir(self.project_root) / "bridge.lock"
         self._file: Any | None = None
         self.is_deferred = False
         self.owned_session_id: str | None = None
@@ -88,7 +107,7 @@ class ProjectBridgeLock:
                 "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
                 exc.message,
                 phase="preparing_control_directory",
-                suggested_fix="Remove unsafe paths under .renforge/control and retry.",
+                suggested_fix="Remove unsafe paths in the project's RenForge control folder and retry.",
             ) from exc
 
         try:
@@ -98,14 +117,14 @@ class ProjectBridgeLock:
                 "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
                 str(exc),
                 phase="preparing_control_directory",
-                suggested_fix="Remove unsafe paths under .renforge/control and retry.",
+                suggested_fix="Remove unsafe paths in the project's RenForge control folder and retry.",
             ) from exc
         except OSError as exc:
             raise LaunchError(
                 "BRIDGE_PROJECT_LOCK_FAILED",
                 f"Could not open the project bridge lock: {exc}",
                 phase="acquiring_project_lock",
-                suggested_fix="Check write permissions under .renforge/control/.",
+                suggested_fix="Check write permissions in the project's RenForge control folder.",
             ) from exc
 
         try:
@@ -128,7 +147,7 @@ class ProjectBridgeLock:
                 "BRIDGE_PROJECT_LOCK_FAILED",
                 f"Could not lock the project bridge: {exc}",
                 phase="acquiring_project_lock",
-                suggested_fix="Check write permissions under .renforge/control/.",
+                suggested_fix="Check write permissions in the project's RenForge control folder.",
             ) from exc
         self._file = lock_file
 
@@ -358,6 +377,11 @@ class ProjectBridgeLock:
 
 _DEFERRED_LOCKS: set[ProjectBridgeLock] = set()
 
+def bridge_payload() -> bytes:
+    """The injected bridge, with builtin reads and imports a game cannot shadow."""
+    return guard_block(_BRIDGE_RESOURCE.read_text(encoding="utf-8")).encode("utf-8")
+
+
 def _editor_screen_sources() -> list[Path]:
     """The region screens, in a stable order.
 
@@ -377,10 +401,12 @@ def _editor_payload() -> bytes:
     path — the whole ownership contract stays as narrow as it was — while the
     sources stay split for the people writing them.
     """
-    parts = [_EDITOR_RESOURCE.read_bytes()]
+    parts = [_EDITOR_RESOURCE.read_text(encoding="utf-8")]
     for path in _editor_screen_sources():
-        parts.append(b"\n\n" + path.read_bytes())
-    return b"".join(parts)
+        parts.append("\n\n" + path.read_text(encoding="utf-8"))
+    # The editor's screens and later blocks use the imports of its earlier
+    # blocks as store names, so only builtins are made private.
+    return guard_rpy("".join(parts), imports=False).encode("utf-8")
 
 
 def _editor_asset_sources() -> list[tuple[str, Path]]:
@@ -512,23 +538,32 @@ class BridgeSession:
         *,
         display_mode: str = "native",
         temporary_savedir: Path | None = None,
+        temporary_home: Path | None = None,
+        session_root: Path | None = None,
         cleanup_savedir: bool = False,
         environment: dict[str, Any] | None = None,
         startup_ms: int | None = None,
         phases: list[dict[str, Any]] | None = None,
         project_lock: ProjectBridgeLock | None = None,
         editor_coordinator: EditorCoordinator | None = None,
+        isolation: LaunchIsolation | None = None,
+        session_id: str | None = None,
     ):
         self.process = process
         self.client = client
         self.headless = headless
         self.display_mode = display_mode
         self.temporary_savedir = temporary_savedir
+        self.temporary_home = temporary_home
+        self.session_root = session_root
         self.cleanup_savedir = cleanup_savedir
         self.environment = environment or {}
         self.startup_ms = startup_ms
+        self.startup_warning: str | None = None
         self.phases = phases or []
         self.editor = editor_coordinator is not None
+        self.isolation = isolation
+        self.session_id = session_id
         self._project_root = project_root
         self._cleaned: dict[str, Any] = {}
         self._project_lock = project_lock
@@ -554,7 +589,13 @@ class BridgeSession:
             if self._closed:
                 return self._close_result or {"cleaned": self._cleaned, "failed": ["close"]}
             self._close_result = self._close_resources(timeout)
-            ownership_failures = {"process_alive", "bridge_artifacts", "temporary_savedir", "editor_coordinator"}
+            ownership_failures = {
+                "process_alive",
+                "bridge_artifacts",
+                "temporary_savedir",
+                "session_root",
+                "editor_coordinator",
+            }
             if ownership_failures.intersection(self._close_result.get("failed", [])):
                 return self._close_result
             if self._project_lock is not None:
@@ -569,6 +610,7 @@ class BridgeSession:
             "process_group": False,
             "bridge_artifacts": False,
             "temporary_savedir": False,
+            "session_root": False,
             "editor_coordinator": self._editor_coordinator is None,
         }
         failed: list[str] = []
@@ -627,7 +669,17 @@ class BridgeSession:
         except Exception:
             failed.append("bridge_artifacts")
 
-        if self.cleanup_savedir and self.temporary_savedir is not None:
+        if self.cleanup_savedir and self.session_root is not None:
+            try:
+                shutil.rmtree(self.session_root, ignore_errors=False)
+                cleaned["session_root"] = True
+                cleaned["temporary_savedir"] = True
+            except FileNotFoundError:
+                cleaned["session_root"] = True
+                cleaned["temporary_savedir"] = True
+            except Exception:
+                failed.append("session_root")
+        elif self.cleanup_savedir and self.temporary_savedir is not None:
             try:
                 shutil.rmtree(self.temporary_savedir, ignore_errors=False)
                 cleaned["temporary_savedir"] = True
@@ -749,6 +801,106 @@ class _BoundedPipeReader:
             self._thread.join(timeout=timeout)
 
 
+_GAME_ERROR_FILES: Final = ("traceback.txt", "errors.txt")
+# How long the bridge may still come up after the game wrote an error report.
+_GAME_ERROR_GRACE_S: Final = 3.0
+
+
+def _game_error_stamps(project_root: Path) -> dict[str, tuple[int, int] | None]:
+    stamps: dict[str, tuple[int, int] | None] = {}
+    for name in _GAME_ERROR_FILES:
+        try:
+            stat = (project_root / name).stat()
+        except OSError:
+            stamps[name] = None
+        else:
+            stamps[name] = (stat.st_mtime_ns, stat.st_size)
+    return stamps
+
+
+def _new_game_error(project_root: Path, before: dict[str, tuple[int, int] | None]) -> dict[str, str] | None:
+    """The error report Ren'Py wrote during this launch, if any.
+
+    An exception or script error during init shows Ren'Py's error screen, so
+    the bridge never comes up; the report says why.
+    """
+    for name, stamp in _game_error_stamps(project_root).items():
+        if stamp is None or stamp == before.get(name) or stamp[1] == 0:
+            continue
+        try:
+            text = (project_root / name).read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            continue
+        return {"file": name, "text": text}
+    return None
+
+
+def _log_tail(project_root: Path, since_ns: int, lines: int = 8) -> list[str]:
+    """The last lines of the log.txt this launch wrote, or [] for an older one.
+
+    Where the log stops says how far startup got: at window or GL setup the
+    window never opened, which a launch timeout alone does not say.
+    """
+    path = project_root / "log.txt"
+    try:
+        if path.stat().st_mtime_ns < since_ns:
+            return []
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return []
+    return [line.rstrip() for line in text.splitlines() if line.strip()][-lines:]
+
+
+def _scripts_compiled_since(project_root: Path, since_ns: int) -> bool:
+    """Whether Ren'Py wrote any .rpyc under game/ since ``since_ns``."""
+    for directory, _dirs, files in os.walk(project_root / "game"):
+        for name in files:
+            if name.endswith(".rpyc"):
+                try:
+                    if os.stat(os.path.join(directory, name)).st_mtime_ns >= since_ns:
+                        return True
+                except OSError:
+                    continue
+    return False
+
+
+def _game_error_line(summary: str) -> str:
+    """The line that says what went wrong in a Ren'Py error report.
+
+    traceback.txt ends its short report with the exception; errors.txt (a
+    script that does not parse) lists ``File "...", line N: message`` entries
+    and ends with the version and date.
+    """
+    lines = [line.strip() for line in summary.splitlines() if line.strip()]
+    if lines and lines[0].startswith("I'm sorry, but errors were detected"):
+        # errors.txt: the first error follows the two-line apology.
+        rest = [line for line in lines[1:] if "errors listed below" not in line]
+        return rest[0] if rest else lines[0]
+    exceptions = [line for line in lines if re.match(r"^[A-Za-z_][\w.]*(Error|Exception|Exit)\b", line)]
+    if exceptions:
+        return exceptions[-1]
+    return lines[-1] if lines else ""
+
+
+def _raise_game_error(report: dict[str, str]) -> None:
+    text = report["text"]
+    # The short report comes first; the full traceback follows a rule line.
+    summary = text.split("-- Full Traceback", 1)[0].strip()
+    last = _game_error_line(summary)
+    raise LaunchError(
+        "GAME_STARTUP_ERROR",
+        f"The game stopped on an error during startup: {last}",
+        phase="waiting_for_bridge",
+        suggested_fix=(
+            f"Read {report['file']} in the project root. Ren'Py shows this error to "
+            "players too; an error raised while compiling changed scripts may not "
+            "recur on the next launch."
+        ),
+        details={"file": report["file"], "report": summary[-4000:],
+                 "scripts_compiled": bool(report.get("scripts_compiled"))},
+    )
+
+
 def _raise_bridge_startup_error(code: str) -> None:
     raise LaunchError(
         code,
@@ -766,15 +918,16 @@ def _launch_after_project_lock(
     token: str | None = None,
     port: int = 0,
     warp: str | None = None,
-    startup_timeout: float = 90.0,
+    startup_timeout: float | None = None,
     cancel_event: threading.Event | None = None,
     extra_env: dict[str, str] | None = None,
     display: str = "auto",
     audio: str = "auto",
     savedir: str | None = None,
-    persistent: str = "existing",
+    persistent: str | None = None,
     cleanup_on_stop: bool = True,
-    preferences: str = "existing",
+    preferences: str | None = None,
+    home: str | None = None,
     editor_endpoint: EditorEndpoint | None = None,
     editor_coordinator: EditorCoordinator | None = None,
 ) -> BridgeSession:
@@ -784,8 +937,11 @@ def _launch_after_project_lock(
     capabilities, fall back to Xvfb and ``SDL_AUDIODRIVER=dummy`` when needed,
     and fail fast with a structured :class:`LaunchError` otherwise.
 
-    ``savedir='temporary'`` isolates saves under a temp directory that is
-    removed on session close when ``cleanup_on_stop`` is true.
+    ``savedir='temporary'`` isolates saves under a disposable session directory
+    that is removed on session close when ``cleanup_on_stop`` is true. Isolated
+    launches also get a private HOME so preferences and ``~/.renpy`` writes miss
+    the user's files. All launch paths isolate by default; pass
+    savedir='existing' to opt into the game's normal locations.
     """
     started = time.monotonic()
     phases: list[dict[str, Any]] = []
@@ -809,30 +965,18 @@ def _launch_after_project_lock(
     env.update(audio_env)
 
     headless = display_mode == "xvfb"
-    temporary_savedir: Path | None = None
-    cleanup_savedir = False
-
-    if savedir == "temporary":
-        temporary_savedir = Path(tempfile.mkdtemp(prefix="renforge-saves-"))
-        env["RENFORGE_SAVEDIR"] = str(temporary_savedir)
-        cleanup_savedir = bool(cleanup_on_stop)
-        savedir_path = str(temporary_savedir)
-    elif savedir and savedir not in {"existing", "default"}:
-        temporary_savedir = Path(savedir).expanduser().resolve()
-        temporary_savedir.mkdir(parents=True, exist_ok=True)
-        env["RENFORGE_SAVEDIR"] = str(temporary_savedir)
-        cleanup_savedir = False
-        savedir_path = str(temporary_savedir)
-    else:
-        savedir_path = None
-
-    if persistent in {"empty", "existing", "copy", "fixture"}:
-        env["RENFORGE_PERSISTENT_MODE"] = persistent
-    elif persistent:
-        env["RENFORGE_PERSISTENT_MODE"] = str(persistent)
-
-    # preferences reserved for future fixture support; accepted for API stability.
-    _ = preferences
+    isolation = resolve_launch_isolation(
+        savedir,
+        home=home,
+        persistent=persistent,
+        preferences=preferences,
+        cleanup_on_stop=cleanup_on_stop,
+        host_env=env,
+    )
+    temporary_savedir = isolation.savedir
+    cleanup_savedir = isolation.cleanup
+    env.update(isolation.environ(host_env=env))
+    savedir_path = str(isolation.savedir) if isolation.savedir is not None else None
 
     # Token may be caller-supplied; session id is allocated with the artifact
     # intent so names, ownership, and bridge.json share one identity.
@@ -858,7 +1002,7 @@ def _launch_after_project_lock(
             editor_assets, editor_font_relative = _prepare_editor_asset_payloads()
         materialized = allocate_and_materialize(
             project,
-            bridge_payload=_BRIDGE_RESOURCE.read_bytes(),
+            bridge_payload=bridge_payload(),
             include_session_init=bool(savedir_path),
             editor_payload=editor_payload,
             editor_asset_files=editor_assets,
@@ -893,28 +1037,32 @@ def _launch_after_project_lock(
             "BRIDGE_INFO_CONFLICT",
             "Bridge metadata conflicted with the reserved launch identity.",
             phase="reserving_bridge_metadata",
-            suggested_fix="Remove the conflicting .renforge/control/bridge.json and retry.",
+            suggested_fix="Remove the conflicting bridge.json from the project's RenForge control folder and retry.",
         ) from exc
     except PrivatePathError as exc:
         raise LaunchError(
             "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
             "Bridge metadata path is unsafe and was left untouched.",
             phase="reserving_bridge_metadata",
-            suggested_fix="Remove unsafe paths under .renforge/control and retry.",
+            suggested_fix="Remove unsafe paths in the project's RenForge control folder and retry.",
         ) from exc
     except Exception as exc:
         raise LaunchError(
             "BRIDGE_MANIFEST_PUBLICATION_FAILED",
             f"Could not reserve starting bridge metadata: {exc}",
             phase="reserving_bridge_metadata",
-            suggested_fix="Check write permissions under .renforge/control/.",
+            suggested_fix="Check write permissions in the project's RenForge control folder.",
         ) from exc
     project_lock.owned_session_id = session_id
 
     env["RENFORGE_BRIDGE_TOKEN"] = token
     env["RENFORGE_BRIDGE_SESSION_ID"] = session_id
     env["RENFORGE_BRIDGE_PROJECT_ROOT"] = str(project.root)
+    env["RENFORGE_BRIDGE_CONTROL_DIR"] = str(control_dir(project.root))
     env["RENFORGE_BRIDGE_PORT"] = str(port)
+    # A crash would open traceback.txt in the user's editor; the launch and
+    # the session report it instead. A RENPY_EDIT_PY already set is kept.
+    env.setdefault("RENPY_EDIT_PY", str(Path(__file__).with_name("no_editor.py")))
     if editor_endpoint is not None:
         env.update(
             _editor_environment(
@@ -924,7 +1072,11 @@ def _launch_after_project_lock(
             )
         )
 
-    command = project.renpy_command(sdk, ("run", "--warp", warp) if warp is not None else ("run",))
+    run_args: list[str] = ["run"]
+    if warp is not None:
+        run_args.extend(["--warp", warp])
+    run_args.extend(isolation.command_args())
+    command = project.renpy_command(sdk, tuple(run_args))
     if headless:
         if shutil.which("xvfb-run") is None:
             remove_bridge_artifacts(project.root, expected_session_id=session_id)
@@ -938,6 +1090,8 @@ def _launch_after_project_lock(
         command = ["xvfb-run", "-a", *command]
 
     _phase("starting_renpy")
+    error_stamps = _game_error_stamps(project.root)
+    spawned_ns = time.time_ns()
     try:
         process = subprocess.Popen(
             command,
@@ -975,14 +1129,25 @@ def _launch_after_project_lock(
         startup_event=startup_event,
         startup_code=startup_code,
     )
+    if startup_timeout is None:
+        startup_timeout = default_startup_timeout()
     deadline = time.time() + startup_timeout
     _phase("waiting_for_bridge", port=port or None)
 
+    game_error: dict[str, str] | None = None
+    game_error_seen = 0.0
     try:
         while time.time() < deadline:
             _raise_if_cancelled(cancel_event, phase="waiting_for_bridge")
             if startup_event.is_set() and startup_code[0] is not None:
                 _raise_bridge_startup_error(startup_code[0])
+            if game_error is None:
+                game_error = _new_game_error(project.root, error_stamps)
+                game_error_seen = time.monotonic()
+                if game_error is not None:
+                    game_error["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns)
+            elif time.monotonic() - game_error_seen >= _GAME_ERROR_GRACE_S:
+                _raise_game_error(game_error)
             if process.poll() is not None:
                 stdout_reader.join(timeout=0.2)
                 stderr_reader.join(timeout=0.2)
@@ -992,7 +1157,8 @@ def _launch_after_project_lock(
                 err = stderr_reader.tail().decode("utf-8", "replace")
                 combined = (out + "\n" + err).lower()
                 code = "RENPY_PROCESS_EXITED"
-                suggested = "Inspect traceback.txt / errors.txt in the project root."
+                suggested = ("Read details.log_tail (a game can quit on its own checks and say why only "
+                             "there), then traceback.txt / errors.txt in the project root.")
                 if "audio" in combined and ("fail" in combined or "error" in combined):
                     code = "AUDIO_INITIALIZATION_FAILED"
                     suggested = "Relaunch with audio='dummy'."
@@ -1004,7 +1170,8 @@ def _launch_after_project_lock(
                     f"Game exited (rc={process.returncode}) before the bridge came up.",
                     phase="starting_renpy",
                     suggested_fix=suggested,
-                    details={"stdout": out[-4000:], "stderr": err[-4000:], "returncode": process.returncode},
+                    details={"stdout": out[-4000:], "stderr": err[-4000:], "returncode": process.returncode,
+                             "log_tail": _log_tail(project.root, spawned_ns)},
                 )
             try:
                 info = read_bridge_info(
@@ -1026,6 +1193,12 @@ def _launch_after_project_lock(
                 reply = client.ping()
                 if not isinstance(reply, dict) or reply.get("pong") is not True:
                     raise RuntimeError(f"bridge ping returned non-pong response: {reply}")
+                # Scripts that do not parse still start the bridge, on Ren'Py's
+                # parse-error screen; the game cannot be played.
+                parse_report = _new_game_error(project.root, error_stamps)
+                if parse_report is not None and parse_report["file"] == "errors.txt":
+                    parse_report["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns)
+                    _raise_game_error(parse_report)
                 startup_ms = int((time.monotonic() - started) * 1000)
                 phases.append(
                     {
@@ -1041,13 +1214,19 @@ def _launch_after_project_lock(
                     headless=headless,
                     display_mode=display_mode,
                     temporary_savedir=temporary_savedir,
+                    temporary_home=isolation.home,
+                    session_root=isolation.session_root,
                     cleanup_savedir=cleanup_savedir,
                     environment=capabilities.to_dict(),
                     startup_ms=startup_ms,
                     phases=phases,
                     project_lock=project_lock,
                     editor_coordinator=editor_coordinator,
+                    isolation=isolation,
+                    session_id=session_id,
                 )
+            except LaunchError:
+                raise
             except Exception:
                 time.sleep(0.3)
                 continue
@@ -1056,7 +1235,7 @@ def _launch_after_project_lock(
             process,
             headless,
             project.root,
-            temporary_savedir if cleanup_savedir else None,
+            isolation.session_root if cleanup_savedir else None,
             project_lock,
             expected_session_id=session_id,
         )
@@ -1066,7 +1245,7 @@ def _launch_after_project_lock(
             process,
             headless,
             project.root,
-            temporary_savedir if cleanup_savedir else None,
+            isolation.session_root if cleanup_savedir else None,
             project_lock,
             expected_session_id=session_id,
         )
@@ -1076,39 +1255,93 @@ def _launch_after_project_lock(
         process,
         headless,
         project.root,
-        temporary_savedir if cleanup_savedir else None,
+        isolation.session_root if cleanup_savedir else None,
         project_lock,
         expected_session_id=session_id,
     )
+    if game_error is not None:
+        _raise_game_error(game_error)
     raise LaunchError(
         "BRIDGE_CONNECTION_TIMEOUT",
         f"Bridge did not come up within {startup_timeout}s",
         phase="waiting_for_bridge",
-        suggested_fix="Increase timeout, check the project launches manually, or inspect log.txt.",
-        details={"phases": phases, "environment": capabilities.to_dict()},
+        suggested_fix=(
+            "Increase timeout, check the project launches manually, or read "
+            "details.log_tail. If log.txt ends during window or GL setup ('Windowed "
+            "mode.', 'Maximum texture size', a shader cache line), the window could "
+            "not open: an X11 window never opens while the screen is locked (Ren'Py "
+            "8.0 has no Wayland support), so unlock the screen or use display='xvfb'."
+        ),
+        details={"phases": phases, "environment": capabilities.to_dict(),
+                 "log_tail": _log_tail(project.root, spawned_ns)},
     )
 
 
 
-def launch_with_bridge(
+def launch_with_bridge(sdk: RenpySdk, project: RenpyProject, **options: Any) -> BridgeSession:
+    """Launch a bridge while exclusively owning this project's artifacts.
+
+    Two failures a second launch gets past are retried once, and the
+    session's ``startup_warning`` keeps the first error:
+
+    - Ren'Py recompiles a script whose source differs from its .rpyc. Some
+      games ship such sources (stale translations), and the compiling launch
+      can stop on an error that the next launch, loading the fresh .rpyc,
+      does not raise.
+    - A presplash with transparent corners opens a shaped window, which SDL's
+      Wayland driver cannot create, so the game exits at once. X11 (XWayland)
+      can.
+    """
+    try:
+        return _launch_with_bridge_once(sdk, project, **options)
+    except LaunchError as exc:
+        details = exc.details or {}
+        if exc.code == "GAME_STARTUP_ERROR" and details.get("scripts_compiled"):
+            reason = "The first launch compiled changed scripts and stopped on an error, so the game was launched again"
+        elif _shaped_presplash_failed(exc, options.get("extra_env")):
+            reason = "The game's presplash window cannot open with SDL's Wayland driver, so it was launched with X11"
+            options = dict(options, extra_env={**(options.get("extra_env") or {}), "SDL_VIDEODRIVER": "x11"})
+        else:
+            raise
+        first = exc
+    session = _launch_with_bridge_once(sdk, project, **options)
+    session.startup_warning = f"{reason}: {first.message}"
+    return session
+
+
+def _shaped_presplash_failed(exc: LaunchError, extra_env: dict[str, str] | None) -> bool:
+    if exc.code not in ("DISPLAY_START_FAILED", "RENPY_PROCESS_EXITED"):
+        return False
+    if (extra_env or {}).get("SDL_VIDEODRIVER") or os.environ.get("SDL_VIDEODRIVER"):
+        return False  # the user chose the driver
+    stderr = str((exc.details or {}).get("stderr") or "")
+    # Ren'Py 8.5 bundles its own pygame, whose error carries no message.
+    return "presplash" in stderr and "Window" in stderr and (
+        "Invalid window" in stderr or "pygame.error" in stderr or "pygame_sdl2.error" in stderr)
+
+
+def _launch_with_bridge_once(
     sdk: RenpySdk,
     project: RenpyProject,
     *,
     token: str | None = None,
     port: int = 0,
     warp: str | None = None,
-    startup_timeout: float = 90.0,
+    startup_timeout: float | None = None,
     cancel_event: threading.Event | None = None,
     extra_env: dict[str, str] | None = None,
     display: str = "auto",
     audio: str = "auto",
     savedir: str | None = None,
-    persistent: str = "existing",
+    persistent: str | None = None,
     cleanup_on_stop: bool = True,
-    preferences: str = "existing",
+    preferences: str | None = None,
+    home: str | None = None,
     editor: bool = False,
 ) -> BridgeSession:
-    """Launch a bridge while exclusively owning this project's artifacts."""
+    require_supported_runtime(sdk.version, project_root=project.abs_root)
+    if startup_timeout is None:
+        startup_timeout = default_startup_timeout()
     project_lock = ProjectBridgeLock(project.root)
     project_lock.acquire()
     editor_coordinator: EditorCoordinator | None = None
@@ -1135,6 +1368,7 @@ def launch_with_bridge(
             persistent=persistent,
             cleanup_on_stop=cleanup_on_stop,
             preferences=preferences,
+            home=home,
             editor_endpoint=editor_endpoint,
             editor_coordinator=editor_coordinator,
         )

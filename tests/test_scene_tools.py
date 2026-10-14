@@ -9,6 +9,7 @@ import io
 import json
 
 import pytest
+from renforge.state import project_state_dir
 
 
 def _png_bytes(width, height, fill):
@@ -106,7 +107,7 @@ def test_scene_tree_limits_nodes_before_derived_outputs(tmp_path, monkeypatch):
 
     assert "n0" in out["wireframe"]
     assert "n1" not in out["wireframe"]
-    saved = json.loads((tmp_path / ".renforge" / "scenes" / "limited.json").read_text())
+    saved = json.loads((project_state_dir(tmp_path) / "scenes" / "limited.json").read_text())
     assert [node["id"] for node in saved["nodes"]] == ["n0"]
 
 
@@ -147,7 +148,8 @@ def test_scene_tree_refuses_symlinked_snapshot_directory(tmp_path, monkeypatch):
     outside = tmp_path / "outside"
     project.mkdir()
     outside.mkdir()
-    (project / ".renforge").symlink_to(outside, target_is_directory=True)
+    project_state_dir(project).parent.mkdir(parents=True, exist_ok=True)
+    (project_state_dir(project)).symlink_to(outside, target_is_directory=True)
     live = _patch(monkeypatch, _FakeClient(_reply([_node("hero", 0, 0, 10, 10)])))
 
     out = live.scene_tree(str(project), save_as="before")
@@ -158,7 +160,7 @@ def test_scene_tree_refuses_symlinked_snapshot_directory(tmp_path, monkeypatch):
 
 
 def test_scene_tree_refuses_symlinked_snapshot_file(tmp_path, monkeypatch):
-    scenes = tmp_path / ".renforge" / "scenes"
+    scenes = project_state_dir(tmp_path) / "scenes"
     scenes.mkdir(parents=True)
     outside = tmp_path / "outside.json"
     outside.write_text("do not overwrite", encoding="utf-8")
@@ -181,7 +183,7 @@ def test_scene_tree_diff_missing_snapshot(tmp_path, monkeypatch):
 def test_scene_tree_diff_rejects_oversized_snapshot(tmp_path, monkeypatch):
     live = _patch(monkeypatch, _FakeClient(_reply([_node("a", 0, 0, 5, 5)])))
     monkeypatch.setattr(live, "_SCENE_SNAPSHOT_MAX_BYTES", 32)
-    scenes = tmp_path / ".renforge" / "scenes"
+    scenes = project_state_dir(tmp_path) / "scenes"
     scenes.mkdir(parents=True)
     (scenes / "large.json").write_text('{"nodes":[' + (" " * 64) + "]}", encoding="utf-8")
 
@@ -200,7 +202,7 @@ def test_scene_tree_refuses_to_save_oversized_snapshot(tmp_path, monkeypatch):
 
     assert out["ok"] is False
     assert "exceeds 64 bytes" in out["error"]
-    assert not (tmp_path / ".renforge" / "scenes" / "large.json").exists()
+    assert not (project_state_dir(tmp_path) / "scenes" / "large.json").exists()
 
 
 def test_scene_tree_color_samples_frame(monkeypatch):

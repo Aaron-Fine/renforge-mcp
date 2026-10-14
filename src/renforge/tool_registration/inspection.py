@@ -90,7 +90,7 @@ def build_wrappers(context):
         or `raw`; `layers`/`types`/`screen`/`ids` scope the result.
         `include=["color","style","overflow"]` opts into composited colour,
         declared style, and best-effort text overflow. `format="wireframe"` adds
-        an ASCII map. `save_as` persists a snapshot under `.renforge/scenes/`;
+        an ASCII map. `save_as` persists a snapshot under `<state>/scenes/`;
         `diff_against` diffs the live scene against a saved snapshot.
         """
         return _log_tool_call(

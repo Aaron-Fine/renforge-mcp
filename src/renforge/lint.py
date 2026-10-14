@@ -5,6 +5,7 @@ import re
 from typing import Any, Dict, List
 
 from .project import RenpyProject
+from .save_isolation import renpy_tool_environment
 from .sdk import get_or_install_sdk
 from .util.subprocess import run_command
 
@@ -33,6 +34,11 @@ def parse_lint_output(text: str) -> List[Dict[str, Any]]:
         ),
         re.compile(
             r"^\s*(?P<file>[^:\n]+):(?P<line>\d+):\s*(?P<message>.*?)\s*$",
+            re.IGNORECASE,
+        ),
+        # Ren'Py 8 lint: "game/script.rpy:12 The jump is to nonexistent label 'x'."
+        re.compile(
+            r"^\s*(?P<file>[^:\n]+\.rpym?):(?P<line>\d+)\s+(?P<message>\S.*?)\s*$",
             re.IGNORECASE,
         ),
     )
@@ -174,7 +180,8 @@ def run_lint(project_root: str | Path, *, version: str = "stable", timeout: int 
 
     try:
         command = project.lint_command(sdk)
-        result = run_command(command, timeout=timeout)
+        with renpy_tool_environment() as env:
+            result = run_command(command, timeout=timeout, env=env)
         raw = result.stdout or ""
         if result.stderr:
             raw = f"{raw}\n{result.stderr}" if raw else result.stderr

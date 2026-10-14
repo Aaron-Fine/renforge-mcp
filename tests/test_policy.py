@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 import json
 
 import pytest
@@ -17,6 +18,7 @@ from renforge.policy import (
     redact_params,
 )
 from renforge.server import create_app
+from renforge.state import project_state_dir
 
 
 def test_classify_control_saves_eval_and_scenario_operations() -> None:
@@ -31,6 +33,16 @@ def test_classify_control_saves_eval_and_scenario_operations() -> None:
     assert classify("renforge_saves", {"action": "list"}) == (
         "renforge_saves.list",
         RISK_OBSERVATIONAL,
+    )
+    # Reading the player's own saves, even their names, needs authorize
+    # like a savedir=existing launch.
+    assert classify("renforge_saves", {"action": "list_user"}) == (
+        "renforge_saves.list_user",
+        RISK_DESTRUCTIVE,
+    )
+    assert classify("renforge_saves", {"action": "import"}) == (
+        "renforge_saves.import",
+        RISK_DESTRUCTIVE,
     )
     assert classify("renforge_saves", {"action": "load"}) == (
         "renforge_saves.load",
@@ -96,6 +108,10 @@ def test_enforce_denies_open_world_and_destructive_without_authorize(monkeypatch
     denied_quit = evaluate("renforge_control", {"action": "quit"})
     allowed_advance = evaluate("renforge_control", {"action": "advance"})
     allowed_list = evaluate("renforge_saves", {"action": "list"})
+    denied_list_user = evaluate("renforge_saves", {"action": "list_user"})
+    denied_import = evaluate("renforge_saves", {"action": "import", "slot": "1-1"})
+    isolated_launch = evaluate("renforge_launch", {"savedir": "auto"})
+    exposed_launch = evaluate("renforge_launch", {"savedir": "existing"})
 
     assert denied_eval.allowed is False
     assert denied_eval.to_result()["code"] == "POLICY_DENIED"
@@ -104,12 +120,23 @@ def test_enforce_denies_open_world_and_destructive_without_authorize(monkeypatch
     assert denied_quit.allowed is False
     assert allowed_advance.allowed is True
     assert allowed_list.allowed is True
+    assert denied_list_user.allowed is False
+    assert denied_import.allowed is False
+    assert isolated_launch.allowed is True
+    assert isolated_launch.risk == RISK_MUTATING
+    assert exposed_launch.allowed is False
+    assert exposed_launch.risk == RISK_DESTRUCTIVE
 
 
 def test_enforce_allows_authorized_and_allowlisted_calls(monkeypatch) -> None:
     monkeypatch.setenv("RENFORGE_POLICY", "enforce")
     authorized = evaluate("renforge_eval", {"expr": "1+1", "authorize": True})
     assert authorized.allowed is True
+    authorized_launch = evaluate(
+        "renforge_launch", {"savedir": "existing", "authorize": True}
+    )
+    assert authorized_launch.allowed is True
+    assert authorized_launch.risk == RISK_DESTRUCTIVE
 
     monkeypatch.setenv("RENFORGE_POLICY_ALLOW", "renforge_control.quit,renforge_saves.load")
     assert evaluate("renforge_control", {"action": "quit"}).allowed is True
@@ -201,7 +228,7 @@ def test_denied_eval_never_reaches_implementation(monkeypatch, tmp_path) -> None
     assert payload["policy"]["risk"] == RISK_OPEN_WORLD
     assert "authorize=true" in payload["policy"]["next_step"]
 
-    activity = (tmp_path / ".renforge" / "activity.jsonl").read_text(encoding="utf-8")
+    activity = (project_state_dir(tmp_path) / "activity.jsonl").read_text(encoding="utf-8")
     entry = json.loads(activity.strip().splitlines()[-1])
     assert entry["policy"]["decision"] == "deny"
     assert entry["params"]["expr"] == "[redacted]"
@@ -280,3 +307,56 @@ def test_denied_open_world_scenario_steps_never_run(monkeypatch, tmp_path) -> No
     )
     assert allowed_payload == {"ok": True}
     assert len(calls) == 1
+
+
+def test_wait_until_expression_is_open_world_like_a_scenario_wait() -> None:
+    """Its expr runs Python in the game, so enforce mode asks for authorization."""
+    assert classify("renforge_wait_until", {"expr": "renpy.version"}) == (
+        "renforge_wait_until.expr", RISK_OPEN_WORLD)
+    assert classify("renforge_wait_until", {"label": "start", "expr": None}) == (
+        "renforge_wait_until", RISK_OBSERVATIONAL)
+    assert classify("renforge_wait_until", {"expr": "  "}) == ("renforge_wait_until", RISK_MALFORMED)
+    assert classify("renforge_set_var", {"name": "day", "value": 3}) == ("renforge_set_var", RISK_MUTATING)
+    env = {"RENFORGE_POLICY": MODE_ENFORCE}
+    assert evaluate("renforge_wait_until", {"expr": "True"}, environ=env).decision == "deny"
+    assert evaluate("renforge_wait_until", {"expr": "True", "authorize": True}, environ=env).decision == "allow"
+    assert evaluate("renforge_wait_until", {"screen": "say"}, environ=env).decision == "allow"
+
+
+def test_a_launch_into_a_folder_outside_renforge_and_temp_needs_authorize(tmp_path, monkeypatch) -> None:
+    """The game writes saves and persistent data wherever savedir or home points."""
+    import tempfile
+
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    state = tmp_path / "state"
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(state))
+    elsewhere = tmp_path.parent / "elsewhere-config"
+    if str(elsewhere).startswith(tempfile.gettempdir()):
+        # pytest's tmp_path is under the temp dir; use a folder that is not.
+        elsewhere = Path.home() / ".config" / "some-app"
+    for params in ({"savedir": str(elsewhere)}, {"home": str(elsewhere)}):
+        decision = evaluate("renforge_launch", params)
+        assert decision.risk == RISK_DESTRUCTIVE, params
+        assert decision.allowed is False
+        assert evaluate("renforge_launch", {**params, "authorize": True}).allowed is True
+    inside = state / "projects" / "demo-0123" / "saves"
+    for value in (str(inside), f"  {inside}  "):
+        decision = evaluate("renforge_launch", {"savedir": value})
+        assert decision.risk == RISK_MUTATING, value
+        assert decision.allowed is True
+    # The temp dir is shared with other apps, so it is not RenForge's own.
+    temp = Path(tempfile.gettempdir())
+    for params in ({"home": str(temp)}, {"savedir": str(temp / "other-app")}):
+        assert evaluate("renforge_launch", params).risk == RISK_DESTRUCTIVE, params
+
+
+def test_launch_path_policy_reads_the_value_the_launch_uses(tmp_path, monkeypatch) -> None:
+    """The launch strips the value; a leading space must not make it relative to the cwd."""
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(state))
+    monkeypatch.chdir(state)
+    outside = tmp_path / "elsewhere"
+    for params in ({"savedir": f" {outside}"}, {"home": f" {outside}"}, {"home": " ~/.ssh"}):
+        assert evaluate("renforge_launch", params).risk == RISK_DESTRUCTIVE, params
