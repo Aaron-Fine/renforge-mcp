@@ -177,6 +177,10 @@ versioning.
   build's `version = u'7.7.3...'` is read too (Price of Power had no detected
   version). `GAME_STARTUP_ERROR` messages quote the error line of either
   report kind, not the trailing date.
+- A line in a subroutine that the story calls from different places is not a
+  loop. Secrets and Promises says "*Moans*" from one `Moan` label that every
+  scene line calls, so `act` stopped with `stop="loop"` every few lines; the
+  loop check now includes where the line was called from.
 
 ### Added
 

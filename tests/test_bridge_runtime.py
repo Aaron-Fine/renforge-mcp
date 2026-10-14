@@ -6717,6 +6717,31 @@ def test_progression_hands_back_when_it_comes_round_to_a_line_again(running_brid
     assert bridge.progression["stop"] == "loop"
 
 
+def test_a_subroutine_line_called_from_another_place_is_not_a_loop(running_bridge, monkeypatch):
+    """Secrets and Promises: each scene line `call Moan(sar)` says "*Moans*" from one label."""
+    bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
+    raw["statement"], raw["label"] = {"file": "game/a.rpy", "line": 663}, "Moan"
+    raw["dialogue"] = {"who": "Sarah", "what": "*Moans*"}
+    bridge.progression["max_steps"] = 10
+    stack = []
+    monkeypatch.setattr(renpy, "game", types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(return_stack=list(stack))), raising=False)
+
+    def call_from(site):
+        stack[:] = [site]
+        bridge.say_id += 1
+        renpy.config.start_interact_callbacks[0]()
+        raw["interaction"] = bridge.observe_generation
+        running_bridge.globs["_renforge_progress_tick"]()
+
+    call_from("_call_Moan_1")
+    call_from("_call_Moan_2")
+    assert bridge.progression["active"] is True
+    # Called again from the same place: the story went round.
+    call_from("_call_Moan_2")
+    assert bridge.progression["active"] is False and bridge.progression["stop"] == "loop"
+
+
 def test_a_shown_screen_counts_as_kept_up_from_the_next_interaction(running_bridge):
     import sys
 

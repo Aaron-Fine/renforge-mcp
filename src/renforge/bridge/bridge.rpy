@@ -5036,6 +5036,14 @@ init python:
                         stack.append((target, depth + 1))
         return False
 
+    def _renforge_call_sites():
+        """The return points of the running context's calls, innermost last."""
+        try:
+            stack = renpy.game.context().return_stack
+            return builtins.tuple(builtins.repr(name) for name in stack)
+        except Exception:
+            return ()
+
     def _renforge_seen_current():
         """Whether the current statement already finished once since launch.
 
@@ -6229,9 +6237,13 @@ init python:
             # loop that counts ("Line [n].") moves on by itself and is not one.
             # A line paused with {w} shows again from the same run of its say
             # statement (same say_id), so it is not one either.
+            # A subroutine called from different places (a "Moan" label each
+            # scene line calls) runs its line again as the story moves on, so
+            # where it was called from is part of the spot.
             where = raw.get("statement") or {}
             words = raw.get("dialogue") or {}
-            spot = (where.get("file"), where.get("line"), raw.get("label"), words.get("who"), words.get("what"))
+            spot = (where.get("file"), where.get("line"), raw.get("label"), words.get("who"), words.get("what"),
+                    _renforge_call_sites())
             if where.get("file") is not None:
                 said = operation["visited"].get(spot)
                 if said is not None and said != bridge.say_id:
