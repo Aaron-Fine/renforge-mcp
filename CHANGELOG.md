@@ -131,7 +131,10 @@ versioning.
   it is retried once (the next launch loads the fresh `.rpyc` files and starts)
   and the ready result carries `startup_warning` with the first error. Four of
   the first ten games swept (Astreon, Driven by Desire, Eden, Found in
-  Translation) only started this way. Launched games also get an editor that
+  Translation) only started this way. A game whose presplash has transparent
+  corners (a shaped window, which SDL's Wayland driver cannot create) exited
+  at once; it is now launched again with X11 (Inanna's Revenge, Island
+  Echoes). Launched games also get an editor that
   opens nothing, so a crash no longer opens `traceback.txt` on the user's
   desktop.
 - The injected bridge and Live Editor no longer read builtins or their own

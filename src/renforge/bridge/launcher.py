@@ -1252,24 +1252,41 @@ def _launch_after_project_lock(
 def launch_with_bridge(sdk: RenpySdk, project: RenpyProject, **options: Any) -> BridgeSession:
     """Launch a bridge while exclusively owning this project's artifacts.
 
-    Ren'Py recompiles a script whose source differs from its .rpyc. Some games
-    ship such sources (stale translations), and the compiling launch can stop
-    on an error the next launch, which loads the fresh .rpyc, does not raise.
-    That launch is retried once; the session's ``startup_warning`` keeps the
-    first error.
+    Two failures a second launch gets past are retried once, and the
+    session's ``startup_warning`` keeps the first error:
+
+    - Ren'Py recompiles a script whose source differs from its .rpyc. Some
+      games ship such sources (stale translations), and the compiling launch
+      can stop on an error that the next launch, loading the fresh .rpyc,
+      does not raise.
+    - A presplash with transparent corners opens a shaped window, which SDL's
+      Wayland driver cannot create, so the game exits at once. X11 (XWayland)
+      can.
     """
     try:
         return _launch_with_bridge_once(sdk, project, **options)
     except LaunchError as exc:
-        if exc.code != "GAME_STARTUP_ERROR" or not (exc.details or {}).get("scripts_compiled"):
+        details = exc.details or {}
+        if exc.code == "GAME_STARTUP_ERROR" and details.get("scripts_compiled"):
+            reason = "The first launch compiled changed scripts and stopped on an error, so the game was launched again"
+        elif _shaped_presplash_failed(exc, options.get("extra_env")):
+            reason = "The game's presplash window cannot open with SDL's Wayland driver, so it was launched with X11"
+            options = dict(options, extra_env={**(options.get("extra_env") or {}), "SDL_VIDEODRIVER": "x11"})
+        else:
             raise
         first = exc
     session = _launch_with_bridge_once(sdk, project, **options)
-    session.startup_warning = (
-        f"The first launch compiled changed scripts and stopped on an error, "
-        f"so the game was launched again: {first.message}"
-    )
+    session.startup_warning = f"{reason}: {first.message}"
     return session
+
+
+def _shaped_presplash_failed(exc: LaunchError, extra_env: dict[str, str] | None) -> bool:
+    if exc.code not in ("DISPLAY_START_FAILED", "RENPY_PROCESS_EXITED"):
+        return False
+    if (extra_env or {}).get("SDL_VIDEODRIVER") or os.environ.get("SDL_VIDEODRIVER"):
+        return False  # the user chose the driver
+    stderr = str((exc.details or {}).get("stderr") or "")
+    return "presplash" in stderr and "Invalid window" in stderr
 
 
 def _launch_with_bridge_once(

@@ -910,6 +910,8 @@ Recommended practices:
 | A click lands at the wrong place under WSLg | Reuse the `coordinate_space` returned by visual search. |
 | The MCP client cannot open a display | Start `renforge ui --project …`; launch requests are delegated to the display-owning process. |
 | An MCP tool is missing | Update RenForge, then restart the MCP session to reload its catalogue. |
+| Launch fails with `GAME_STARTUP_ERROR` | The game stopped on Ren'Py's error screen before the bridge started; `details.report` holds its `traceback.txt`. Players see the same error. A launch that failed while recompiling changed scripts is already retried once. |
+| A ready launch carries `startup_warning` | The first attempt failed and a second one started: a recompile error that did not recur, or a shaped presplash that SDL's Wayland driver cannot open (the game then runs under X11, which needs an unlocked screen). |
 
 ## Quick verification
 

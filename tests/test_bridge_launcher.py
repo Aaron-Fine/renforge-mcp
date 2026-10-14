@@ -763,6 +763,51 @@ def test_a_launch_that_compiled_scripts_and_stopped_on_an_error_is_retried_once(
     assert excinfo.value.code == "GAME_STARTUP_ERROR" and launches["count"] == 1
 
 
+def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkeypatch, tmp_path: Path) -> None:
+    """Inanna's Revenge, Island Echoes: a transparent presplash needs a shaped window."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.delenv("SDL_VIDEODRIVER", raising=False)
+    project, sdk, project_root = _make_project(tmp_path)
+    drivers = []
+
+    class _Stream:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def read(self, _size=-1):
+            payload, self._payload = self._payload, b""
+            return payload
+
+    def fake_popen(*_args, **kwargs):
+        drivers.append(kwargs["env"].get("SDL_VIDEODRIVER"))
+        process = _FakeProcess()
+        if kwargs["env"].get("SDL_VIDEODRIVER") == "wayland,x11":
+            process.returncode = 1
+            process.stdout = _Stream(b"")
+            process.stderr = _Stream(
+                b'  File "renpy/display/presplash.py", line 131, in start\n'
+                b"pygame_sdl2.error.error: Invalid window\n")
+        else:
+            _write_bridge_info(project_root, kwargs["env"])
+        return process
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+
+    session = launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert drivers == ["wayland,x11", "x11"]
+    assert "Wayland" in session.startup_warning
+    session.close(timeout=0.1)
+
+    # A driver the user chose is theirs: no retry.
+    drivers.clear()
+    with pytest.raises(LaunchError):
+        launch_with_bridge(sdk, project, startup_timeout=30.0, extra_env={"SDL_VIDEODRIVER": "wayland,x11"})
+    assert drivers == ["wayland,x11"]
+
+
 def test_an_old_game_error_report_does_not_fail_a_launch(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)
