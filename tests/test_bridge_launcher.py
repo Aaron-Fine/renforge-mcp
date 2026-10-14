@@ -207,6 +207,11 @@ def test_launch_with_bridge_builds_run_command(monkeypatch, tmp_path: Path, warp
     assert env["RENFORGE_BRIDGE_TRANSITIONS"] == "off"
     # Frames never wait for the display unless the user asks for vsync.
     assert env["RENPY_GL_VSYNC"] == "0"
+    # A crash never opens traceback.txt in the user's editor.
+    editor_scope: dict = {}
+    exec(Path(env["RENPY_EDIT_PY"]).read_text(encoding="utf-8"), editor_scope)
+    editor = editor_scope["Editor"]()
+    editor.begin(new_window=True), editor.open("traceback.txt", 1), editor.end()
     starting = control_dir(project_root) / "bridge.json"
     # reserved before spawn; fake popen overwrote it to ready for the ping path
     assert starting.exists()
@@ -683,6 +688,51 @@ def test_allowlisted_bridge_startup_error_fails_before_timeout(monkeypatch, tmp_
     assert not (control_dir(project_root) / "bridge.json").exists()
 
 
+
+
+def test_game_error_report_during_startup_fails_before_timeout(monkeypatch, tmp_path: Path) -> None:
+    """Astreon: a translation error at init shows Ren'Py's error screen, so no bridge."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    report = (
+        "\ufeffI'm sorry, but an uncaught exception occurred.\n\nWhile running game code:\n"
+        '  File "game/tl/chinese/ProfileMenu.rpy", line 6, in script\n'
+        "Exception: A translation for \"Character\" already exists.\n\n"
+        "-- Full Traceback ------\nmore\n"
+    )
+
+    def fake_popen(*_args, **_kwargs):
+        (project_root / "traceback.txt").write_text(report, encoding="utf-8")
+        return _FakeProcess()
+
+    def fail_client(_config):
+        raise AssertionError("no bridge manifest exists")
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", fail_client)
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("renforge.bridge.launcher._GAME_ERROR_GRACE_S", 0.0)
+
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert excinfo.value.code == "GAME_STARTUP_ERROR"
+    assert 'already exists' in str(excinfo.value)
+    assert "Full Traceback" not in excinfo.value.details["report"]
+
+
+def test_an_old_game_error_report_does_not_fail_a_launch(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    (project_root / "traceback.txt").write_text("from an earlier run\n", encoding="utf-8")
+    clock = iter((0.0, 0.0, 0.5, 2.0))
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", lambda *_a, **_k: _FakeProcess())
+    monkeypatch.setattr("renforge.bridge.launcher.time.time", lambda: next(clock))
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("renforge.bridge.launcher._GAME_ERROR_GRACE_S", 0.0)
+
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=1.0)
+    assert excinfo.value.code == "BRIDGE_CONNECTION_TIMEOUT"
 
 
 def test_close_keeps_lock_and_artifacts_until_process_exit(

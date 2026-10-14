@@ -122,6 +122,13 @@ versioning.
   (a HUD), the first time it comes up; a pause the game returns to is still a
   hub that stops as a choice. Screens restored by loading a save count as kept
   up, so a HUD no longer stops the first line after a load. Found in Artifice.
+- A launch whose game stops on Ren'Py's error screen before the bridge comes
+  up (an exception during init) fails within seconds with
+  `GAME_STARTUP_ERROR` and the game's `traceback.txt`/`errors.txt` report,
+  instead of waiting out the 180 s startup timeout. Astreon and Driven by
+  Desire ship stale `.rpyc` files whose first recompile raises a duplicate
+  translation error. Launched games also get an editor that opens nothing, so
+  a crash no longer opens `traceback.txt` on the user's desktop.
 
 ### Added
 

@@ -20,7 +20,7 @@ import sys  # retained for tests that patch renforge.bridge.launcher.sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from ..launch_env import (
     LaunchError,
@@ -803,6 +803,58 @@ class _BoundedPipeReader:
             self._thread.join(timeout=timeout)
 
 
+_GAME_ERROR_FILES: Final = ("traceback.txt", "errors.txt")
+# How long the bridge may still come up after the game wrote an error report.
+_GAME_ERROR_GRACE_S: Final = 3.0
+
+
+def _game_error_stamps(project_root: Path) -> dict[str, tuple[int, int] | None]:
+    stamps: dict[str, tuple[int, int] | None] = {}
+    for name in _GAME_ERROR_FILES:
+        try:
+            stat = (project_root / name).stat()
+        except OSError:
+            stamps[name] = None
+        else:
+            stamps[name] = (stat.st_mtime_ns, stat.st_size)
+    return stamps
+
+
+def _new_game_error(project_root: Path, before: dict[str, tuple[int, int] | None]) -> dict[str, str] | None:
+    """The error report Ren'Py wrote during this launch, if any.
+
+    An exception or script error during init shows Ren'Py's error screen, so
+    the bridge never comes up; the report says why.
+    """
+    for name, stamp in _game_error_stamps(project_root).items():
+        if stamp is None or stamp == before.get(name) or stamp[1] == 0:
+            continue
+        try:
+            text = (project_root / name).read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            continue
+        return {"file": name, "text": text}
+    return None
+
+
+def _raise_game_error(report: dict[str, str]) -> None:
+    text = report["text"]
+    # The short report comes first; the full traceback follows a rule line.
+    summary = text.split("-- Full Traceback", 1)[0].strip()
+    last = next((line.strip() for line in reversed(summary.splitlines()) if line.strip()), "")
+    raise LaunchError(
+        "GAME_STARTUP_ERROR",
+        f"The game stopped on an error before the bridge came up: {last}",
+        phase="waiting_for_bridge",
+        suggested_fix=(
+            f"Read {report['file']} in the project root. Ren'Py shows this error to "
+            "players too; an error raised while compiling changed scripts may not "
+            "recur on the next launch."
+        ),
+        details={"file": report["file"], "report": summary[-4000:]},
+    )
+
+
 def _raise_bridge_startup_error(code: str) -> None:
     raise LaunchError(
         code,
@@ -975,6 +1027,9 @@ def _launch_after_project_lock(
     # Idle CPU is the same without it. RENPY_GL_VSYNC, if set, is respected.
     if "RENPY_GL_VSYNC" not in env and env.get(VSYNC_ENV, "").strip().lower() != "on":
         env["RENPY_GL_VSYNC"] = "0"
+    # A crash would open traceback.txt in the user's editor; the launch and
+    # the session report it instead. A RENPY_EDIT_PY already set is kept.
+    env.setdefault("RENPY_EDIT_PY", str(Path(__file__).with_name("no_editor.py")))
     if editor_endpoint is not None:
         env.update(
             _editor_environment(
@@ -1002,6 +1057,7 @@ def _launch_after_project_lock(
         command = ["xvfb-run", "-a", *command]
 
     _phase("starting_renpy")
+    error_stamps = _game_error_stamps(project.root)
     try:
         process = subprocess.Popen(
             command,
@@ -1044,11 +1100,18 @@ def _launch_after_project_lock(
     deadline = time.time() + startup_timeout
     _phase("waiting_for_bridge", port=port or None)
 
+    game_error: dict[str, str] | None = None
+    game_error_seen = 0.0
     try:
         while time.time() < deadline:
             _raise_if_cancelled(cancel_event, phase="waiting_for_bridge")
             if startup_event.is_set() and startup_code[0] is not None:
                 _raise_bridge_startup_error(startup_code[0])
+            if game_error is None:
+                game_error = _new_game_error(project.root, error_stamps)
+                game_error_seen = time.monotonic()
+            elif time.monotonic() - game_error_seen >= _GAME_ERROR_GRACE_S:
+                _raise_game_error(game_error)
             if process.poll() is not None:
                 stdout_reader.join(timeout=0.2)
                 stderr_reader.join(timeout=0.2)
@@ -1150,6 +1213,8 @@ def _launch_after_project_lock(
         project_lock,
         expected_session_id=session_id,
     )
+    if game_error is not None:
+        _raise_game_error(game_error)
     raise LaunchError(
         "BRIDGE_CONNECTION_TIMEOUT",
         f"Bridge did not come up within {startup_timeout}s",
