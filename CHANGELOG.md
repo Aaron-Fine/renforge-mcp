@@ -267,7 +267,8 @@ versioning.
 - Launches that reach the player's saves are classified as destructive more
   reliably: host save paths match case-insensitively (on Windows and macOS
   `~/library/renpy` is the player's `~/Library/RenPy`), and a custom `home`
-  whose Ren'Py save folder resolves into the player's tree counts too.
+  whose Ren'Py save folder resolves into the player's tree counts too, as
+  does a save path inside any game's `game/saves`, not only this project's.
 - A button whose click does nothing (`NullAction()`, or only a sound or a
   selected/sensitive state) is `inert` and never a decision, so a `pause`
   beside a tutorial's decorative icons is clicked past instead of stopping

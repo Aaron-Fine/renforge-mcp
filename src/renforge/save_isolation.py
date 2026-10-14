@@ -399,7 +399,10 @@ def path_exposes_user_saves(
             continue
         if _inside(path, resolved):
             return True
-    return False
+    # Any game's own game/saves holds a player's saves, not only this
+    # project's: a savedir in another game's folder writes that game's slots.
+    parts = [part.casefold() for part in path.parts]
+    return any(parts[i] == "game" and parts[i + 1] == "saves" for i in range(len(parts) - 1))
 
 
 def _path_key(path: Path) -> str:

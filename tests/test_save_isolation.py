@@ -552,3 +552,14 @@ def test_a_home_whose_save_folder_links_into_the_players_is_destructive(
     clean_home = tmp_path / "clean-home"
     clean_home.mkdir()
     assert launch_exposes_user_saves(savedir="temporary", home=str(clean_home)) is False
+
+
+def test_another_games_save_folder_exposes_player_saves(tmp_path: Path, monkeypatch, host_save_root: Path) -> None:
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    other = tmp_path / "OtherGame" / "Game" / "saves"
+    other.mkdir(parents=True)
+    assert launch_exposes_user_saves(savedir=str(other), home="temporary", project_path=str(tmp_path / "this")) is True
+    assert launch_exposes_user_saves(savedir=str(other / "slot-dir"), home="temporary") is True
+    scratch = tmp_path / "scratch" / "saves"
+    scratch.mkdir(parents=True)
+    assert launch_exposes_user_saves(savedir=str(scratch), home="temporary") is False
