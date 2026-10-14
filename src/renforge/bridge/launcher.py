@@ -861,9 +861,10 @@ def _game_error_line(summary: str) -> str:
     and ends with the version and date.
     """
     lines = [line.strip() for line in summary.splitlines() if line.strip()]
-    script_errors = [line for line in lines if re.match(r'^File ".+", line \d+: ', line)]
-    if script_errors:
-        return script_errors[0]
+    if lines and lines[0].startswith("I'm sorry, but errors were detected"):
+        # errors.txt: the first error follows the two-line apology.
+        rest = [line for line in lines[1:] if "errors listed below" not in line]
+        return rest[0] if rest else lines[0]
     exceptions = [line for line in lines if re.match(r"^[A-Za-z_][\w.]*(Error|Exception|Exit)\b", line)]
     if exceptions:
         return exceptions[-1]
@@ -877,7 +878,7 @@ def _raise_game_error(report: dict[str, str]) -> None:
     last = _game_error_line(summary)
     raise LaunchError(
         "GAME_STARTUP_ERROR",
-        f"The game stopped on an error before the bridge came up: {last}",
+        f"The game stopped on an error during startup: {last}",
         phase="waiting_for_bridge",
         suggested_fix=(
             f"Read {report['file']} in the project root. Ren'Py shows this error to "

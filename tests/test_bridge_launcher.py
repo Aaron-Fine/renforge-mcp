@@ -846,7 +846,8 @@ def test_the_error_line_is_read_from_either_kind_of_report() -> None:
     from renforge.bridge.launcher import _game_error_line
 
     errors = (
-        "I'm sorry, but errors were detected in your script.\n\n"
+        "I'm sorry, but errors were detected in your script. Please correct the\n"
+        "errors listed below, and try again.\n\n"
         'File "game/01base_stats.rpy", line 123: invalid syntax\n'
         '    raise TypeError, "Supplied value"\n\n'
         "Ren'Py Version: Ren'Py 8.0.3.22090809\nTue Oct 13 20:56:14 2026\n"
