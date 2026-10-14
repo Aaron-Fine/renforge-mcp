@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import stat
+import sys
 import threading
 import time
 from pathlib import Path
@@ -763,6 +764,7 @@ def test_a_launch_that_compiled_scripts_and_stopped_on_an_error_is_retried_once(
     assert excinfo.value.code == "GAME_STARTUP_ERROR" and launches["count"] == 1
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the Wayland driver default is Linux-only")
 def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkeypatch, tmp_path: Path) -> None:
     """Inanna's Revenge, Island Echoes: a transparent presplash needs a shaped window."""
     monkeypatch.setenv("DISPLAY", ":0")
@@ -1772,9 +1774,9 @@ def test_injected_payload_is_the_sum_of_every_source_file() -> None:
 
     # Each source arrives with its init python blocks guarded (guard.py).
     payload = _editor_payload().decode("utf-8")
-    assert payload.startswith(guard_rpy(_EDITOR_RESOURCE.read_text(encoding="utf-8")))
+    assert payload.startswith(guard_rpy(_EDITOR_RESOURCE.read_text(encoding="utf-8"), imports=False))
     for path in screens:
-        assert guard_rpy(path.read_text(encoding="utf-8")) in payload
+        assert guard_rpy(path.read_text(encoding="utf-8"), imports=False) in payload
 
     # Order must not drift with the filesystem, or the digest changes for no reason.
     assert [path.name for path in screens] == sorted(path.name for path in screens)

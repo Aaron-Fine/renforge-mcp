@@ -824,7 +824,7 @@ def test_advance_until_returns_lines_queued_before_its_first_look(monkeypatch):
 
     client = Client()
     monkeypatch.setattr(live, "_client", lambda _path: client)
-    live._crossed_after["/tmp/renforge-crossed"] = (("127.0.0.1", 9, "tok"), 2)
+    live._crossed_after[live._key("/tmp/renforge-crossed")] = (("127.0.0.1", 9, "tok"), 2)
 
     result = live.advance_until("/tmp/renforge-crossed", max_steps=5, timeout=2, mode="dismiss")
 
@@ -836,7 +836,7 @@ def test_advance_until_returns_lines_queued_before_its_first_look(monkeypatch):
         {"type": "say", "who": "Chef", "what": "Listen up!"},
         {"type": "label", "label": "week1_challenge1_hottub"},
     ]
-    assert live._crossed_after["/tmp/renforge-crossed"][1] == 8
+    assert live._crossed_after[live._key("/tmp/renforge-crossed")][1] == 8
 
     again = live.advance_until("/tmp/renforge-crossed", max_steps=1, timeout=2, mode="dismiss")
     assert again["crossed"] == []

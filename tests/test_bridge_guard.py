@@ -40,15 +40,23 @@ def _global_reads(code):
 
 
 def test_injected_scripts_read_no_name_a_game_can_shadow():
-    for payload in (bridge_payload(), _editor_payload()):
+    for payload, private_imports in ((bridge_payload(), True), (_editor_payload(), False)):
         for _line, body in _blocks(payload.decode("utf-8")):
             code = compile(body, "block", "exec")
             reads = _global_reads(code)
             assert not reads & GUARDED_BUILTINS
             # Reads of a local named like a builtin would be rewritten to the builtin.
             assert not _local_names(code) & GUARDED_BUILTINS
-            for name in ("json", "os", "sys", "types", "time"):
-                assert name not in reads
+            if private_imports:
+                for name in ("json", "os", "sys", "types", "time"):
+                    assert name not in reads
+
+
+def test_renpy_own_store_names_are_left_to_the_store():
+    """Ren'Py's minstore rebinds these; its eval returns revertable lists the bridge serialises."""
+    for name in ("list", "dict", "set", "object", "range", "sorted", "eval", "str", "open", "print", "input"):
+        assert name not in GUARDED_BUILTINS
+    assert "_rfb_eval" not in bridge_payload().decode("utf-8")
 
 
 def test_guarding_keeps_line_numbers():

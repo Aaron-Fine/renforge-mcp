@@ -51,7 +51,7 @@ def _load_editor_body():
     from renforge.bridge.guard import guard_rpy
 
     raw = Path(__file__).resolve().parents[1] / "src/renforge/bridge/editor.rpy"
-    lines = guard_rpy(raw.read_text(encoding="utf-8")).splitlines()
+    lines = guard_rpy(raw.read_text(encoding="utf-8"), imports=False).splitlines()
     start = lines.index("init 1100 python:")
     body = []
     for line in lines[start + 1 :]:

@@ -411,7 +411,9 @@ def _editor_payload() -> bytes:
     parts = [_EDITOR_RESOURCE.read_text(encoding="utf-8")]
     for path in _editor_screen_sources():
         parts.append("\n\n" + path.read_text(encoding="utf-8"))
-    return guard_rpy("".join(parts)).encode("utf-8")
+    # The editor's screens and later blocks use the imports of its earlier
+    # blocks as store names, so only builtins are made private.
+    return guard_rpy("".join(parts), imports=False).encode("utf-8")
 
 
 def _editor_asset_sources() -> list[tuple[str, Path]]:

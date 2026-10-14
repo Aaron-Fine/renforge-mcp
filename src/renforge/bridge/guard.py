@@ -7,9 +7,12 @@ the ``types`` module the bridge imported. Rewriting the bridge source at
 injection time binds each builtin and each top-level import to a private
 ``_rfb_`` name, which no game defines, while the source stays plain Python.
 
-Ren'Py itself puts revertable ``list``, ``dict``, ``set``, ``object``,
-``range``, and ``sorted`` in the store; the bridge keeps using those as it
-always has (``builtins.list`` where it needs the plain type).
+Ren'Py itself rebinds some builtins in the store (``renpy.minstore``, the
+same from 8.0 to 8.6): revertable ``list``, ``dict``, ``set``, ``object``,
+``range``, and ``sorted``, and its own ``eval``, ``str``, ``open``, ``print``,
+and ``input``. The bridge keeps using those as it always has (its ``eval``
+returns revertable containers that ``_renforge_jsonable`` expects;
+``builtins.list`` where it needs the plain type).
 """
 
 from __future__ import annotations
@@ -21,7 +24,8 @@ import tokenize
 
 PREFIX = "_rfb_"
 
-_RENPY_STORE_NAMES = frozenset({"list", "dict", "set", "object", "range", "sorted"})
+_RENPY_STORE_NAMES = frozenset({"list", "dict", "set", "object", "range", "sorted",
+                                "eval", "str", "open", "print", "input"})
 _CONSTANTS = frozenset({"True", "False", "None", "Ellipsis", "NotImplemented"})
 GUARDED_BUILTINS = frozenset(
     name for name in dir(builtins)
@@ -32,7 +36,7 @@ _HEADER = re.compile(r"^init(?: -?\d+)? python:\s*$")
 _SIMPLE_STATEMENT = re.compile(r"^    (?:import |from |[A-Za-z_][\w.]* = )")
 
 
-def guard_block(source: str) -> str:
+def guard_block(source: str, *, imports: bool = True) -> str:
     """Rewrite one ``init python:`` block so builtins and its imports are private.
 
     Line numbers are unchanged: the alias bindings replace the first comment
@@ -42,7 +46,7 @@ def guard_block(source: str) -> str:
     lines = source.splitlines(keepends=True)
     if not lines or not _HEADER.match(lines[0]):
         raise ValueError("expected a block that starts with 'init python:'")
-    modules = {m.group(1) for line in lines[1:] if (m := _TOP_IMPORT.match(line))}
+    modules = {m.group(1) for line in lines[1:] if (m := _TOP_IMPORT.match(line))} if imports else set()
     guarded = GUARDED_BUILTINS | modules
 
     tokens = [t for t in tokenize.generate_tokens(io.StringIO(source).readline)
@@ -86,11 +90,13 @@ def guard_block(source: str) -> str:
     return "".join(lines)
 
 
-def guard_rpy(text: str) -> str:
+def guard_rpy(text: str, *, imports: bool = True) -> str:
     """Guard every store ``init python:`` block of a script; nothing else changes.
 
     ``init python in <store>`` blocks run in their own namespace, which game
-    variables do not reach, so they are left alone, as are screens.
+    variables do not reach, so they are left alone, as are screens. With
+    ``imports=False`` top-level imports stay store names, for scripts whose
+    other blocks and screens use them.
     """
     lines = text.splitlines(keepends=True)
     out: list[str] = []
@@ -103,6 +109,6 @@ def guard_rpy(text: str) -> str:
         end = index + 1
         while end < len(lines) and (not lines[end].strip() or lines[end][:1] in (" ", "\t", "#")):
             end += 1
-        out.append(guard_block("".join(lines[index:end])))
+        out.append(guard_block("".join(lines[index:end]), imports=imports))
         index = end
     return "".join(out)

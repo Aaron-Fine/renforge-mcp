@@ -147,7 +147,10 @@ versioning.
   string"; a game's `default types = [...]` would also have replaced the
   bridge's `types` module, and the bridge's imports overwrote game variables
   with the same names. The injected copy binds each to a private `_rfb_` name
-  (`renforge/bridge/guard.py`) without changing line numbers.
+  (`renforge/bridge/guard.py`) without changing line numbers. Names Ren'Py
+  itself rebinds in the store (`eval`, `str`, `open`, `print`, `input`, and
+  the revertable containers) keep their store meaning, and the Live Editor's
+  imports stay store names because its screens use them.
 - A click sound does not make an interface button a story decision. Astreon's
   main-menu buttons run `Play("sound", ...)` with `ShowMenu("load")`, `Quit`,
   or `OpenURL`, so they were gameplay controls beside the real Start button;

@@ -294,11 +294,16 @@ def test_session_lists_and_imports_the_players_slots(tmp_path, monkeypatch) -> N
     from renforge.state import project_state_dir
     from renforge.tools import live
 
+    from renforge.save_isolation import host_renpy_root
+
     home = tmp_path / "home"
-    player = home / ".renpy" / "archived-game"
+    # Ren'Py's save root is ~/.renpy, ~/Library/RenPy, or %APPDATA%/RenPy.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    player = host_renpy_root(home=home) / "archived-game"
     player.mkdir(parents=True)
     (player / "1-1-LT1.save").write_bytes(b"PLAYER")
-    monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
     project = tmp_path / "project"
     (project / "game").mkdir(parents=True)
