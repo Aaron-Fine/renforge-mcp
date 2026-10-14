@@ -259,6 +259,11 @@ versioning.
   that quits on its own platform check says why only there. A log that stops at window or GL setup (`Windowed
   mode.`, `Maximum texture size`, a shader cache line) means the window never
   opened, as with an X11 window while the screen is locked.
+- `renforge_wait_until` with an `expr` condition is open-world under
+  `RENFORGE_POLICY=enforce` and takes `authorize`, like a scenario `wait`
+  step; it was unmanaged, so enforce mode ran its Python unasked.
+  `renforge_set_var` is classified mutating. A session launch always uses its
+  own HOME, even when `RENFORGE_ISOLATION=existing`.
 - Launches that reach the player's saves are classified as destructive more
   reliably: host save paths match case-insensitively (on Windows and macOS
   `~/library/renpy` is the player's `~/Library/RenPy`), and a custom `home`

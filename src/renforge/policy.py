@@ -263,6 +263,17 @@ def classify(name: str, params: Mapping[str, Any] | None = None) -> tuple[str, s
         if not isinstance(expr, str) or not expr.strip():
             return "renforge_eval", RISK_MALFORMED
         return "renforge_eval", RISK_OPEN_WORLD
+    if name == "renforge_wait_until":
+        # Its expr runs in the game like renforge_eval, as a scenario's
+        # wait step does; a label or screen condition only observes.
+        if "expr" in payload and payload.get("expr") is not None:
+            expr = payload.get("expr")
+            if not isinstance(expr, str) or not expr.strip():
+                return "renforge_wait_until", RISK_MALFORMED
+            return "renforge_wait_until.expr", RISK_OPEN_WORLD
+        return "renforge_wait_until", RISK_OBSERVATIONAL
+    if name == "renforge_set_var":
+        return name, RISK_MUTATING
     if name == "renforge_run_scenario":
         return _classify_scenario(payload.get("steps"))
     if name in _LAUNCH_TOOLS:

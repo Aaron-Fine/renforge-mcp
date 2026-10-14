@@ -1917,3 +1917,34 @@ def test_measure_tool_dispatches_action_and_targets(tmp_path, monkeypatch) -> No
     assert calls["action"] == "align"
     assert calls["targets"] == ["a", "b"]
     assert calls["tolerance"] == 2
+
+
+def test_session_launch_keeps_its_own_home_even_when_isolation_defaults_to_existing(tmp_path, monkeypatch) -> None:
+    """The policy calls a session launch isolated, so RENFORGE_ISOLATION=existing must not hand it the player's HOME."""
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    import threading
+    from pathlib import Path
+
+    from fastmcp import Client
+
+    from renforge import dashboard_client
+    from renforge.tools import live
+
+    monkeypatch.setenv("RENFORGE_ISOLATION", "existing")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(dashboard_client, "launch_game", lambda *a, **k: None)
+    captured: dict = {}
+    monkeypatch.setattr(live, "launch_game", lambda *a, **k: captured.update(k) or {"ok": True})
+
+    def fake_start_launch(project_path, launch, editor=True):
+        return launch(Path(project_path), threading.Event())
+
+    monkeypatch.setattr(live, "start_launch", fake_start_launch)
+
+    async def _call():
+        async with Client(create_app()) as client:
+            return await client.call_tool("renforge_session", {"project_path": str(tmp_path), "action": "launch"})
+
+    asyncio.run(_call())
+    assert captured["home"] == "temporary"
+    assert captured["editor"] is False
