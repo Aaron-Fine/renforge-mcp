@@ -1303,3 +1303,33 @@ def test_image_names_keep_their_tag():
     assert image_basename(("lorbook", "naughtydn")) == "lorbook naughtydn"
     assert image_basename("lorbook naughtydn") == "lorbook naughtydn"
     assert image_basename("images/ui/hearticon.webp") == "hearticon.webp"
+
+
+@pytest.mark.parametrize(
+    ("say_dismiss", "expected"),
+    [
+        ("dismiss", "The line waits under the modal screen stats_page: close it"),
+        (None, "Nothing to continue: the game is waiting for one of its controls."),
+    ],
+)
+def test_continue_names_a_modal_screen_holding_a_line(monkeypatch, say_dismiss, expected):
+    from renforge.tools import live
+
+    observed = {
+        "observation_id": "o1",
+        "interaction": 3,
+        "forward": "choose",
+        "say_dismiss": say_dismiss,
+        "dialogue": {"who": "Sis", "what": "Forgot something?"},
+        "screens": [{"name": "say"}, {"name": "stats_page", "modal": True}],
+    }
+    monkeypatch.setattr(live, "observe", lambda *_a, **_k: dict(observed))
+    # The bridge refuses to click past a line a modal screen holds.
+    monkeypatch.setattr(live, "_with_client", lambda *_a, **_k: {"ok": False, "error": "modal"})
+    monkeypatch.setattr(live, "advance_until", lambda *_a, **_k: {
+        "ok": True, "stop": "choose", "steps": 0, "observation": dict(observed),
+        "observation_status": "ready"})
+
+    result = live.play("/tmp/renforge-modal-line", "o1", timeout=0.2)
+
+    assert result["hint"].startswith(expected)
