@@ -204,6 +204,10 @@ versioning.
   observation is that current state (`stable=false` with `unstable_reason`)
   instead of none with `observation_status="timeout"` (Nightmares of the
   Moon's intro, with a 2 s hard pause at the end of the budget).
+- A line that stays a "pause" longer than any short pause can last (6 s) and
+  that the player could click past is clicked once before progression starts.
+  In Secrets and Promises a `{w=1.0}{nw}` line stayed pending for a whole
+  30 s act, though one click moved it on.
 - Ren'Py's parse-error screen is a `game_error` too (its first error line), and
   a launch that wrote `errors.txt` fails with `GAME_STARTUP_ERROR` even though
   the bridge came up, so a recompile that clashes with archived scripts is

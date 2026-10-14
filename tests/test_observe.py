@@ -1077,6 +1077,27 @@ def test_settle_accepts_a_screen_that_keeps_changing_within_one_interaction():
     assert status == "ready" and result["unstable_reason"] == "pause"
 
 
+def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch):
+    """Secrets and Promises: a {w=1.0}{nw} line stayed a "pause" until act ran out of time."""
+    import time
+    from renforge import progression
+    monkeypatch.setattr(progression, "STUCK_PAUSE_SECONDS", 0.05)
+    nudges = []
+    stuck = _raw(interaction=7, stable=False, unstable_reason="pause", say_dismiss="dismiss")
+
+    class Client:
+        def progression(self, *args, **kwargs):
+            raise AssertionError("progression must not start from an unstable frame")
+
+    progression.run_native_skip(Client(), lambda shot: stuck, max_steps=5,
+                                deadline=time.monotonic() + 0.3, total_deadline=time.monotonic() + 0.4,
+                                nudge=nudges.append)
+    assert nudges == [7]
+    # Without a way to click (no nudge), it only waits.
+    progression.run_native_skip(Client(), lambda shot: stuck, max_steps=5,
+                                deadline=time.monotonic() + 0.1, total_deadline=time.monotonic() + 0.2)
+
+
 def test_dismiss_progression_stops_before_unclassified_input():
     raw = _raw(omitted={'unclassified': True, 'focus_truncated': False})
     result, dismisses = _run([raw])

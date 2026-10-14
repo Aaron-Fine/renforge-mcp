@@ -84,7 +84,12 @@ def settle(fetch, deadline, *, screenshot=True):
     return None, "timeout", "final observation did not settle within the budget"
 
 
-def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, between=None):
+# Longer than any short pause (5 s) plus its grace: a "pause" still pending
+# after this is stuck, and a line the player can click past is clicked once.
+STUCK_PAUSE_SECONDS = 6.0
+
+
+def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, between=None, nudge=None):
     """Start one bridge-owned skip operation and wait for it to stop.
 
     Once started, poll only the operation's status (and ``between``, which
@@ -93,6 +98,8 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, betwe
     """
     operation_id = uuid.uuid4().hex
     attempted = False
+    unstable_since = None
+    nudged = False
     result = {"ok": True, "stop": "timeout", "steps": 0, "observation": None, "mode": "skip"}
     try:
         while time.monotonic() < deadline:
@@ -122,8 +129,17 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, betwe
             result["observation"] = snapshot
             if not attempted:
                 if not snapshot["stable"]:
+                    now = time.monotonic()
+                    unstable_since = unstable_since if unstable_since is not None else now
+                    # Secrets and Promises: a {w=1.0}{nw} line stayed a "pause"
+                    # for the whole budget, yet one click moved it on.
+                    if (nudge is not None and not nudged and now - unstable_since > STUCK_PAUSE_SECONDS
+                            and snapshot.get("unstable_reason") == "pause" and snapshot.get("say_dismiss") == "dismiss"):
+                        nudged = True
+                        nudge(snapshot["interaction"])
                     time.sleep(POLL_SECONDS)
                     continue
+                unstable_since = None
                 boundary = progression_boundary(snapshot)
                 if boundary is not None:
                     result["stop"] = boundary

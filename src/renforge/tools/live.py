@@ -1412,7 +1412,7 @@ def _advance_with_client(project_path: str, client: BridgeClient, *, max_steps: 
 
     if mode == "skip":
         result = run_native_skip(client, fetch, max_steps=max_steps, deadline=progress_end,
-                                 total_deadline=wall_end, between=collect)
+                                 total_deadline=wall_end, between=collect, nudge=dismiss)
     else:
         result = run_advance_until(fetch, dismiss, max_steps=max_steps,
                                    timeout=max(0.01, progress_end - time.monotonic()))
