@@ -1461,6 +1461,10 @@ def test_action_strings_name_setvariable_function_and_camper(running_bridge):
 
     assert format_action(SetVariable()) == 'SetVariable("show_button", False)'
 
+    # Ren'Py mangles a common-library class named __MusicRoomPlay.
+    mangled = type("_m1_00musicroom__MusicRoomPlay", (), {"filename": "audio/theme.mp3"})
+    assert format_action(mangled()) == 'MusicRoomPlay("audio/theme.mp3")'
+
     def ChangeLocation():
         pass
 

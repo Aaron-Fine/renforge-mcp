@@ -200,6 +200,8 @@ versioning.
   within one stable interaction (a music room whose timer rebuilds its
   buttons, Desert Stalker). It waited for two identical observations that
   never came, so each act took the full 30 s and returned no observation.
+- Action summaries name a mangled common-library class as written:
+  `MusicRoomPlay("...")`, not `_m1_00musicroom__MusicRoomPlay("...")`.
 - When nothing else moves the game on, interface buttons on the
   interaction's own screen are its choices. The Power of Truth opens with a
   called disclaimer whose buttons are `MainMenu()` and `Quit()`; both were

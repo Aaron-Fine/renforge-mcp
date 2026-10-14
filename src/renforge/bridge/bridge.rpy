@@ -29,6 +29,7 @@ init python:
     import json
     import os
     import queue
+    import re
     import socket
     import struct
     import sys
@@ -3757,6 +3758,9 @@ init python:
         return "Function(%s)" % ", ".join(parts)
 
 
+    _RENFORGE_MANGLED_NAME = re.compile(r"^_m\d+_\w*?__([A-Za-z]\w*)$")
+
+
     def _renforge_observe_format_action(value, depth=0):
         # Class name plus the field that tells two buttons apart: ShowMenu("load")
         # versus ShowMenu("preferences"), Start("start"), Jump("chapter_two").
@@ -3800,6 +3804,11 @@ init python:
                     return label
         if name == "Function":
             return _renforge_observe_format_function(value, depth)
+        # Ren'Py mangles a class named __X in game/common .rpy files into
+        # _m1_<file>__X (MusicRoom.Play's _m1_00musicroom__MusicRoomPlay).
+        mangled = _RENFORGE_MANGLED_NAME.match(name)
+        if mangled:
+            name = mangled.group(1)
         parts = []
         for key in ("screen", "label", "name", "variable", "field", "filename", "url", "page", "slot", "key"):
             try:
