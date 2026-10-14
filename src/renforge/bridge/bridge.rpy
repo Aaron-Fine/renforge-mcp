@@ -1838,7 +1838,12 @@ init python:
             if point is not None:
                 element["click_point"] = {"x": point[0], "y": point[1]}
                 covered = False
-            elif "modal" in hits:
+            elif "modal" in hits and not (
+                    # A miss inside the widget's own modal screen: the screen
+                    # grabbed a point the widget's focus mask left open
+                    # (Nightmares of the Moon's full-screen masked buttons).
+                    widget is not None and inventory is not None
+                    and _renforge_engine_modal_blocked(widget, inventory) is False):
                 covered = True
             elif not hits or hits[0] == "unavailable":
                 covered = False if widget is None or id(widget) in focusable else None

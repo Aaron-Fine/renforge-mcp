@@ -6975,6 +6975,36 @@ def test_focus_masked_buttons_report_the_region_a_click_reaches(running_bridge, 
     assert again["click_point"] == point and len(calls) - scanned == 9
 
 
+def test_a_masked_button_on_its_own_modal_screen_is_not_covered(running_bridge, monkeypatch):
+    """Nightmares of the Moon: `call screen` (modal) of full-screen masked imagebuttons.
+
+    Points the mask leaves open fall to the modal screen itself, which is not
+    a screen above the button.
+    """
+    globs = running_bridge.globs
+    art = types.SimpleNamespace(style=types.SimpleNamespace(focus_mask=True))
+
+    def hit(x, y):
+        if 300 <= x < 900 and 600 <= y < 900:
+            return ("displayable", art)
+        return "modal"
+
+    monkeypatch.setitem(globs, "_renforge_render_hit", hit)
+    monkeypatch.setitem(globs, "_renforge_engine_focus_ids", lambda: set())
+    screen = {"x": 0, "y": 0, "width": 1920, "height": 1080}
+    own_modal = {"enabled": True, "bounds": dict(screen)}
+    blocked = {"enabled": True, "bounds": dict(screen)}
+    inventory = {"geometry": {"available": True, "occurrences": {}, "modals": ()}}
+    monkeypatch.setitem(globs, "_renforge_engine_modal_blocked", lambda widget, inv: False)
+    globs["_renforge_mark_coverage"]([(types.SimpleNamespace(widget=art), own_modal)], inventory)
+    assert own_modal["clickable"] is True and own_modal["covered"] is False
+    assert 300 <= own_modal["click_point"]["x"] < 900
+    # A modal screen above the button still covers it.
+    monkeypatch.setitem(globs, "_renforge_engine_modal_blocked", lambda widget, inv: True)
+    globs["_renforge_mark_coverage"]([(types.SimpleNamespace(widget=object()), blocked)], inventory)
+    assert blocked["covered"] is True and blocked["clickable"] is False
+
+
 def test_button_label_skips_text_the_game_keeps_hidden(running_bridge, monkeypatch):
     """Heaven's Door menu buttons hold a hover card whose text is at alpha 0."""
     renpy = running_bridge.renpy

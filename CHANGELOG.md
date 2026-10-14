@@ -165,6 +165,12 @@ versioning.
   that item: one control per choice, with the item's caption and the button's
   bounds, and choosing it runs the game's callback. Before, each choice was
   listed twice, once as a button and once as a bound-less `choice/item/N`.
+- A focus-masked button on its own modal screen is no longer reported as
+  covered. Nightmares of the Moon's start menu (`call screen`, modal) holds two
+  full-screen masked imagebuttons; probe points the mask leaves open fall to
+  the modal screen, which read as "covered by a modal", so `act` refused both
+  and the game could not be started. Only a modal screen above the button
+  covers it now; the focus-mask scan finds where it can be clicked.
 
 ### Added
 
