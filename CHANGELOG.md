@@ -210,6 +210,12 @@ versioning.
   store `object` (`RevertableObject`). Their changes went into the rollback
   log, so a save could try to pickle the bridge's queue: "cannot pickle
   '_thread.lock' object ... requests.mutex" (Stranded in Space).
+- A screen's `key "mousedown_1" action ...` (a click anywhere) is listed as a
+  control that runs its action. Stranded in Space's laptop tutorial advances
+  only so; it read as `forward="none"` with nothing to act on, and act's
+  `key/` pseudo-controls press keyboard keys only.
+- `explain` writes a Ren'Py 8.0-8.2 screen's parameters as source
+  (`(items, title="")`), not `<renpy.ast.ParameterInfo object ...>`.
 - Action summaries name a mangled common-library class as written:
   `MusicRoomPlay("...")`, not `_m1_00musicroom__MusicRoomPlay("...")`.
 - When nothing else moves the game on, interface buttons on the

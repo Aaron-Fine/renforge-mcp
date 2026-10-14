@@ -6474,6 +6474,59 @@ def test_a_choice_button_that_wraps_its_item_in_a_function_is_the_item(running_b
     assert calls == ["intercepted", "back"]  # the game's own callback ran
 
 
+def test_explain_writes_old_screen_parameters_as_source(running_bridge):
+    """Ren'Py 8.1 (Stranded in Space): ParameterInfo has no readable str()."""
+    fmt = running_bridge.globs["_renforge_explain_parameters"]
+
+    class ParameterInfo:
+        def __init__(self):
+            self.parameters = [("items", None), ("title", '""')]
+            self.extrapos, self.extrakw = None, "properties"
+
+    assert fmt(ParameterInfo()) == '(items, title="", **properties)'
+    assert fmt(None) is None
+
+
+def test_a_screen_key_bound_to_a_click_is_a_control(running_bridge):
+    """Stranded in Space: a tutorial screen advances only on `key "mousedown_1"`."""
+    from renforge.observe import classify
+    renpy = running_bridge.renpy
+    calls = []
+
+    class Keymap:
+        def __init__(self, **keymap):
+            self.keymap = keymap
+
+    class Advance:
+        field = "step"
+
+        def __call__(self):
+            calls.append("advanced")
+
+    class ScreenDisplayable:
+        screen_name = ('tutorial', None)
+        layer = 'screens'
+        modal = False
+        hiding = False
+        widgets = {}
+
+    screen = ScreenDisplayable()
+    screen.children = [Keymap(mousedown_1=Advance(), K_ESCAPE=Advance())]
+    renpy.display.behavior.Keymap = Keymap
+    renpy.display.behavior.is_sensitive = lambda action: True
+    renpy.display.behavior.run = lambda action: action()
+    _arm_stable_interaction(running_bridge, generation=15)
+    renpy.game.context = lambda: types.SimpleNamespace(interacting=True,
+        scene_lists=types.SimpleNamespace(layers={'screens': [types.SimpleNamespace(displayable=screen)]}))
+    renpy.display.focus.focus_list[:] = []
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    assert snapshot["forward"] == "choose"
+    [control] = snapshot["controls"]
+    assert control["text"] == "click anywhere (mousedown_1)"
+    acted = running_bridge.client.act(interaction=15, control_id=control["id"])
+    assert acted["ok"] is True and calls == ["advanced"]
+
+
 def test_nested_interaction_replies_before_the_handler_returns(running_bridge):
     """ShowMenu outside the game menu runs a nested interaction inside the handler."""
     renpy = running_bridge.renpy

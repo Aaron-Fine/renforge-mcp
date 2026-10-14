@@ -4556,6 +4556,35 @@ init python:
                     "menu_index": None, "ordinal": len(pairs),
                     "action": _renforge_observe_format_action(value) if value is not None else None,
                     **geometry})
+        # A screen's `key "mousedown_1" action ...` makes a click anywhere its
+        # control (Stranded in Space's laptop tutorial advances only so). Act's
+        # key/ pseudo-controls press keyboard keys, so a left-click binding is
+        # listed as a control that runs its action.
+        keymap_type = getattr(behavior, "Keymap", None)
+        if isinstance(keymap_type, type):
+            for widget, layer, name, screen, _parents in inventory["nodes"]:
+                if screen is None or id(widget) in seen_widgets or not isinstance(widget, keymap_type):
+                    continue
+                bindings = getattr(widget, "keymap", None)
+                if not isinstance(bindings, builtins.dict):
+                    continue
+                for binding in ("mousedown_1", "mouseup_1"):
+                    action = bindings.get(binding)
+                    if action is None:
+                        continue
+                    try:
+                        enabled = bool(sensitivity(action)) if callable(sensitivity) else True
+                    except Exception:
+                        enabled = True
+                    add(types.SimpleNamespace(widget=widget, screen=screen, action=action), {
+                        "screen": name, "layer": layer, "role": "button",
+                        "text": "click anywhere (%s)" % binding,
+                        "enabled": enabled, "clickable": enabled, "covered": False,
+                        "semantic": True, "visible": True,
+                        "bounds": None, "bounds_reason": "a key binding: a click anywhere on the screen",
+                        "image_name": None, "menu_index": None, "ordinal": len(pairs),
+                        "action": _renforge_observe_format_action(action)})
+                    break
         unmatched = [entry for number, entry in enumerate(menu) if number not in matched_menu]
         # A choice outside the focus list (clipped, or in a transformed
         # viewport) usually still has its button in the screen's tree; that
@@ -5551,7 +5580,7 @@ init python:
                 "variant": variant,
                 "file": where.get("file"),
                 "line": where.get("line"),
-                "parameters": _renforge_explain_str(params) if params else None,
+                "parameters": _renforge_explain_parameters(params) if params else None,
                 "shown_on": shown_on,
             })
         screens.sort(key=_renforge_explain_sort_key)
@@ -5689,7 +5718,7 @@ init python:
             "variant": variant,
             "file": where.get("file"),
             "line": where.get("line"),
-            "parameters": _renforge_explain_str(getattr(screen, "parameters", None)) or None,
+            "parameters": _renforge_explain_parameters(getattr(screen, "parameters", None)) or None,
         }
         ast = getattr(screen, "ast", None)
         if ast is None:
@@ -5944,6 +5973,32 @@ init python:
         "Say", "Menu", "Scene", "Show", "Hide", "With", "Jump", "Call", "Return",
         "Pass", "UserStatement", "If", "While",
     ))
+
+
+    def _renforge_explain_parameters(params):
+        """A screen's parameters as written: ``(items, title="")``.
+
+        Ren'Py 8.3's Signature prints itself; 8.0-8.2's ParameterInfo keeps
+        (name, default) pairs and the *args/**kwargs names.
+        """
+        if params is None:
+            return None
+        text = _renforge_explain_str(params)
+        if text and not text.startswith("<"):
+            return text
+        pairs = getattr(params, "parameters", None)
+        if not _renforge_observe_is_sequence(pairs):
+            return text
+        parts = []
+        for pair in pairs:
+            if _renforge_observe_is_sequence(pair) and len(pair) == 2:
+                name, default = pair
+                parts.append(builtins.str(name) if default is None else "%s=%s" % (name, default))
+        if getattr(params, "extrapos", None):
+            parts.append("*" + builtins.str(params.extrapos))
+        if getattr(params, "extrakw", None):
+            parts.append("**" + builtins.str(params.extrakw))
+        return "(" + ", ".join(parts) + ")"
 
 
     def _renforge_explain_search(needle, limit):
