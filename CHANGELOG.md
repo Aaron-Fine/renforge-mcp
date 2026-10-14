@@ -153,6 +153,14 @@ versioning.
   or `OpenURL`, so they were gameplay controls beside the real Start button;
   they are chrome now. Nested action lists (`action [Play(...)], OpenURL(...)`)
   are flattened as Ren'Py runs them.
+- A button that shows or hides a screen alongside an interface action (Love
+  Sucks: Night Two's fast-forward button, `Show("fastHide"); Skip()`) is
+  chrome. `Skip()` turns sensitive only while skipping is allowed, so during
+  progression the button became a decision and stopped every continue at
+  once, though the observation afterwards said `forward="dismiss"`.
+- `crossed_truncated` is true only when events were lost: one failed event
+  poll no longer marks the transcript short when the next poll resumes from
+  the same cursor.
 - `label` names the label a story line falls through from when it sits below
   an empty-block label (`label start:` with the story unindented beneath, as
   in Found in Translation). Observations read `after_load` after a load there,

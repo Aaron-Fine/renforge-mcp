@@ -1135,6 +1135,37 @@ def test_process_failure_preserves_last_observation_without_confirming_an_end(mo
         assert result['process']['exit_code'] == exit_code
 
 
+def test_a_poll_that_fails_once_does_not_truncate_the_transcript(monkeypatch):
+    """Love Sucks: a busy main thread timed out one poll; the next resumed from the cursor."""
+    from types import SimpleNamespace
+    from renforge.tools import live
+    from renforge.bridge.client import BridgeError
+    polls = []
+
+    class Client:
+        _config = SimpleNamespace(host='127.0.0.1', port=1, token='poll-test')
+        def observe(self, **kwargs):
+            return _raw(interaction=3, observation_id='same')
+        def poll_events(self, cursor, **kwargs):
+            polls.append(cursor)
+            if len(polls) == 1:
+                raise BridgeError('timed out waiting for a frame')
+            return {'ok': True, 'events': [], 'cursor': cursor + 1}
+
+    client = Client()
+    monkeypatch.setitem(live._SESSIONS, live._key('/tmp/poll-retry'), SimpleNamespace(client=client, process=None))
+
+    def skip(_client, _fetch, *, between, **_kwargs):
+        between()
+        between()
+        return {'ok': True, 'stop': 'choose', 'steps': 2, 'observation': None}
+
+    monkeypatch.setattr(live, 'run_native_skip', skip)
+    result = live._advance_with_client('/tmp/poll-retry', client, max_steps=10, timeout=2, screenshot=False)
+    assert result['crossed_truncated'] is False
+    assert polls[1] == polls[0]  # the retry asked from the same cursor
+
+
 def test_observation_id_alone_guards_act():
     from renforge.interaction import validate_act_payload
 

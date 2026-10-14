@@ -1358,17 +1358,22 @@ def _advance_with_client(project_path: str, client: BridgeClient, *, max_steps: 
     since = _crossed_since(project_path, client)
     cursor = since
     truncated = False
+    # A failed poll loses nothing while a later one resumes from the cursor;
+    # the transcript is short only if events left the buffer first, or the
+    # last poll failed.
+    poll_failed = False
 
     def collect():
-        nonlocal cursor, truncated
+        nonlocal cursor, truncated, poll_failed
         try:
             polled = client.poll_events(cursor, deadline=min(wall_end, time.monotonic() + 1.0))
         except BridgeError:
-            truncated = True
+            poll_failed = True
             return
         if not isinstance(polled, dict) or polled.get("ok") is False:
-            truncated = True
+            poll_failed = True
             return
+        poll_failed = False
         events.extend(polled.get("events") or [])
         truncated = truncated or bool(polled.get("truncated"))
         next_cursor = polled.get("cursor")
@@ -1449,7 +1454,7 @@ def _advance_with_client(project_path: str, client: BridgeClient, *, max_steps: 
         result["_png"] = png
     collect()
     result["crossed"] = crossed_transcript(events, frames)
-    result["crossed_truncated"] = truncated
+    result["crossed_truncated"] = truncated or poll_failed
     _mark_crossed(project_path, client, cursor)
     result["elapsed_ms"] = int((time.monotonic() - started) * 1000)
     return result

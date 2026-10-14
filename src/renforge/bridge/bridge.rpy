@@ -4332,6 +4332,16 @@ init python:
                            and _renforge_engine_class(type(action)))]
         if not actions:
             return False
+        # Showing or hiding a screen beside an interface action is that
+        # button's own indicator: Love Sucks' fast-forward button runs
+        # Show("fastHide") with Skip(). Skip only turns sensitive while
+        # skipping is allowed, so as a decision it stopped progression (which
+        # allows skipping) at once.
+        if any(type(action).__name__ in _RENFORGE_CHROME_ACTIONS and _renforge_engine_class(type(action))
+               for action in actions):
+            actions = [action for action in actions
+                       if not (type(action).__name__ in ("Show", "Hide", "ToggleScreen")
+                               and _renforge_engine_class(type(action)))]
         for action in actions:
             cls = type(action)
             if cls.__name__ not in _RENFORGE_CHROME_ACTIONS:

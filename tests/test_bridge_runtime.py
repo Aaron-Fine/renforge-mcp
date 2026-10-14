@@ -6668,6 +6668,12 @@ def test_a_click_sound_does_not_make_a_menu_button_a_decision(running_bridge):
     assert chrome([play, open_url]) is True
     assert chrome([play, jump]) is False
     assert chrome([play]) is False  # a sound button on its own is the game's
+    # A skip button that also shows its indicator screen (Love Sucks: Night Two).
+    source = "".join("class %s(object):\n    screen = 'x'\n    def __call__(self):\n        return None\n" % name
+                     for name in ("Skip", "Show"))
+    exec(compile(source, "renpy/common/00action_other.rpy", "exec"), namespace)
+    assert chrome([namespace["Show"](), namespace["Skip"]()]) is True
+    assert chrome([namespace["Show"]()]) is False  # showing a screen alone is gameplay
     # Ren'Py runs nested action lists: action [Play(...)], OpenURL(...)
     action_list = running_bridge.globs["_renforge_action_list"]
     assert chrome(action_list(([play], open_url))) is True
