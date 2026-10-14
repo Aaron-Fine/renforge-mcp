@@ -189,6 +189,12 @@ versioning.
   which restarts with the interaction; a game that restarts it repeatedly
   kept a 1 s pause "unstable" until `act` ran out of time (Secrets and
   Promises).
+- Screenshots are bounded to 384 KiB about 5x faster (2.7 s to 0.6 s for a
+  1080p frame): PNGs are encoded without `optimize` and resized once to an
+  estimated size instead of in 3/4 steps. A time-budget stop reserves 2 s for
+  its final screenshot and transcript, and that encode used to take longer,
+  so `act` returned no final observation and `crossed_truncated=true`
+  (Nightmares of the Moon's unskippable intro).
 - When nothing else moves the game on, interface buttons on the
   interaction's own screen are its choices. The Power of Truth opens with a
   called disclaimer whose buttons are `MainMenu()` and `Quit()`; both were
