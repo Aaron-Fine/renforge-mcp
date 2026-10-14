@@ -1053,6 +1053,25 @@ def test_settle_rejects_departing_stable_frame(monkeypatch):
     assert result["interaction"] == 2
 
 
+def test_settle_accepts_a_screen_that_keeps_changing_within_one_interaction():
+    """Desert Stalker's music room: a timer rebuilds its buttons every frame."""
+    from renforge.progression import settle
+    import itertools
+    import time
+    counter = itertools.count()
+    result, status, error = settle(
+        lambda shot: _raw(interaction=3, observation_id="frame-%d" % next(counter)),
+        time.monotonic() + 2, screenshot=True)
+    assert status == "ready" and error is None
+    assert result["interaction"] == 3
+    # Unstable frames do not count toward the run.
+    flicker = itertools.count()
+    result, status, _error = settle(
+        lambda shot: _raw(interaction=3, observation_id="f%d" % next(flicker), stable=False),
+        time.monotonic() + 0.3, screenshot=False)
+    assert status == "timeout" and result is None
+
+
 def test_dismiss_progression_stops_before_unclassified_input():
     raw = _raw(omitted={'unclassified': True, 'focus_truncated': False})
     result, dismisses = _run([raw])

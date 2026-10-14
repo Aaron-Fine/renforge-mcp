@@ -196,6 +196,10 @@ versioning.
   its final screenshot and transcript, and that encode used to take longer,
   so `act` returned no final observation and `crossed_truncated=true`
   (Nightmares of the Moon's unskippable intro).
+- The final observation of `act` settles on a screen that keeps changing
+  within one stable interaction (a music room whose timer rebuilds its
+  buttons, Desert Stalker). It waited for two identical observations that
+  never came, so each act took the full 30 s and returned no observation.
 - When nothing else moves the game on, interface buttons on the
   interaction's own screen are its choices. The Power of Truth opens with a
   called disclaimer whose buttons are `MainMenu()` and `Quit()`; both were

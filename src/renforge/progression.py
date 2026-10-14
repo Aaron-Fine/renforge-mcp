@@ -35,17 +35,33 @@ def failure_status(error: Exception, process=None) -> str:
     return "transport_error"
 
 
+# Stable observations of one interaction that still differ (a screen whose
+# timer rebuilds its buttons, such as a music room's playback bar) settle
+# after this many in a row.
+SETTLE_SAME_INTERACTION = 4
+
+
 def settle(fetch, deadline, *, screenshot=True):
-    """Require two matching stable observations after progression is disabled."""
+    """Require two matching stable observations after progression is disabled.
+
+    A screen that keeps changing within one stable interaction never matches
+    itself, so a run of stable observations of that interaction is enough.
+    """
     previous = None
     last = None
+    streak = 0
     while time.monotonic() < deadline:
         raw = fetch(False)
         if raw.get("ok") is False:
             return None, raw.get("status", "transport_error"), raw.get("error")
+        before = last
         last = classify(raw)
         identity = (last["interaction"], last["observation_id"])
-        if last["stable"] and identity == previous:
+        if last["stable"] and before is not None and before["stable"] and before["interaction"] == last["interaction"]:
+            streak += 1
+        else:
+            streak = 0
+        if last["stable"] and (identity == previous or streak >= SETTLE_SAME_INTERACTION - 1):
             if not screenshot:
                 return last, "ready", None
             shot = fetch(True)
@@ -53,6 +69,8 @@ def settle(fetch, deadline, *, screenshot=True):
                 return last, shot.get("status", "transport_error"), shot.get("error")
             framed = classify(shot)
             if framed["stable"] and (framed["interaction"], framed["observation_id"]) == identity:
+                return framed, "ready", None
+            if framed["stable"] and framed["interaction"] == last["interaction"] and identity != previous:
                 return framed, "ready", None
             last = framed
             previous = None
