@@ -692,7 +692,7 @@ def test_allowlisted_bridge_startup_error_fails_before_timeout(monkeypatch, tmp_
 
 
 def test_game_error_report_during_startup_fails_before_timeout(monkeypatch, tmp_path: Path) -> None:
-    """Astreon: a translation error at init shows Ren'Py's error screen, so no bridge."""
+    """A translation error at init shows Ren'Py's error screen, so no bridge."""
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)
     report = (
@@ -722,7 +722,7 @@ def test_game_error_report_during_startup_fails_before_timeout(monkeypatch, tmp_
 
 
 def test_a_launch_that_compiled_scripts_and_stopped_on_an_error_is_retried_once(monkeypatch, tmp_path: Path) -> None:
-    """Eden, Found in Translation: the compiling launch raises, the next one loads fine."""
+    """The compiling launch raises, the next one loads fine."""
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)
     (project_root / "game").mkdir(exist_ok=True)
@@ -766,7 +766,7 @@ def test_a_launch_that_compiled_scripts_and_stopped_on_an_error_is_retried_once(
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the Wayland driver default is Linux-only")
 def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkeypatch, tmp_path: Path) -> None:
-    """Inanna's Revenge, Island Echoes: a transparent presplash needs a shaped window."""
+    """A transparent presplash needs a shaped window."""
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.delenv("SDL_VIDEODRIVER", raising=False)
@@ -820,7 +820,7 @@ def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkey
 
 
 def test_a_launch_whose_scripts_do_not_parse_fails_even_with_the_bridge_up(monkeypatch, tmp_path: Path) -> None:
-    """Fleeting Memories: the compiling launch shows _parse_errors; the bridge still starts."""
+    """The compiling launch shows _parse_errors; the bridge still starts."""
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)
     (project_root / "game").mkdir(exist_ok=True)

@@ -567,7 +567,7 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
     if not decisions and say_dismiss is None:
         # Nothing else moves the game on, so interface actions on this
         # interaction's own screen are its choices: a splash disclaimer whose
-        # buttons are MainMenu() and Quit() (The Power of Truth). A HUD kept
+        # buttons are MainMenu() and Quit(). A HUD kept
         # up, the quick menu, and Ren'Py's game menu keep them as chrome.
         own = {screen["name"] for screen in screens if not screen["kept_up"]}
         promoted = [control for control in chrome

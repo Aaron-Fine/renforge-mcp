@@ -970,7 +970,7 @@ def test_observe_dismiss_guard_and_stale_act(running_bridge):
 
     # The label is the one holding the running statement. The last label
     # entered goes stale after a call returns or an after_load label runs
-    # others (Come Home); Ren'Py's own _call_ return points are not labels a
+    # others; Ren'Py's own _call_ return points are not labels a
     # player is in.
     class Node:
         def __init__(self, line, block=()):
@@ -996,7 +996,7 @@ def test_observe_dismiss_guard_and_stale_act(running_bridge):
     assert explain("game/script.rpy", 20) is None
     assert explain("game/script.rpy", 31) == "helper"
     # A story line below an empty-block label runs by falling through it
-    # (Found in Translation: `label start:` with the story unindented below).
+    # (`label start:` with the story unindented below).
     assert explain("game/script.rpy", 20, falls_through=True) == "gate"
     assert explain("game/script.rpy", 0, falls_through=True) is None
 
@@ -1683,7 +1683,7 @@ def test_viewport_content_is_readout_not_its_label(running_bridge):
     # A button inside the viewport is still a control, and its text is not readout.
     assert any(c["role"] == "button" for c in snapshot["controls"])
 
-    # A viewport outside the focus list (TDI's tips panel) is found by its
+    # A viewport outside the focus list (a tips panel) is found by its
     # adjustments; its content is still readout, not its label.
     renpy.display.focus.focus_list[:] = [focus]
     snapshot = classify(running_bridge.client.observe(screenshot=False))
@@ -5827,7 +5827,7 @@ def test_bounded_native_skip_stops_at_decisions_and_restores_preferences(running
 
 
 def test_progression_clicks_through_lines_when_the_game_turns_skipping_off(running_bridge, monkeypatch):
-    """Come Home sets ``_skipping = False`` in battles; a player still clicks each line."""
+    """A game sets ``_skipping = False`` in battles; a player still clicks each line."""
     bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
     callback = renpy.config.start_interact_callbacks[0]
     callback()
@@ -6218,7 +6218,7 @@ def test_custom_displayables_holding_renpy_actions_are_controls(running_bridge):
 
 
 def test_custom_displayables_keeping_actions_under_a_click_attribute_are_controls(running_bridge):
-    """Academy34's Interactable keeps a list of Actions in ``click_action``."""
+    """A game's Interactable keeps a list of Actions in ``click_action``."""
     from renforge.observe import classify
     renpy = running_bridge.renpy
 
@@ -6365,7 +6365,7 @@ def test_unfocused_menu_actions_are_sensitive_distinct_and_guarded(running_bridg
 
 
 def test_a_choice_the_screen_draws_without_an_action_is_disabled(running_bridge):
-    """TDI draws a disabled=... item as `textbutton caption action None sensitive False`."""
+    """A choice screen draws a disabled=... item as `textbutton caption action None sensitive False`."""
     from renforge.observe import classify
     renpy = running_bridge.renpy
     calls = []
@@ -6385,11 +6385,11 @@ def test_a_choice_the_screen_draws_without_an_action_is_disabled(running_bridge)
         children = []
         widgets = {}
 
-    nude, done = Action("nude"), Action("continue")
+    locked_action, done = Action("locked"), Action("continue")
     screen = ScreenDisplayable()
-    screen.scope = {'items': [types.SimpleNamespace(caption='Ask her to skinny-dip', action=nude),
+    screen.scope = {'items': [types.SimpleNamespace(caption='Take the locked path', action=locked_action),
                               types.SimpleNamespace(caption='Continue', action=done)]}
-    locked = _FakeWidget('Ask her to skinny-dip')
+    locked = _FakeWidget('Take the locked path')
     locked.clicked = None
     button = _FakeWidget('Continue')
     button.clicked = button.action = done
@@ -6404,17 +6404,17 @@ def test_a_choice_the_screen_draws_without_an_action_is_disabled(running_bridge)
     renpy.display.behavior.run = lambda action: action()
     snapshot = classify(running_bridge.client.observe(screenshot=False))
     controls = {control['text']: control for control in snapshot['controls']}
-    assert sorted(controls) == ['Ask her to skinny-dip', 'Continue']
-    assert controls['Ask her to skinny-dip']['enabled'] is False
+    assert sorted(controls) == ['Continue', 'Take the locked path']
+    assert controls['Take the locked path']['enabled'] is False
     assert controls['Continue']['enabled'] is True
-    assert controls['Ask her to skinny-dip']['id'].startswith('choice/item/')
-    assert 'Ask her to skinny-dip' not in [item['text'] for item in snapshot.get('readout', [])]
-    refused = running_bridge.client.act(interaction=12, control_id=controls['Ask her to skinny-dip']['id'])
+    assert controls['Take the locked path']['id'].startswith('choice/item/')
+    assert 'Take the locked path' not in [item['text'] for item in snapshot.get('readout', [])]
+    refused = running_bridge.client.act(interaction=12, control_id=controls['Take the locked path']['id'])
     assert refused['ok'] is False and calls == []
 
 
 def test_a_choice_button_that_wraps_its_item_in_a_function_is_the_item(running_bridge):
-    """Light of my Life: `textbutton "1. " + i.caption action Function(menu_choice_intercept, menu_item=i)`."""
+    """`textbutton "1. " + i.caption action Function(menu_choice_intercept, menu_item=i)`."""
     from renforge.observe import classify
     renpy = running_bridge.renpy
     calls = []
@@ -6475,7 +6475,7 @@ def test_a_choice_button_that_wraps_its_item_in_a_function_is_the_item(running_b
 
 
 def test_explain_writes_old_screen_parameters_as_source(running_bridge):
-    """Ren'Py 8.1 (Stranded in Space): ParameterInfo has no readable str()."""
+    """Ren'Py 8.1: ParameterInfo has no readable str()."""
     fmt = running_bridge.globs["_renforge_explain_parameters"]
 
     class ParameterInfo:
@@ -6488,7 +6488,7 @@ def test_explain_writes_old_screen_parameters_as_source(running_bridge):
 
 
 def test_a_screen_key_bound_to_a_click_is_a_control(running_bridge):
-    """Stranded in Space: a tutorial screen advances only on `key "mousedown_1"`."""
+    """A tutorial screen advances only on `key "mousedown_1"`."""
     from renforge.observe import classify
     renpy = running_bridge.renpy
     calls = []
@@ -6640,7 +6640,7 @@ def test_an_action_list_that_takes_a_save_screenshot_is_menu_chrome(running_brid
 
 
 def test_a_dynamic_image_reads_as_the_image_it_resolved_to(running_bridge):
-    """Inanna's Revenge: an imagebutton idle of "[player_skin]_avatar_idle"."""
+    """An imagebutton idle of "[player_skin]_avatar_idle"."""
     filename = running_bridge.globs["_renforge_displayable_filename"]
 
     class ImageReference:
@@ -6657,7 +6657,7 @@ def test_a_dynamic_image_reads_as_the_image_it_resolved_to(running_bridge):
 
 
 def test_a_click_sound_does_not_make_a_menu_button_a_decision(running_bridge):
-    """Astreon's menu buttons each run Play("sound", ...) before their real action."""
+    """Menu buttons that each run Play("sound", ...) before their real action."""
     chrome = running_bridge.globs["_renforge_engine_chrome_action"]
     namespace = {}
     source = "".join("class %s(object):\n    screen = 'load'\n    def __call__(self):\n        return None\n" % name
@@ -6668,7 +6668,7 @@ def test_a_click_sound_does_not_make_a_menu_button_a_decision(running_bridge):
     assert chrome([play, open_url]) is True
     assert chrome([play, jump]) is False
     assert chrome([play]) is False  # a sound button on its own is the game's
-    # A skip button that also shows its indicator screen (Love Sucks: Night Two).
+    # A skip button that also shows its indicator screen.
     source = "".join("class %s(object):\n    screen = 'x'\n    def __call__(self):\n        return None\n" % name
                      for name in ("Skip", "Show"))
     exec(compile(source, "renpy/common/00action_other.rpy", "exec"), namespace)
@@ -6774,7 +6774,7 @@ def test_progression_hands_back_when_it_comes_round_to_a_line_again(running_brid
         running_bridge.globs["_renforge_progress_tick"]()
 
     # A line paused with {w} shows again from the same run of its say
-    # statement (Ravager's kobold lines): not a loop.
+    # statement (a creature's repeated lines): not a loop.
     next_interaction()
     next_interaction()
     assert bridge.progression["active"] is True
@@ -6786,10 +6786,10 @@ def test_progression_hands_back_when_it_comes_round_to_a_line_again(running_brid
 
 
 def test_a_subroutine_line_called_from_another_place_is_not_a_loop(running_bridge, monkeypatch):
-    """Secrets and Promises: each scene line `call Moan(sar)` says "*Moans*" from one label."""
+    """Each scene line `call Voice(sar)` says "*Sighs*" from one label."""
     bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
-    raw["statement"], raw["label"] = {"file": "game/a.rpy", "line": 663}, "Moan"
-    raw["dialogue"] = {"who": "Sarah", "what": "*Moans*"}
+    raw["statement"], raw["label"] = {"file": "game/a.rpy", "line": 663}, "Voice"
+    raw["dialogue"] = {"who": "Sarah", "what": "*Sighs*"}
     bridge.progression["max_steps"] = 10
     stack = []
     monkeypatch.setattr(renpy, "game", types.SimpleNamespace(
@@ -6802,16 +6802,16 @@ def test_a_subroutine_line_called_from_another_place_is_not_a_loop(running_bridg
         raw["interaction"] = bridge.observe_generation
         running_bridge.globs["_renforge_progress_tick"]()
 
-    call_from("_call_Moan_1")
-    call_from("_call_Moan_2")
+    call_from("_call_Voice_1")
+    call_from("_call_Voice_2")
     assert bridge.progression["active"] is True
     # Called again from the same place: the story went round.
-    call_from("_call_Moan_2")
+    call_from("_call_Voice_2")
     assert bridge.progression["active"] is False and bridge.progression["stop"] == "loop"
 
 
 def test_a_short_pause_is_not_pending_forever_when_the_interaction_keeps_restarting(running_bridge, monkeypatch):
-    """Secrets and Promises: a 1 s pause read as pending for the whole 30 s budget."""
+    """A 1 s pause read as pending for the whole 30 s budget."""
     renpy = running_bridge.renpy
 
     class PauseBehavior:
@@ -6901,7 +6901,7 @@ def test_screens_a_save_restores_count_as_kept_up(running_bridge, monkeypatch):
     screens = globs["_renforge_collect_interaction"](inventory)[0]
     assert {s["name"]: s["kept_up"] for s in screens} == {"character_menu_button": True, "say": False}
 
-    # A restored screen Ren'Py rebuilds before the first interaction (IA2's
+    # A restored screen Ren'Py rebuilds before the first interaction (a game's
     # quick menu, after changing language on load) still counts by name.
     bridge.screen_first_seen = {}
     bridge.restored_screens = (40, {("character_menu_button", "screens")})
@@ -6909,7 +6909,7 @@ def test_screens_a_save_restores_count_as_kept_up(running_bridge, monkeypatch):
     inventory = {"nodes": [(rebuilt, "screens", None, None, ())], "truncated": False}
     assert globs["_renforge_collect_interaction"](inventory)[0][0]["kept_up"] is True
 
-    # A game that assigns its own after_load list during init (IA2) gets the
+    # A game that assigns its own after_load list during init gets the
     # hook back at the next interaction.
     renpy.config.after_load_callbacks = ["game's own"]
     renpy.config.start_interact_callbacks[0]()
@@ -7010,12 +7010,12 @@ def test_explain_reads_state_as_data_without_running_game_code(running_bridge):
 
     Calendar.viewed = False  # a class default the instance never set
     Calendar.week = property(lambda self: (_ for _ in ()).throw(AssertionError("no code may run")))
-    store.calendar, store.lorraine_rp, store.unlocked = Calendar(), 12, {"pool"}
+    store.calendar, store.friend_rp, store.unlocked = Calendar(), 12, {"pool"}
     store.passTime = lambda: None
-    reply = running_bridge.client.explain(variables=["lorraine_rp", "calendar.dayCount", "calendar",
+    reply = running_bridge.client.explain(variables=["friend_rp", "calendar.dayCount", "calendar",
                                                      "passTime", "missing", "1bad"])
     got = reply["variables"]
-    assert got["lorraine_rp"] == {"value": 12}
+    assert got["friend_rp"] == {"value": 12}
     assert got["calendar.dayCount"] == {"value": 3}
     assert got["calendar"]["value"]["fields"] == {"dayCount": 3, "period": "Morning"}
     assert "not data" in got["passTime"]["error"]
@@ -7032,12 +7032,12 @@ def test_explain_reads_state_as_data_without_running_game_code(running_bridge):
     assert ran["ran.scene_59"] == {"value": 59}
 
     names = running_bridge.globs["_renforge_condition_names"]
-    assert set(names("if calendar.dayCount > 7 and not calendar.isNight() and lorraine_rp >= 10")) == {
-        "calendar.dayCount", "lorraine_rp"}
+    assert set(names("if calendar.dayCount > 7 and not calendar.isNight() and friend_rp >= 10")) == {
+        "calendar.dayCount", "friend_rp"}
     assert names("persistent.mod_tips_enabled and _choice_rec") == ["persistent.mod_tips_enabled", "_choice_rec"]
     values = running_bridge.globs["_renforge_explain_condition_values"](
-        {"conditions": ["if lorraine_rp >= 10", "if event_available('talk', 'yard')"]})
-    assert values == {"lorraine_rp": 12}
+        {"conditions": ["if friend_rp >= 10", "if event_available('talk', 'yard')"]})
+    assert values == {"friend_rp": 12}
     # A loop variable is the loop's own; an enum reads as its member.
     import enum
 
@@ -7086,7 +7086,7 @@ def test_a_bar_that_is_not_adjustable_only_shows_a_value(running_bridge):
 
 
 def test_input_prompt_is_the_text_as_drawn(running_bridge):
-    """Mythos asks "(Leave blank for [mc_nick])"; the player sees the name."""
+    """A prompt asks "(Leave blank for [mc_nick])"; the player sees the name."""
     renpy = running_bridge.renpy
     renpy.substitute = lambda value: value.replace("[mc_nick]", "Kyle")
     prompt = running_bridge.globs["_renforge_input_prompt"]
@@ -7095,7 +7095,7 @@ def test_input_prompt_is_the_text_as_drawn(running_bridge):
 
 
 def test_focus_masked_buttons_report_the_region_a_click_reaches(running_bridge, monkeypatch):
-    """Mythos's suspect board: full-screen buttons whose focus_mask is one photo."""
+    """A suspect board: full-screen buttons whose focus_mask is one photo."""
     globs = running_bridge.globs
     photo = types.SimpleNamespace(style=types.SimpleNamespace(focus_mask="tarapic mask.webp"))
     plain = types.SimpleNamespace(style=types.SimpleNamespace(focus_mask=None))
@@ -7132,7 +7132,7 @@ def test_focus_masked_buttons_report_the_region_a_click_reaches(running_bridge, 
 
 
 def test_a_masked_button_on_its_own_modal_screen_is_not_covered(running_bridge, monkeypatch):
-    """Nightmares of the Moon: `call screen` (modal) of full-screen masked imagebuttons.
+    """`call screen` (modal) of full-screen masked imagebuttons.
 
     Points the mask leaves open fall to the modal screen itself, which is not
     a screen above the button.
@@ -7162,7 +7162,7 @@ def test_a_masked_button_on_its_own_modal_screen_is_not_covered(running_bridge, 
 
 
 def test_button_label_skips_text_the_game_keeps_hidden(running_bridge, monkeypatch):
-    """Heaven's Door menu buttons hold a hover card whose text is at alpha 0."""
+    """Menu buttons hold a hover card whose text is at alpha 0."""
     renpy = running_bridge.renpy
     globs = running_bridge.globs
 
