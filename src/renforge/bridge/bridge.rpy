@@ -539,7 +539,17 @@ init python:
     def _renforge_h_get_audio_state_handler(payload):
         return {"ok": True, "channels": _renforge_h_get_audio_state(payload)}
 
+    def _renforge_eval_refused():
+        """eval and set_var run arbitrary code; a launch can switch them off."""
+        if os.environ.get("RENFORGE_BRIDGE_EVAL", "on") == "off":
+            return {"ok": False, "error": "eval_disabled",
+                    "message": "This session's bridge does not run code (no debug or editor toolset)."}
+        return None
+
     def _renforge_h_eval(payload):
+        refused = _renforge_eval_refused()
+        if refused:
+            return refused
         expr = (payload or {}).get("expr", "")
         value = eval(expr, {"__builtins__": __builtins__}, vars(renpy.store))
         return {"expr": expr, "value": _renforge_jsonable(value)}
@@ -549,6 +559,9 @@ init python:
         return {"name": name, "value": _renforge_jsonable(getattr(renpy.store, name))}
 
     def _renforge_h_set_var(payload):
+        refused = _renforge_eval_refused()
+        if refused:
+            return refused
         name = (payload or {}).get("name")
         value = (payload or {}).get("value")
         setattr(renpy.store, name, value)
@@ -1282,6 +1295,9 @@ init python:
                     "restored_label": restored_label,
                 }
             return result
+        # A command that ends the game or reloads it cancels any progression in
+        # flight. The agent never sees "cancelled" for a quit: the act that was
+        # progressing reports the process exit (exited) instead.
         if action == "reload_script":
             _renforge_progress_finish("cancelled")
             _renforge_invoke(renpy.reload_script)
@@ -1725,22 +1741,31 @@ init python:
             return ("displayable", widget)
         return "none"
 
+    # Where a click is tried on a control, in order: the center, then the
+    # corners and edge midpoints, for a control partly behind another screen
+    # or with a transparent middle. Probing stops at the first point that
+    # reaches the control, so most controls cost one engine hit test.
+    _RENFORGE_PROBE_POINTS = ((0.5, 0.5), (0.1, 0.1), (0.9, 0.1), (0.1, 0.9),
+                              (0.9, 0.9), (0.5, 0.1), (0.5, 0.9), (0.1, 0.5), (0.9, 0.5))
+
+    # Hit tests for one grid over the focus-masked buttons that no probe
+    # reached (a full-screen button whose mask is one photo). It runs once per
+    # interaction and is cached; on a 1920x1080 screen it tests a point about
+    # every 55 px. One hit test costs about 50 microseconds.
+    _RENFORGE_MASK_SCAN_POINTS = 700
+
+
     def _renforge_point_candidates(bounds):
         if not bounds or bounds.get("width", 0) <= 0 or bounds.get("height", 0) <= 0:
             return []
         x, y, w, h = (bounds[key] for key in ("x", "y", "width", "height"))
-        return [(int(x+min(w-1, w*px)), int(y+min(h-1, h*py)))
-                for px, py in ((0.5, 0.5), (0.1, 0.1), (0.9, 0.1), (0.1, 0.9),
-                               (0.9, 0.9), (0.5, 0.1), (0.5, 0.9), (0.1, 0.5), (0.9, 0.5))]
+        return [(int(x+min(w-1, w*px)), int(y+min(h-1, h*py))) for px, py in _RENFORGE_PROBE_POINTS]
 
 
     def _renforge_engine_focus_ids():
         focus_module = getattr(renpy.display, "focus", None)
         return {id(getattr(focus, "widget", None))
                 for focus in getattr(focus_module, "focus_list", ()) or ()}
-
-
-    _RENFORGE_MASK_SCAN_POINTS = 3000
 
 
     def _renforge_has_focus_mask(widget):
@@ -1836,10 +1861,16 @@ init python:
                 element["covered"] = bool(blocked)
                 element["clickable"] = enabled and not blocked
                 continue
-            points = _renforge_point_candidates(element.get("bounds"))
-            hits = [_renforge_render_hit(x, y) for x, y in points]
-            point = next((p for p, hit in zip(points, hits)
-                          if isinstance(hit, tuple) and hit[1] is widget), None)
+            hits = []
+            point = None
+            for candidate in _renforge_point_candidates(element.get("bounds")):
+                hit = _renforge_render_hit(*candidate)
+                hits.append(hit)
+                if isinstance(hit, tuple) and hit[1] is widget:
+                    point = candidate
+                    break
+                if hit == "unavailable":
+                    break
             if point is not None:
                 element["click_point"] = {"x": point[0], "y": point[1]}
                 covered = False

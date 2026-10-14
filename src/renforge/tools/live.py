@@ -27,6 +27,7 @@ from ..autopilot import autopilot as _autopilot
 from ..observe import apply_screenshot
 from ..interaction import classify, crossed_transcript, validate_act_payload, _real_number, progression_boundary
 from ..progression import failure_status, process_exit, run_advance_until, run_native_skip, settle
+from ..toolsets import bridge_eval_allowed
 from ..bridge.client import BridgeClient, BridgeError
 from ..bridge.launcher import (
     BridgeSession,
@@ -652,9 +653,15 @@ def launch_game(
         if warp is not None:
             launch_kwargs["warp"] = warp
         launch_kwargs["savedir"] = savedir
+        extra_env: dict[str, str] = {}
         if start_label:
             # The bridge leaves for this label at the first safe interaction.
-            launch_kwargs["extra_env"] = {"RENFORGE_BRIDGE_START_LABEL": start_label}
+            extra_env["RENFORGE_BRIDGE_START_LABEL"] = start_label
+        if not bridge_eval_allowed():
+            # No enabled tool runs code in the game, so its bridge refuses to.
+            extra_env["RENFORGE_BRIDGE_EVAL"] = "off"
+        if extra_env:
+            launch_kwargs["extra_env"] = extra_env
         if timeout is not None:
             launch_kwargs["startup_timeout"] = float(timeout)
         launch_signature = inspect.signature(launch_with_bridge)

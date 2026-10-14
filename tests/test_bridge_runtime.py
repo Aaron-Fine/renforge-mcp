@@ -6834,6 +6834,19 @@ def test_a_short_pause_is_not_pending_forever_when_the_interaction_keeps_restart
     assert pending() is False
 
 
+def test_a_session_can_switch_off_running_code(running_bridge, monkeypatch):
+    """A play-only server launches games whose bridge refuses eval and set_var."""
+    renpy = running_bridge.renpy
+    renpy.store.score = 7
+    assert running_bridge.client.eval_expr("score + 1") == 8
+    monkeypatch.setenv("RENFORGE_BRIDGE_EVAL", "off")
+    for command, payload in (("eval", {"expr": "score + 1"}), ("set_var", {"name": "score", "value": 9})):
+        reply = running_bridge.client.request(command, payload)
+        assert reply["error"] == "eval_disabled"
+    assert renpy.store.score == 7
+    assert running_bridge.client.get_var("score") == 7  # reading a value is not running code
+
+
 def test_the_bridge_keeps_the_last_exception_for_the_error_screen(running_bridge):
     import sys
     renpy = running_bridge.renpy
@@ -7106,7 +7119,7 @@ def test_focus_masked_buttons_report_the_region_a_click_reaches(running_bridge, 
     point = masked["click_point"]
     assert 1200 <= point["x"] < 1500 and 100 <= point["y"] < 500
     bounds = masked["bounds"]
-    # Encloses the photo, within one grid step (about 28 px here).
+    # Encloses the photo, within one grid step.
     assert 1170 <= bounds["x"] <= 1200 and 70 <= bounds["y"] <= 100
     assert 1500 <= bounds["x"] + bounds["width"] <= 1530 and 500 <= bounds["y"] + bounds["height"] <= 530
     # Without a mask, the probes' verdict stands.

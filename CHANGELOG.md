@@ -239,6 +239,13 @@ versioning.
   `key/` pseudo-controls press keyboard keys only.
 - `explain` writes a Ren'Py 8.0-8.2 screen's parameters as source
   (`(items, title="")`), not `<renpy.ast.ParameterInfo object ...>`.
+- A server whose toolsets include neither `debug` nor `editor` launches games
+  whose bridge refuses `eval` and `set_var` (`eval_disabled`), so a play-only
+  server offers no way to run code through the bridge.
+- Coverage probes stop at the first point that reaches a control (usually its
+  center), and the focus-mask grid uses 700 hit tests instead of 3000. On
+  Mythos's suspect board an interaction's probes fell from 3047 to 835
+  (0.16 s to 0.04 s) with every photo still found.
 - Action summaries name a mangled common-library class as written:
   `MusicRoomPlay("...")`, not `_m1_00musicroom__MusicRoomPlay("...")`.
 - When nothing else moves the game on, interface buttons on the

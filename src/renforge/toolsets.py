@@ -124,3 +124,23 @@ def allowed_tools(known: Iterable[str], environ: Mapping[str, str] | None = None
             f"Toolsets: {', '.join(TOOLSETS)}, all."
         )
     return names & known_set
+
+
+# Groups whose tools run arbitrary expressions in the game (renforge_eval,
+# renforge_set_var, wait_until and scenario conditions) or that the Live
+# Editor drives through the bridge's eval.
+EVAL_TOOLSETS = frozenset({"debug", "editor"})
+
+
+def bridge_eval_allowed(environ: Mapping[str, str] | None = None) -> bool:
+    """Whether launched games should accept the bridge's eval and set_var.
+
+    A server limited to groups that never evaluate code (``play``, say) starts
+    games whose bridge refuses both, so no code can be run through it.
+    """
+    env = os.environ if environ is None else environ
+    raw = env.get(TOOLSETS_ENV, "").strip()
+    tokens = {part.strip() for part in raw.split(",") if part.strip()}
+    if not tokens or "all" in tokens:
+        return True
+    return bool(tokens & EVAL_TOOLSETS)

@@ -29,3 +29,35 @@ def test_server_lists_only_the_play_loop(monkeypatch):
 
     listed = {tool.name for tool in asyncio.run(create_app().list_tools())}
     assert listed == set(TOOLSETS["play"])
+
+
+def test_only_servers_with_a_code_running_tool_let_games_run_code():
+    from renforge.toolsets import bridge_eval_allowed
+
+    assert bridge_eval_allowed({}) is True
+    assert bridge_eval_allowed({"RENFORGE_TOOLSETS": "all"}) is True
+    assert bridge_eval_allowed({"RENFORGE_TOOLSETS": "play, debug"}) is True
+    assert bridge_eval_allowed({"RENFORGE_TOOLSETS": "play,editor"}) is True
+    assert bridge_eval_allowed({"RENFORGE_TOOLSETS": "play"}) is False
+    assert bridge_eval_allowed({"RENFORGE_TOOLSETS": "play, live, docs"}) is False
+    # Every tool that evaluates code is in one of those groups.
+    for tool in ("renforge_eval", "renforge_set_var", "renforge_wait_until", "renforge_run_scenario", "renforge_editor"):
+        assert any(tool in TOOLSETS[group] for group in ("debug", "editor"))
+
+
+def test_a_play_only_server_launches_games_that_refuse_eval(monkeypatch, tmp_path):
+    from renforge.tools import live
+
+    seen = []
+
+    def fake_launch(_sdk, _project, **kwargs):
+        seen.append(dict(kwargs.get("extra_env") or {}))
+        raise live.LaunchError("STOP_HERE", "stop", phase="test")
+
+    (tmp_path / "game").mkdir()
+    monkeypatch.setattr(live, "launch_with_bridge", fake_launch)
+    monkeypatch.setattr(live, "get_or_install_sdk", lambda *a, **k: object())
+    for toolsets in ("play", "play,debug"):
+        monkeypatch.setenv("RENFORGE_TOOLSETS", toolsets)
+        live.launch_game(str(tmp_path), editor=False)
+    assert [env.get("RENFORGE_BRIDGE_EVAL") for env in seen] == ["off", None]

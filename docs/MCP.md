@@ -880,6 +880,14 @@ change the response. Metrics report `render_time_ms`, an FPS estimate,
 registered channel with its playing filename, volume, and pause state when
 Ren'Py exposes them.
 
+Running code in the game (`renforge_eval`, `renforge_set_var`, and the
+conditions of `renforge_wait_until` and `renforge_run_scenario`) needs the
+bridge's `eval`. A server whose toolsets include neither `debug` nor `editor`
+(`RENFORGE_TOOLSETS=play`, say) launches games whose bridge refuses it
+(`eval_disabled`); reading variables and the play loop are unaffected.
+`renforge_mod` still writes scripts on purpose; under `RENFORGE_POLICY=enforce`
+writing one needs `authorize=true`.
+
 `renforge_inspect_screen` is read-only and reports `active=false` clearly when
 the requested screen is not shown. There is intentionally no separate style
 tool yet: use `renforge_eval` as the controlled style-introspection escape
