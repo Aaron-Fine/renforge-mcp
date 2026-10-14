@@ -165,7 +165,7 @@ class LaunchIsolation:
         if self.savedir_mode == "path" and self.savedir is not None:
             return path_exposes_user_saves(self.savedir)
         if self.home_mode == "path" and self.home is not None:
-            return path_is_host_home(self.home)
+            return home_exposes_user_saves(self.home)
         return False
 
     def command_args(self) -> list[str]:
@@ -342,7 +342,7 @@ def launch_exposes_user_saves(
         resolved["savedir"], project_path=project_path
     ):
         return True
-    if home_mode == "path" and path_is_host_home(resolved["home"]):
+    if home_mode == "path" and home_exposes_user_saves(resolved["home"]):
         return True
     return False
 
@@ -354,7 +354,31 @@ def path_is_host_home(value: str | Path, *, home: Path | None = None) -> bool:
         host = (home or Path.home()).expanduser().resolve()
     except (OSError, RuntimeError, ValueError):
         return False
-    return os.path.normcase(str(path)) == os.path.normcase(str(host))
+    return _path_key(path) == _path_key(host)
+
+
+def home_exposes_user_saves(value: str | Path, *, home: Path | None = None) -> bool:
+    """True when a launch HOME of *value* reaches the host save tree.
+
+    That is the host HOME itself, or a HOME whose Ren'Py save folder
+    (``.renpy``, ``Library/RenPy``, ``AppData/Roaming/RenPy``) resolves into
+    the host tree, for example through a symlink.
+    """
+    if path_is_host_home(value, home=home):
+        return True
+    try:
+        launch_home = Path(value).expanduser()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    # Where the game looks under that HOME: the launch sets APPDATA to
+    # <home>/AppData/Roaming on Windows (see _home_paths).
+    if os.name == "nt":
+        implied = launch_home / "AppData" / "Roaming" / "RenPy"
+    elif sys_platform() == "darwin":
+        implied = launch_home / "Library" / "RenPy"
+    else:
+        implied = launch_home / ".renpy"
+    return path_exposes_user_saves(implied, home=home)
 
 
 def path_exposes_user_saves(
@@ -373,9 +397,22 @@ def path_exposes_user_saves(
             resolved = root.expanduser().resolve()
         except (OSError, RuntimeError, ValueError):
             continue
-        if _is_relative_to(path, resolved) or path == resolved:
+        if _inside(path, resolved):
             return True
     return False
+
+
+def _path_key(path: Path) -> str:
+    # Case-folded: on a case-insensitive filesystem (Windows, macOS)
+    # ~/library/renpy is the player's ~/Library/RenPy, and resolve() does not
+    # fold case there. Folding everywhere errs toward asking for authorization.
+    return os.path.normcase(str(path)).casefold()
+
+
+def _inside(path: Path, root: Path) -> bool:
+    """*path* is *root* or below it, compared case-insensitively."""
+    key, root_key = _path_key(path), _path_key(root)
+    return key == root_key or key.startswith(root_key.rstrip(os.sep) + os.sep)
 
 
 def user_save_roots(

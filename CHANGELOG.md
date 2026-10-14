@@ -259,6 +259,10 @@ versioning.
   that quits on its own platform check says why only there. A log that stops at window or GL setup (`Windowed
   mode.`, `Maximum texture size`, a shader cache line) means the window never
   opened, as with an X11 window while the screen is locked.
+- Launches that reach the player's saves are classified as destructive more
+  reliably: host save paths match case-insensitively (on Windows and macOS
+  `~/library/renpy` is the player's `~/Library/RenPy`), and a custom `home`
+  whose Ren'Py save folder resolves into the player's tree counts too.
 - A button whose click does nothing (`NullAction()`, or only a sound or a
   selected/sensitive state) is `inert` and never a decision, so a `pause`
   beside a tutorial's decorative icons is clicked past instead of stopping
