@@ -2285,3 +2285,24 @@ def test_log_tail_reports_where_this_launch_stopped(tmp_path: Path) -> None:
     assert _log_tail(tmp_path, 0, lines=1) == ["Windowed mode."]
     # A log left by an earlier run says nothing about this launch.
     assert _log_tail(tmp_path, log.stat().st_mtime_ns + 1) == []
+
+
+def test_a_game_that_quits_on_its_own_check_says_why_in_log_tail(monkeypatch, tmp_path: Path) -> None:
+    """Some builds check their platform and quit, saying why only in log.txt."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, root = _make_project(tmp_path)
+
+    def fake_popen(*_args, **_kwargs):
+        process = _FakeProcess()
+        process.returncode = 86
+        (root / "log.txt").write_text("Loading persistent took 1 ms\nPlatform runtime unavailable.\n", encoding="utf-8")
+        return process
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project)
+
+    assert excinfo.value.code == "RENPY_PROCESS_EXITED"
+    assert excinfo.value.details["log_tail"][-1] == "Platform runtime unavailable."
+    assert "log_tail" in excinfo.value.suggested_fix

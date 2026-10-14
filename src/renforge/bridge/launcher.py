@@ -1177,7 +1177,8 @@ def _launch_after_project_lock(
                 err = stderr_reader.tail().decode("utf-8", "replace")
                 combined = (out + "\n" + err).lower()
                 code = "RENPY_PROCESS_EXITED"
-                suggested = "Inspect traceback.txt / errors.txt in the project root."
+                suggested = ("Read details.log_tail (a game can quit on its own checks and say why only "
+                             "there), then traceback.txt / errors.txt in the project root.")
                 if "audio" in combined and ("fail" in combined or "error" in combined):
                     code = "AUDIO_INITIALIZATION_FAILED"
                     suggested = "Relaunch with audio='dummy'."
@@ -1189,7 +1190,8 @@ def _launch_after_project_lock(
                     f"Game exited (rc={process.returncode}) before the bridge came up.",
                     phase="starting_renpy",
                     suggested_fix=suggested,
-                    details={"stdout": out[-4000:], "stderr": err[-4000:], "returncode": process.returncode},
+                    details={"stdout": out[-4000:], "stderr": err[-4000:], "returncode": process.returncode,
+                             "log_tail": _log_tail(project.root, spawned_ns)},
                 )
             try:
                 info = read_bridge_info(
