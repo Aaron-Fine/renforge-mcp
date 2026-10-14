@@ -5276,6 +5276,10 @@ init python:
             else:
                 reply["started_at_label"] = start["label"]
         reply["seen"] = _renforge_seen_current()
+        # Ren'Py's own error screen: the game raised an exception and waits
+        # for Rollback, Ignore, or Quit.
+        if any(screen.get("name") == "_exception" for screen in screens):
+            reply["game_error"] = builtins.dict(getattr(bridge, "last_exception", None) or {"message": None})
         if bridge is not None and bridge.progression is not None:
             reply["progression"] = _renforge_progress_public(bridge.progression)
         identity = {
@@ -8280,6 +8284,9 @@ init python:
             bridge.pending_ending = None
             _renforge_progress_finish("crash")
             bridge.push_event("exception", {"short": short_msg, "full": full_msg})
+            lines = [line.strip() for line in builtins.str(short_msg or "").splitlines() if line.strip()]
+            bridge.last_exception = {"message": lines[-1] if lines else None,
+                                     "traceback_file": traceback_fn if isinstance(traceback_fn, builtins.str) else None}
             previous = bridge.prev_exception_handler
             if callable(previous):
                 return previous(short_msg, full_msg, traceback_fn)

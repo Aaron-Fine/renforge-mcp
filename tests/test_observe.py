@@ -1190,6 +1190,19 @@ def test_interface_buttons_are_the_choice_when_nothing_else_moves_the_game():
     assert saved["controls"] == [] and saved["forward"] == "none"
 
 
+def test_an_exception_screen_is_reported_as_a_game_error():
+    """Love Sucks: a game exception showed as an ordinary screen to choose from."""
+    from renforge.interaction import progression_boundary
+    error = {"message": "NameError: name 'visitedGhost' is not defined", "traceback_file": "traceback.txt"}
+    buttons = [_element(screen="_exception", action="Partial", text="Ignore"),
+               _element(screen="_exception", action="ErrorQuit", text="Quit")]
+    screens = [{"name": "_exception", "layer": "screens", "modal": False}]
+    snapshot = classify(_raw(elements=buttons, screens=screens, dialogue=None, say_dismiss=None, game_error=error))
+    assert snapshot["game_error"] == error
+    assert progression_boundary(snapshot) == "error"
+    assert classify(_raw())["game_error"] is None
+
+
 def test_a_scrolling_panel_beside_a_line_does_not_hold_it():
     # Come Home's livestream chat: a viewport and its scrollbar, re-shown with the line.
     chat = [_element(screen="stream", role="viewport", scroll=True),

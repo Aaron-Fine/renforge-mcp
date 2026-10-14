@@ -1300,7 +1300,11 @@ def play(
         if png is not None:
             result["_png"] = png
         result["progress"] = progress
-        if progress.get("stop") == "choose" and not progress.get("steps") and not clicked_past:
+        observed = result["observation"] or {}
+        if observed.get("game_error"):
+            result["hint"] = ("The game raised an exception (observation.game_error) and shows Ren'Py's "
+                              "error screen: choose its Rollback, Ignore, or Quit control.")
+        elif progress.get("stop") == "choose" and not progress.get("steps") and not clicked_past:
             result["hint"] = "Nothing to continue: the game is waiting for one of its controls."
         return result
     if not isinstance(control_id, str) or not control_id:

@@ -200,6 +200,12 @@ versioning.
   within one stable interaction (a music room whose timer rebuilds its
   buttons, Desert Stalker). It waited for two identical observations that
   never came, so each act took the full 30 s and returned no observation.
+- A game exception is reported, not shown as one more screen. While Ren'Py's
+  error screen is up, observations carry `game_error` with the exception line
+  and traceback file, progression stops with `stop="error"`, and `act` hints
+  at Rollback, Ignore, or Quit. Before, Love Sucks: Night Two's error screen
+  read as an ordinary choice and continuing said only "waiting for one of its
+  controls".
 - Action summaries name a mangled common-library class as written:
   `MusicRoomPlay("...")`, not `_m1_00musicroom__MusicRoomPlay("...")`.
 - When nothing else moves the game on, interface buttons on the

@@ -630,6 +630,8 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
         "lifecycle": {"phase": phase, "ending": ending},
         "dialogue": _dialogue(raw),
         "text_revealing": raw.get("text_revealing"),
+        # Set while Ren'Py's exception screen is up: {"message", "traceback_file"}.
+        "game_error": dict(raw["game_error"]) if isinstance(raw.get("game_error"), Mapping) else None,
         "screens": screens,
         "say_dismiss": say_dismiss,
         "forward": forward,
@@ -651,6 +653,8 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
 
 def progression_boundary(snapshot: Mapping[str, Any]) -> str | None:
     """A menu is always a boundary; only engine evidence establishes an end."""
+    if snapshot.get("game_error"):
+        return "error"
     lifecycle = snapshot.get("lifecycle") or {}
     if lifecycle.get("phase") == "ended":
         return "end"

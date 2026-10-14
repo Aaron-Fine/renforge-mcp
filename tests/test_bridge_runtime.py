@@ -6770,6 +6770,14 @@ def test_a_short_pause_is_not_pending_forever_when_the_interaction_keeps_restart
     assert pending() is False
 
 
+def test_the_bridge_keeps_the_last_exception_for_the_error_screen(running_bridge):
+    import sys
+    renpy = running_bridge.renpy
+    bridge = sys.modules["_renforge_runtime"].bridge
+    renpy.config.exception_handler("While running game code:\nNameError: name 'x' is not defined\n", "full", "/g/traceback.txt")
+    assert bridge.last_exception == {"message": "NameError: name 'x' is not defined", "traceback_file": "/g/traceback.txt"}
+
+
 def test_a_shown_screen_counts_as_kept_up_from_the_next_interaction(running_bridge):
     import sys
 

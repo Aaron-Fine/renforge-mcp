@@ -637,6 +637,11 @@ If the final frame cannot settle, `observation` is null; `last_observation` is
 explicitly historical. Stale `act` refusals include a fresh observation when
 available, which may itself still be unstable.
 
+When the game raises an exception, Ren'Py shows its error screen. The
+observation then carries `game_error` (`message`, the exception line, and
+`traceback_file`), progression stops with `stop="error"`, and the screen's
+Rollback, Ignore, and Quit buttons are its controls.
+
 Ending detection uses engine evidence. Observations include `lifecycle` with
 `phase` (`playing`, `main_menu`, `ended`, or `unknown`) and `ending` (an evidence
 object or null). `renforge_act`'s `progress` reports:
