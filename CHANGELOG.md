@@ -114,6 +114,9 @@ versioning.
   Before this, most photos were unclickable with whole-screen bounds.
 - An input's text is its prompt as drawn: `[mc_nick]` substituted, tags
   removed. Image names keep their tag (`lorbook naughtydn`, not `naughtydn`).
+- A button's label skips text under a transform at alpha or zoom 0, which
+  Ren'Py doesn't draw. Heaven's Door's menu read "Start New Content! Start"
+  because each button holds a hidden hover card; it now reads "Start".
 
 ### Added
 

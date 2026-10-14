@@ -1453,6 +1453,20 @@ init python:
         except Exception:
             return None
 
+    def _renforge_transform_hides(node):
+        """A transform that currently draws nothing (alpha or zoom at 0)."""
+        if not isinstance(node, getattr(getattr(renpy.display, "transform", None), "Transform", ())):
+            return False
+        for name in ("alpha", "zoom", "xzoom", "yzoom"):
+            try:
+                value = getattr(node, name)
+            except Exception:
+                continue
+            if isinstance(value, (builtins.int, builtins.float)) and not isinstance(value, bool) and value == 0:
+                return True
+        return False
+
+
     def _renforge_child_text(widget):
         """Visible label: the Text displayables inside a control, in order."""
         parts = []
@@ -1465,6 +1479,10 @@ init python:
             seen.add(id(node))
             # Like Ren'Py's self-voicing, nested controls keep their own text.
             if node is not widget and getattr(node, "focusable", None):
+                continue
+            # Text the game keeps hidden (a hover card at alpha 0) is not
+            # part of the label.
+            if _renforge_transform_hides(node):
                 continue
             if node.__class__.__name__ == "Text":
                 text = _renforge_observe_text_string(node)

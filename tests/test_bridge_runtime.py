@@ -6831,3 +6831,32 @@ def test_focus_masked_buttons_report_the_region_a_click_reaches(running_bridge, 
     again = {"enabled": True, "bounds": dict(screen)}
     globs["_renforge_mark_coverage"]([(types.SimpleNamespace(widget=photo), again)])
     assert again["click_point"] == point and len(calls) - scanned == 9
+
+
+def test_button_label_skips_text_the_game_keeps_hidden(running_bridge, monkeypatch):
+    """Heaven's Door menu buttons hold a hover card whose text is at alpha 0."""
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+
+    class Transform:
+        def __init__(self, child, alpha=1.0, zoom=1.0):
+            self.child, self.alpha, self.zoom = child, alpha, zoom
+
+        def visit(self):
+            return [self.child]
+
+    class Text:
+        def __init__(self, text):
+            self.text = [text]
+
+    class Fixed:
+        def __init__(self, *children):
+            self.children = list(children)
+
+        def visit(self):
+            return self.children
+
+    monkeypatch.setattr(renpy.display, "transform", types.SimpleNamespace(Transform=Transform), raising=False)
+    monkeypatch.setitem(globs, "_renforge_observe_text_string", lambda node: node.text[0])
+    button = Fixed(Transform(Text("Start")), Transform(Fixed(Text("New Content!"), Text("Start")), alpha=0.0))
+    assert globs["_renforge_child_text"](button) == "Start"
