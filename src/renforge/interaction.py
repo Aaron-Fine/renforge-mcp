@@ -172,6 +172,11 @@ def assign_control_ids(elements: list[Mapping[str, Any]]) -> list[dict[str, Any]
     return assigned
 
 
+# Ren'Py's standard game-menu screens: their interface buttons stay chrome.
+_GAME_MENU_SCREENS = frozenset({"game_menu", "save", "load", "preferences", "history", "help", "about",
+                                "main_menu", "navigation", "confirm", "yesno_prompt"})
+
+
 def _is_chrome(screen: str | None) -> bool:
     if not screen:
         return False
@@ -553,6 +558,19 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
     say_dismiss = normalize_say_dismiss(raw.get("say_dismiss"))
     modal = any(screen["modal"] for screen in screens)
     decisions = [control for control in controls if _is_decision(control)]
+    if not decisions and say_dismiss is None:
+        # Nothing else moves the game on, so interface actions on this
+        # interaction's own screen are its choices: a splash disclaimer whose
+        # buttons are MainMenu() and Quit() (The Power of Truth). A HUD kept
+        # up, the quick menu, and Ren'Py's game menu keep them as chrome.
+        own = {screen["name"] for screen in screens if not screen["kept_up"]}
+        promoted = [control for control in chrome
+                    if control.get("screen") in own and not _is_chrome(control.get("screen"))
+                    and control.get("screen") not in _GAME_MENU_SCREENS]
+        if any(_is_decision(control) for control in promoted):
+            controls.extend(promoted)
+            chrome = [control for control in chrome if control not in promoted]
+            decisions = [control for control in controls if _is_decision(control)]
     first_pause = _dialogue(raw) is None and raw.get("seen") is False
     if say_dismiss == "dismiss" and not modal and (_dialogue(raw) is not None or first_pause):
         # Ren'Py ends this line on a plain click. Buttons on screens kept up

@@ -181,6 +181,12 @@ versioning.
   loop. Secrets and Promises says "*Moans*" from one `Moan` label that every
   scene line calls, so `act` stopped with `stop="loop"` every few lines; the
   loop check now includes where the line was called from.
+- When nothing else moves the game on, interface buttons on the
+  interaction's own screen are its choices. The Power of Truth opens with a
+  called disclaimer whose buttons are `MainMenu()` and `Quit()`; both were
+  chrome, so the observation had no controls and `forward="none"`. A HUD kept
+  up, the quick menu, and Ren'Py's game-menu screens keep such buttons as
+  chrome.
 
 ### Added
 

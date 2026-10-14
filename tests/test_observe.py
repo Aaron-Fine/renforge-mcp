@@ -1151,6 +1151,26 @@ def test_a_first_pause_with_only_hud_buttons_is_clicked_past():
     assert classify(_raw(elements=hud, screens=screens, dialogue=None))["forward"] == "choose"
 
 
+def test_interface_buttons_are_the_choice_when_nothing_else_moves_the_game():
+    """The Power of Truth: `call screen` disclaimer whose buttons are MainMenu() and Quit()."""
+    buttons = [_element(screen="disclaimer", action="MainMenu", chrome=True),
+               _element(screen="disclaimer", action="Quit", chrome=True)]
+    screens = [{"name": "disclaimer", "layer": "screens", "modal": False}]
+    snapshot = classify(_raw(elements=buttons, screens=screens, dialogue=None, say_dismiss=None))
+    assert snapshot["forward"] == "choose"
+    assert [c["action"] for c in snapshot["controls"]] == ["MainMenu", "Quit"]
+    assert snapshot["chrome"] == []
+    # Beside a line, or on a kept-up HUD or the game menu, they stay chrome.
+    line = classify(_raw(elements=buttons, screens=screens))
+    assert line["controls"] == [] and len(line["chrome"]) == 2
+    hud = [dict(screens[0], kept_up=True)]
+    assert classify(_raw(elements=buttons, screens=hud, dialogue=None, say_dismiss=None))["controls"] == []
+    menu = [_element(screen="save", action="Quit", chrome=True)]
+    saved = classify(_raw(elements=menu, screens=[{"name": "save", "layer": "screens", "modal": False}],
+                          dialogue=None, say_dismiss=None))
+    assert saved["controls"] == [] and saved["forward"] == "none"
+
+
 def test_a_scrolling_panel_beside_a_line_does_not_hold_it():
     # Come Home's livestream chat: a viewport and its scrollbar, re-shown with the line.
     chat = [_element(screen="stream", role="viewport", scroll=True),
