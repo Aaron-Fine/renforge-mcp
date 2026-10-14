@@ -184,6 +184,11 @@ versioning.
   loop. Secrets and Promises says "*Moans*" from one `Moan` label that every
   scene line calls, so `act` stopped with `stop="loop"` every few lines; the
   loop check now includes where the line was called from.
+- A short pause no longer reads as pending for longer than its delay after
+  the bridge first sees it. Its start time follows Ren'Py's `interact_time`,
+  which restarts with the interaction; a game that restarts it repeatedly
+  kept a 1 s pause "unstable" until `act` ran out of time (Secrets and
+  Promises).
 - When nothing else moves the game on, interface buttons on the
   interaction's own screen are its choices. The Power of Truth opens with a
   called disclaimer whose buttons are `MainMenu()` and `Quit()`; both were

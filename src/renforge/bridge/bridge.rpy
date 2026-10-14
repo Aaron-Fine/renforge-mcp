@@ -5050,7 +5050,16 @@ init python:
                     if (isinstance(delay, (builtins.int, builtins.float)) and not isinstance(delay, bool)
                             and 0 < delay <= _RENFORGE_SHORT_PAUSE_SECONDS):
                         try:
-                            if get_time() - started < delay + _RENFORGE_PAUSE_GRACE_SECONDS:
+                            # interact_time restarts with the interaction, which
+                            # a game can restart again and again; a pause can
+                            # still last no longer than its delay from when it
+                            # was first seen.
+                            seen = getattr(_renforge_runtime, "pause_first_seen", None)
+                            if not seen or seen[0] is not shown:
+                                seen = (shown, get_time())
+                                _renforge_runtime.pause_first_seen = seen
+                            limit = delay + _RENFORGE_PAUSE_GRACE_SECONDS
+                            if get_time() - started < limit and get_time() - seen[1] < limit:
                                 return True
                         except Exception:
                             pass

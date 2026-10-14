@@ -6742,6 +6742,30 @@ def test_a_subroutine_line_called_from_another_place_is_not_a_loop(running_bridg
     assert bridge.progression["active"] is False and bridge.progression["stop"] == "loop"
 
 
+def test_a_short_pause_is_not_pending_forever_when_the_interaction_keeps_restarting(running_bridge, monkeypatch):
+    """Secrets and Promises: a 1 s pause read as pending for the whole 30 s budget."""
+    renpy = running_bridge.renpy
+
+    class PauseBehavior:
+        delay = 1.0
+
+    clock = {"now": 100.0}
+    pause = PauseBehavior()
+    root = types.SimpleNamespace(render_of=[pause], children=[])
+    monkeypatch.setattr(renpy.display, "render", types.SimpleNamespace(screen_render=root), raising=False)
+    monkeypatch.setattr(renpy.display, "behavior", types.SimpleNamespace(PauseBehavior=PauseBehavior), raising=False)
+    monkeypatch.setattr(renpy.display, "core", types.SimpleNamespace(get_time=lambda: clock["now"]), raising=False)
+    interface = types.SimpleNamespace(interact_time=clock["now"])
+    monkeypatch.setattr(renpy.display, "interface", interface, raising=False)
+    pending = running_bridge.globs["_renforge_short_pause_pending"]
+    assert pending() is True
+    # Each restart moves interact_time up; the pause itself is the same.
+    for _ in range(5):
+        clock["now"] += 1.0
+        interface.interact_time = clock["now"] - 0.1
+    assert pending() is False
+
+
 def test_a_shown_screen_counts_as_kept_up_from_the_next_interaction(running_bridge):
     import sys
 
