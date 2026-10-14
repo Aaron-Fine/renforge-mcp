@@ -6835,6 +6835,10 @@ def test_the_bridge_keeps_the_last_exception_for_the_error_screen(running_bridge
     renpy.config.exception_handler("While running game code:\nNameError: name 'x' is not defined\n", "full", "/g/traceback.txt")
     assert bridge.last_exception == {"message": "NameError: name 'x' is not defined", "traceback_file": "/g/traceback.txt"}
 
+    # Scripts that do not parse: Ren'Py keeps why in renpy.parser.parse_errors.
+    renpy.parser = types.SimpleNamespace(parse_errors=["\nThe label start is defined twice, at File \"a.rpy\", line 2:\n"])
+    assert running_bridge.globs["_renforge_first_parse_error"]() == 'The label start is defined twice, at File "a.rpy", line 2:'
+
 
 def test_a_shown_screen_counts_as_kept_up_from_the_next_interaction(running_bridge):
     import sys

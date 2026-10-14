@@ -1192,6 +1192,12 @@ def _launch_after_project_lock(
                 reply = client.ping()
                 if not isinstance(reply, dict) or reply.get("pong") is not True:
                     raise RuntimeError(f"bridge ping returned non-pong response: {reply}")
+                # Scripts that do not parse still start the bridge, on Ren'Py's
+                # parse-error screen; the game cannot be played.
+                parse_report = _new_game_error(project.root, error_stamps)
+                if parse_report is not None and parse_report["file"] == "errors.txt":
+                    parse_report["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns)
+                    _raise_game_error(parse_report)
                 startup_ms = int((time.monotonic() - started) * 1000)
                 phases.append(
                     {
@@ -1218,6 +1224,8 @@ def _launch_after_project_lock(
                     isolation=isolation,
                     session_id=session_id,
                 )
+            except LaunchError:
+                raise
             except Exception:
                 time.sleep(0.3)
                 continue

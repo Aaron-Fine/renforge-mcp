@@ -5112,6 +5112,14 @@ init python:
                         stack.append((target, depth + 1))
         return False
 
+    def _renforge_first_parse_error():
+        errors = getattr(getattr(renpy, "parser", None), "parse_errors", None)
+        for error in errors or ():
+            for line in builtins.str(error).splitlines():
+                if line.strip():
+                    return line.strip()
+        return None
+
     def _renforge_call_sites():
         """The return points of the running context's calls, innermost last."""
         try:
@@ -5311,8 +5319,12 @@ init python:
         reply["seen"] = _renforge_seen_current()
         # Ren'Py's own error screen: the game raised an exception and waits
         # for Rollback, Ignore, or Quit.
-        if any(screen.get("name") == "_exception" for screen in screens):
+        shown = {screen.get("name") for screen in screens}
+        if "_exception" in shown:
             reply["game_error"] = builtins.dict(getattr(bridge, "last_exception", None) or {"message": None})
+        elif "_parse_errors" in shown:
+            # The scripts do not parse; Ren'Py lists why in errors.txt.
+            reply["game_error"] = {"message": _renforge_first_parse_error(), "traceback_file": "errors.txt"}
         if bridge is not None and bridge.progression is not None:
             reply["progression"] = _renforge_progress_public(bridge.progression)
         identity = {

@@ -817,6 +817,31 @@ def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkey
     assert drivers == ["wayland,x11"]
 
 
+def test_a_launch_whose_scripts_do_not_parse_fails_even_with_the_bridge_up(monkeypatch, tmp_path: Path) -> None:
+    """Fleeting Memories: the compiling launch shows _parse_errors; the bridge still starts."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    (project_root / "game").mkdir(exist_ok=True)
+    launches = {"count": 0}
+
+    def fake_popen(*_args, **kwargs):
+        launches["count"] += 1
+        if launches["count"] == 1:
+            (project_root / "game" / "screens.rpyc").write_bytes(b"fresh")
+            (project_root / "errors.txt").write_text(
+                "I'm sorry, but errors were detected in your script.\n\n"
+                "The label alt_view_toggle is defined twice, at File \"screens.rpyc\", line 2:\n", encoding="utf-8")
+        _write_bridge_info(project_root, kwargs["env"])
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    session = launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert launches["count"] == 2 and "defined twice" in session.startup_warning
+    session.close(timeout=0.1)
+
+
 def test_the_error_line_is_read_from_either_kind_of_report() -> None:
     from renforge.bridge.launcher import _game_error_line
 

@@ -200,6 +200,10 @@ versioning.
   within one stable interaction (a music room whose timer rebuilds its
   buttons, Desert Stalker). It waited for two identical observations that
   never came, so each act took the full 30 s and returned no observation.
+- Ren'Py's parse-error screen is a `game_error` too (its first error line), and
+  a launch that wrote `errors.txt` fails with `GAME_STARTUP_ERROR` even though
+  the bridge came up, so a recompile that clashes with archived scripts is
+  retried (Fleeting Memories: "label ... is defined twice").
 - A game exception is reported, not shown as one more screen. While Ren'Py's
   error screen is up, observations carry `game_error` with the exception line
   and traceback file, progression stops with `stop="error"`, and `act` hints
