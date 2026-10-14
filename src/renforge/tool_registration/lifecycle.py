@@ -12,7 +12,10 @@ TOOL_NAMES = (
     "renforge_jump",
     "renforge_new_game",
     "renforge_stop",
+    "renforge_session",
 )
+
+SESSION_ACTIONS = ("launch", "status", "save", "load", "list", "import", "stop")
 
 
 def build_wrappers(context):
@@ -35,6 +38,7 @@ def build_wrappers(context):
         cancel_event: threading.Event | None = None,
         home: str | None = None,
         preferences: str | None = None,
+        start_label: str | None = None,
     ) -> dict:
         from ..dashboard_client import (
             launch_game as launch_via_dashboard,
@@ -77,6 +81,7 @@ def build_wrappers(context):
             timeout=timeout,
             home=effective_home,
             preferences=effective_preferences,
+            start_label=start_label,
         )
         if delegated is not None:
             if cancel_event is not None and cancel_event.is_set():
@@ -127,6 +132,7 @@ def build_wrappers(context):
             cancel_event=cancel_event,
             home=effective_home,
             preferences=effective_preferences,
+            start_label=start_label,
         )
 
 
@@ -194,7 +200,7 @@ def build_wrappers(context):
         if needed) to use the user's files, or set RENFORGE_ISOLATION=existing
         as a server-wide default; that requires authorize=true when
         RENFORGE_POLICY=enforce. timeout controls the background startup
-        deadline, not the MCP call.
+        deadline, not the MCP call (default 180 s, or RENFORGE_STARTUP_TIMEOUT).
         """
         kwargs: dict[str, Any] = {
             "version": version,
@@ -352,6 +358,114 @@ def build_wrappers(context):
             project_root=project_path,
             fn=_stop_game,
             args=(project_path,),
+            kwargs={},
+        )
+
+
+    def renforge_session(project_path: str, action: str, slot: str | None = None,
+                         label: str | None = None, authorize: bool = False) -> dict:
+        """Start, check, save, load, list saves of, or stop a play session.
+
+        The canonical lifecycle for agents. ``launch`` uses agent-mode
+        defaults: saves and preferences in the project's RenForge state
+        folder (never the player's, and kept across launches), an isolated
+        HOME, no Live Editor. Poll ``status`` until ready.
+        """
+
+        def _session() -> dict:
+            if action not in SESSION_ACTIONS:
+                return {"ok": False, "error": "action must be one of: " + ", ".join(SESSION_ACTIONS)}
+            if label is not None and action != "launch":
+                return {"ok": False, "error": "label is only for action=launch"}
+            if label is not None and not (isinstance(label, str) and label.strip()):
+                return {"ok": False, "error": "label must be a label name"}
+            if action == "launch":
+                # Saves stay apart from the player's own but survive relaunches.
+                from ..state import project_state_dir
+                saves = project_state_dir(project_path) / "saves"
+                result = _start_launch(project_path, editor=False, savedir=str(saves),
+                                       start_label=label.strip() if label else None)
+                if label and isinstance(result, dict):
+                    result["start_label"] = label.strip()
+                return result
+            if action == "status":
+                return _launch_status(project_path)
+            if action == "stop":
+                return _stop_game(project_path)
+            if action in ("save", "load", "import") and not (isinstance(slot, str) and slot.strip()):
+                return {"ok": False, "error": f"{action} needs a slot name"}
+            if action == "import":
+                return _import(slot.strip())
+            result = live.saves(project_path, action, slot=slot)
+            if action == "load" and isinstance(result, dict) and result.get("ok"):
+                result = _after_load(result)
+            if action == "list" and isinstance(result, dict):
+                result["player_slots"] = _player_slots(result.pop("save_directory", None))
+            return result
+
+        def _save_name() -> str | None:
+            """The game's config.save_directory, from the running game when there is one."""
+            listed = live.saves(project_path, "list")
+            name = listed.get("save_directory") if isinstance(listed, dict) else None
+            return name if isinstance(name, str) and name else None
+
+        def _player_slots(save_name: str | None) -> list[dict]:
+            """The player's own save slots for this game, which import can copy in."""
+            from ..save_isolation import list_host_slots
+
+            listed = list_host_slots(project_path, save_name=save_name)
+            return [{key: item[key] for key in ("name", "extra_info") if item.get(key)}
+                    for item in listed.get("slots") or []]
+
+        def _import(name: str) -> dict:
+            """Copy one of the player's slots into the session's saves; the player's file is only read."""
+            import re
+
+            from ..save_isolation import import_host_slots
+            from ..state import project_state_dir
+
+            saves = project_state_dir(project_path) / "saves"
+            pattern = re.compile(r"%s-[A-Za-z]{2}\d+\.save" % re.escape(name))
+            replaced = saves.is_dir() and any(pattern.fullmatch(entry.name) for entry in saves.iterdir())
+            result = import_host_slots(project_path, saves, slot=name, save_name=_save_name())
+            if not result.get("ok"):
+                return {"ok": False, "error": f"the player has no save slot {name!r}; list shows player_slots"}
+            return {"ok": True, "slot": name, "replaced": replaced,
+                    "next": ("load this slot to play from it. Ren'Py asks whether to trust a save made on "
+                             "another device: choose Yes for the save, then No for the device, which loads "
+                             "this save without trusting others.")}
+
+        def _after_load(result: dict) -> dict:
+            """Return the restored game's observation, so the next act can use it.
+
+            The bridge replies before the engine has restarted into the save, so
+            its ``restored_label`` names the label from before the load.
+            """
+            import time
+
+            from ..compact import compact_observation
+
+            result.pop("restored_label", None)
+            result.pop("restarting", None)
+            result.pop("ended_interaction", None)
+            observation = None
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                observation = live.observe(project_path, screenshot=False)
+                if isinstance(observation, dict) and observation.get("stable") and observation.get("observation_id"):
+                    break
+                time.sleep(0.25)
+            if isinstance(observation, dict) and observation.get("observation_id"):
+                result["observation"] = compact_observation(observation)
+            return result
+
+        return _log_tool_call(
+            name="renforge_session",
+            params={"project_path": project_path, "action": action, "slot": slot,
+                    "label": label, "authorize": authorize},
+            project_root=project_path,
+            fn=_session,
+            args=(),
             kwargs={},
         )
 

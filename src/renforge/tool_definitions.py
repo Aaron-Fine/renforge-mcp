@@ -238,11 +238,15 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         description=(
             "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor "
             "runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; "
+            "Runtime control requires Ren'Py 8.0 or newer. Pre-8 bundled games or selected SDKs return "
+            "UNSUPPORTED_RENPY_VERSION before SDK download, bridge injection, or process launch; an explicit "
+            "newer SDK does not bypass a legacy game's incompatibility. "
             "poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. "
             "Saves, preferences, and HOME default to isolated temporary locations so the session does not read or write the "
             "user's normal Ren'Py state; the ready payload includes `session_id` and an `isolation` object. "
             "It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and "
-            "publish authenticated ownership/bridge metadata under `.renforge/control/`. `renforge_stop` removes only owned "
+            "publish authenticated ownership/bridge metadata under `<state>/control/`, where `<state>` is this project's RenForge "
+            "folder outside the game (`RENFORGE_STATE_DIR` or `~/.local/state/renforge`, then `projects/<name>-<hash>`). `renforge_stop` removes only owned "
             "session artifacts. Exposing the user save tree (`savedir=existing`) requires `authorize=true` when "
             "`RENFORGE_POLICY=enforce`. Copy selected host slots with `renforge_saves(action=\"import\")` instead of "
             "bind-mounting the user tree."
@@ -260,7 +264,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
                 "Launcher version selector. `stable` uses the engine recorded in the project's "
                 "`renpy/vc_version.py` when that file exists, otherwise the configured stable SDK "
                 "(`8.5.3`). An explicit version such as `8.1.2` is downloaded when no cached SDK "
-                "shares that major.minor. A cached SDK is reused only when the major and minor match "
+                "is available. Runtime launch rejects bundled game engines or selected SDKs below 8.0. "
+                "A cached SDK is reused only when the major and minor match "
                 "and its patch is the same or newer."
             ),
             "editor": "Enable/disable live editor injection; default True for interactive work.",
@@ -358,6 +363,39 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         ),
         parameters={"project_path": "Project root whose active launch should be stopped."},
     ),
+    "renforge_session": ToolDefinition(
+        description=(
+            "The canonical play-session lifecycle. action=launch starts the game with agent-mode defaults "
+            "(saves and preferences in the project's RenForge state folder, apart from the player's and kept "
+            "across launches; isolated HOME; no Live Editor; transitions and vsync off) and returns "
+            "status=starting or ready; poll action=status until ready or failed. save and load take a slot "
+            "name; load returns the restored game's observation, ready for renforge_act; list shows the session's slots "
+            "and the player's own (player_slots); import copies one player slot into the session's saves (the "
+            "player's file is only read), so the agent can load and play or test a mod from the player's real "
+            "progress; stop ends the game and cleans up. launch with label starts "
+            "the story at that label (for testing and modding): the game leaves its splash screen or main menu "
+            "for it, and every observation then carries started_at_label, because nothing the story did "
+            "before the label has happened (a label normally reached with call ends the run when it returns); "
+            "play from saves instead when the earlier state matters. An "
+            "unknown label is reported as start_label_error. Server environment "
+            "variables cover the rare launch settings (RENFORGE_STARTUP_TIMEOUT, RENFORGE_ISOLATION, ...). "
+            "load requires authorize=true when RENFORGE_POLICY=enforce."
+        ),
+        annotations=_ann(
+            readOnlyHint=False,
+            idempotentHint=False,
+            destructiveHint=True,
+            openWorldHint=False,
+        ),
+        parameters={
+            "project_path": "Project root of the game.",
+            "action": "launch, status, save, load, list, import, or stop.",
+            "slot": "Slot name for save, load, and import (import takes a name from player_slots).",
+            "label": "With launch: start the story at this label (testing and modding).",
+            "authorize": "Explicitly approve load when RENFORGE_POLICY=enforce.",
+        },
+        parameter_schemas={"action": _enum("launch", "status", "save", "load", "list", "import", "stop")},
+    ),
     "renforge_game_state": ToolDefinition(
         description=(
             "Read full live state for debugging and monitoring. Use this before/after interactions to verify "
@@ -418,6 +456,52 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "name": "Screen name to inspect in the live bridge state.",
         },
     ),
+    "renforge_explain": ToolDefinition(
+        description=(
+            "Explain where game content is defined and what it does, read from the running game's loaded syntax "
+            "trees without evaluating anything. Works for games that ship only .rpa/.rpyc files. With no selector "
+            "it returns labels and screens with file:line, filtered by a case-insensitive `query` name substring, "
+            "plus file counts showing how many sources exist on disk. `label` returns the statements of a label, "
+            "flattened depth-first with file, line and text. `screen` returns the displayable tree of a screen. "
+            "`id` (a control id from renforge_observe) or `source` (a file:line from a control or input candidate) "
+            "returns the statement there, its keyword arguments, and the if/for/use conditions enclosing it. "
+            "`search` finds text in every loaded statement (dialogue, Python source, conditions, menu choices, "
+            "jump targets) and returns file:line with the enclosing label, e.g. to find what gates a message. "
+            "Results for a label, screen, id, or source also carry `values`: the current values of the plain "
+            "variables their conditions read. `variables` reads named store variables or dotted fields "
+            "(`calendar.dayCount`, `persistent.seen_intro`) as data, so what is on screen can be checked "
+            "against the state of the playthrough; game objects come back as their simple public fields, and a "
+            "long list or dict lists its first entries with `size` and `truncated` (read a key by path: `ran.scene_a`). "
+            "Nothing is called or evaluated. Output is bounded by `limit`."
+        ),
+        annotations=_ann(
+            readOnlyHint=True,
+            idempotentHint=True,
+            destructiveHint=False,
+            openWorldHint=False,
+        ),
+        parameters={
+            "project_path": "Project root with active game session.",
+            "label": "Label name to explain. Pass at most one of label, screen, id, or source.",
+            "screen": "Screen name to explain. Pass at most one of label, screen, id, or source.",
+            "id": "Control id from renforge_observe to trace back to its screen-language statement.",
+            "source": "A `file:line` reported as `source` by renforge_observe controls or input candidates.",
+            "query": "Index only: case-insensitive substring to filter label and screen names.",
+            "search": "Case-insensitive text to find in all loaded statements, including Python source.",
+            "variables": "Store variable names or dotted fields to read as data, e.g. [\"day\", \"calendar.dayCount\"].",
+            "limit": "Maximum statements, nodes, or index entries to return (1-2000, default 200).",
+        },
+        parameter_schemas={
+            "label": {"type": "string"},
+            "screen": {"type": "string"},
+            "id": {"type": "string"},
+            "source": {"type": "string"},
+            "query": {"type": "string"},
+            "search": {"type": "string"},
+            "variables": {"type": "array", "items": {"type": "string"}},
+            "limit": _limits(1, 2000),
+        },
+    ),
     "renforge_advance": ToolDefinition(
         description=(
             "Advance one dialogue event from the currently active queue. Prefer `renforge_control(action=\"advance\")` "
@@ -433,25 +517,23 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "renforge_observe": ToolDefinition(
         description=(
-            "Read one interaction snapshot: dialogue, screens, pointer controls, and whether this interaction "
-            "listens for dismiss. Safe to call at any time, including mid-transition (`stable` false is not a "
-            "legal token for `renforge_act`). `screenshot` true (the default) attaches the PNG, and `frame_hash` "
-            "is the SHA-256 of that exact PNG. Pointer controls come from Ren'Py `focus_list`. A text field "
-            "does not enter that list; it is still returned as an `input` control whose `text` is the prompt. "
-            "`dialogue` is the line on the showing say window, including the speaker's display name, with "
-            "text tags such as `{b}`, `{w}`, and `{nw}` removed, and is null when that window is not showing. "
-            "`readout` is other visible text (day, time, objectives, history), not a control and not a reason "
-            "to stop. `action` names the control's action and target, such as `Start(\"start\")`, "
-            "`ShowMenu(\"load\")`, `SetVariable(\"show_button\", False)`, or "
-            "`Function(ChangeLocation, newLocation=\"beach\")`, including when the button has no label. "
-            "A control id is its widget id or menu index when Ren'Py has one, otherwise that action. "
-            "`image` is the idle picture's file name and joins the id only when siblings share an action. "
-            "A drag's id is its `drag_name` when it has one. `selected` is the action's selected state. "
-            "`alternate` and `hovered` are those actions when the control has them. `adjustment` is a bar's "
-            "value, range, step, and page, or a viewport's x and y adjustments. "
-            "Keyboard shortcuts are not listed; `dismiss` is a capability, not a key. Screens in "
-            "`config.overlay_screens`, and injected `_renforge_` editor screens, are returned as `chrome`. "
-            "Identity is this interaction, not a save-stable widget path."
+            'Read one interaction snapshot: session_id, observation_id, interaction, stability, dialogue, '
+            'screens, controls, chrome, readout, lifecycle, and forward. seen is true when the current statement '
+            '(a line, menu, or hub) already finished once since launch, so the agent is repeating itself. lifecycle.phase is playing, main_menu, '
+            'ended, or unknown; ending evidence records a root script return confirmed at the engine main menu. '
+            'Initial menus and explicit menu restarts are not endings. screenshot=true attaches the PNG whose SHA-256 '
+            'is frame_id. The snapshot is compact: defaults and repeats are left out, and chrome is reduced to id '
+            'and text; renforge_explain(id=...) returns a control\'s full record. Pass observation_id to renforge_act '
+            'to reject observations from another launch or rebuilt controls. Controls use widget ids or menu indices, then drag names, '
+            'action summaries, image basenames, or synthetic ordinals. Action summaries include targets and '
+            'arguments, including for unlabeled buttons; tooltip is the game\'s own tooltip text. operations lists the supported adapters for that '
+            'widget; adjustment reports bar values or viewport axes; draggable and droppable describe drag '
+            'eligibility. Inputs outside focus_list are still inventoried. Dialogue and readout remove text '
+            'tags while retaining literal braces and paragraph breaks. Only quick_menu and injected '
+            '_renforge_ screens are chrome; custom overlay hubs remain gameplay controls. forward is '
+            'dismiss, choose, wait, or none. An unstable snapshot is not an action token. omitted reports '
+            'focus, traversal, and readout limits; input_candidates reports unsupported custom event regions on screen with unknown eligibility. Both progression modes stop on incomplete input discovery. Keyboard shortcuts are not fully '
+            'inventoried.'
         ),
         annotations=_ann(
             readOnlyHint=True,
@@ -467,22 +549,23 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "renforge_act": ToolDefinition(
         description=(
-            "Activate one control from an `renforge_observe` snapshot, or post one physical key on that same "
-            "interaction. A control uses `interaction` and `id` (a `controls` or `chrome` id). A key uses "
-            "`interaction` and `key` and does not take an id. Immediately before input, the bridge checks that "
-            "the interaction is still current and the frame is stable. It returns `stale`, `unstable`, "
-            "`covered`, `disabled`, `missing`, `text_required`, `key_or_control`, or `unsupported` and does "
-            "not post input when the check fails. A button or hotspot runs its action. One with no action "
-            "is clicked at the center of its focus rectangle. A bar takes `value` and sets its adjustment. "
-            "A viewport takes `x`, `y`, or both. A drag takes `drop` (another control id) and runs its "
-            "dragged callback; omit `drop` to click it, or pass an empty `drop` to release it on nothing. "
-            "An Input takes `text`, "
-            "replaces the current value (a prefilled name is not kept), and submits with Ren'Py `input_enter`. "
-            "The field's allow, exclude, and length still apply. A value the field rejects returns "
-            "`text_rejected` and is not submitted. An empty string clears the field and submits that. "
-            "`key` posts `KEYDOWN` and `KEYUP` for a-z, the arrows, escape, return, or space. `hold` true "
-            "posts key-down only; `hold` false posts key-up only; omit `hold` for a tap. An unknown key is "
-            "refused with that list. Bars, drags, and viewports are not actuated. Does not enable skip."
+            "The one play step: act on a control, a key, or nothing, then continue to the next decision. "
+            "Pass observation_id from the renforge_observe (or previous renforge_act) snapshot you decided on; "
+            "acting on a control in a changed game refuses with error=stale and returns the current observation, "
+            "while continuing (no id) proceeds from the current state. id is a control id "
+            "from that snapshot, or key/<name> for a physical key (a-z, arrows, escape, return, space, tab). "
+            "value is the control's input: text for an input field (submitted with Enter), a number for a bar, "
+            "{x, y} for a viewport, a control id for a drag's drop target (empty string drops on nothing), or "
+            "true/false to hold/release a key; a control that takes none ignores it. Omit id to continue from "
+            "the observed state: narration and pauses are skipped, and a line that only has optional buttons "
+            "beside it is clicked past as a reader would. After the input the game progresses with bounded "
+            "native skip (preferences restored) until a choice, input, custom screen, ending, a line already "
+            "passed in this call (stop=loop), or the time budget; it never selects a control on its own. "
+            "Buttons on screens kept up across lines (a phone or codex HUD) do not stop a clickable line. Returns ok, action_outcome (succeeded, refused, "
+            "unknown, or none), the next compact observation, observation_status, and progress (stop, steps, "
+            "crossed dialogue with seen=true on repeated lines, ending). stop=end is a confirmed script return; "
+            "main_menu is a menu without ending evidence. Never repeat a successful or uncertain action only "
+            "because the follow-up observation failed."
         ),
         annotations=_ann(
             readOnlyHint=False,
@@ -492,50 +575,14 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         ),
         parameters={
             "project_path": "Project root of the running live session.",
-            "interaction": "Interaction number from the observe snapshot this action belongs to.",
-            "id": "Control or chrome id from that same snapshot. Omit it when posting a key.",
-            "text": "Full replacement for an input control. Omit it for a click or a key.",
-            "key": "Physical key to post: a-z, up, down, left, right, escape, return, or space.",
-            "hold": "True posts key-down only. False posts key-up only. Omit it for a tap.",
-            "value": "New value for a bar or slider adjustment.",
-            "x": "New horizontal offset for a viewport adjustment.",
-            "y": "New vertical offset for a viewport adjustment.",
-            "drop": "Control id to drop a drag onto. An empty string releases it on nothing.",
+            "observation_id": "observation_id of the snapshot this action was chosen from.",
+            "id": "Control id from that snapshot, or key/<name>. Omit to just continue.",
+            "value": "Input for the control: text, a number, {x, y}, a drop target id, or true/false for a key.",
+            "screenshot": "Attach a size-bounded PNG of the resulting observation (default true).",
+            "timeout": "Budget in seconds for the action and progression, from 0.1 to 120 (default 30).",
         },
         parameter_schemas={
-            "interaction": {"type": "integer"},
-            "value": {"type": "number"},
-            "x": {"type": "number"},
-            "y": {"type": "number"},
-        },
-    ),
-    "renforge_advance_until": ToolDefinition(
-        description=(
-            "Post Ren'Py's `dismiss` event until the player must choose, a hard-pause hub is showing, or nothing "
-            "is listening. Returns `stop` (`choose`, `wait`, `none`, `max_steps`, `timeout`, `stalled`, or `crash`), "
-            "`steps` (dismiss posts), and the last observation. Never clicks a choice, hotspot, map door, or "
-            "quick-menu button, never sends a key, and never enables skip. A text field stops as `choose`. "
-            "Readout text does not stop it. A hard pause with "
-            "decision controls stops as `choose`. "
-            "A hard pause with no decision controls, such as a timed cutscene, is `wait`: this polls and does not "
-            "dismiss. A hub whose screen is in `config.overlay_screens` is chrome, so that hard pause stops as "
-            "`wait` and those buttons stay in `chrome` for `renforge_act`. Custom displayables that never enter "
-            "`focus_list` are not guessed. `max_steps` bounds dismiss posts (1 to 200). `timeout` is the wall-clock "
-            "budget in seconds (0.1 to 120)."
-        ),
-        annotations=_ann(
-            readOnlyHint=False,
-            idempotentHint=False,
-            destructiveHint=True,
-            openWorldHint=True,
-        ),
-        parameters={
-            "project_path": "Project root of the running live session.",
-            "max_steps": "Maximum dismiss events to post before stopping. Integer from 1 to 200.",
-            "timeout": "Wall-clock budget in seconds, from 0.1 to 120.",
-        },
-        parameter_schemas={
-            "max_steps": {"minimum": 1, "maximum": 200},
+            "screenshot": {"type": "boolean"},
             "timeout": {"minimum": 0.1, "maximum": 120},
         },
     ),
@@ -672,10 +719,43 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             ]
         },
     ),
+    "renforge_mod": ToolDefinition(
+        description=(
+            "Write, test, and remove mods under `game/mods/<name>/` with a `renforge-mod.json` manifest. Never modifies "
+            "game files outside that directory. `write` takes `path` and `content` (`.rpy`, `.txt`, `.json`, or `.md`). "
+            "`list` reports listed, missing, and unlisted files. `lint` returns project lint diagnostics that point into "
+            "the mod. `remove` deletes only manifest-listed files, their compiled `.rpyc` siblings, and empty directories; "
+            "unlisted files are kept and reported. `package` zips the mod into `<state>/mods/`. `reload` (no name: it "
+            "reloads every script, wherever the mod lives) hot-reloads the running game and returns errors and a "
+            "fresh observation. `guide` returns modding idioms. Mod actions are "
+            "classified per action by the runtime policy."
+        ),
+        annotations=_ann(
+            readOnlyHint=False,
+            idempotentHint=False,
+            destructiveHint=False,
+            openWorldHint=False,
+        ),
+        parameters={
+            "project_path": "Project root of the game that owns the mod.",
+            "action": "One of `write`, `list`, `lint`, `reload`, `remove`, `package`, or `guide`.",
+            "name": (
+                "Mod name matching `^[a-z0-9][a-z0-9_-]{0,63}$`. Required for every action except `list`, `reload`, and `guide`."
+            ),
+            "path": "Path relative to the mod directory, for example `script.rpy`. Required for `write`.",
+            "content": "UTF-8 file content, at most 1,000,000 bytes. Required for `write`.",
+            "authorize": "Mod files are code the game runs, so `write` is open-world: pass true when RENFORGE_POLICY=enforce.",
+        },
+        parameter_schemas={
+            "action": _enum("write", "list", "lint", "reload", "remove", "package", "guide"),
+            "name": {"minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"},
+        },
+    ),
     "renforge_list_choices": ToolDefinition(
         description=(
-            "List on-screen menu choices with index and text ordering. Call before `renforge_select_choice` to pick valid entries "
-            "for the current menu state."
+            "List current engine menu entries across runtime layers, including clipped choices. Use the returned "
+            "indices with renforge_select_choice; they retain legacy textual-control ordering and need not be contiguous. "
+            "Duplicate captions remain distinct; sensitivity is checked when selecting."
         ),
         annotations=_ann(
             readOnlyHint=True,
@@ -688,7 +768,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     "renforge_select_choice": ToolDefinition(
         description=(
             "Select a menu choice by case-insensitive text or zero-based index. Text matching prefers an exact match, then "
-            "uses the shortest case-insensitive substring match. Use list output first to avoid ambiguous partial text."
+            "uses a case-insensitive substring match. Ambiguous text is refused; use the listed index. Optional observation guards reject stale selections."
         ),
         annotations=_ann(
             readOnlyHint=False,
@@ -699,7 +779,10 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         parameters={
             "project_path": "Project root of the running live session.",
             "text": "Visible text to match; preferred over index.",
-            "index": "Zero-based choice index fallback when text is omitted.",
+            "index": "Zero-based choice index from list output when text is omitted.",
+            "interaction": "Optional interaction generation from observe; rejects a stale selection.",
+            "session_id": "Optional session identity from observe.",
+            "observation_id": "Optional observation identity from observe.",
         },
         input_schema={
             "oneOf": [
@@ -716,7 +799,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "renforge_list_ui_elements": ToolDefinition(
         description=(
-            "List focusable UI elements with bounds and element metadata. Use this first for semantic interaction planning; "
+            "List supported controls and engine menu actions with canonical IDs, operations, and logical bounds when available. "
+            "Clipped menu actions can remain semantically selectable. Use this first for semantic interaction planning; "
             "it is narrower than a full scene readout and aligned to click/hover workflows."
         ),
         annotations=_ann(
@@ -856,7 +940,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "project_path": "Project root with active live session.",
             "x": "Horizontal coordinate in selected coordinate space.",
             "y": "Vertical coordinate in selected coordinate space.",
-            "expected_frame_id": "Frame id that must match for safety checks.",
+            "expected_frame_id": "Source frame id or complete observation frame descriptor. A descriptor maps delivered screenshot pixels and guards session/frame/dimensions.",
             "expected_state": "Optional expected runtime state dictionary before click.",
             "coordinate_space": "`logical` (default) or `screenshot` coordinates.",
         },
@@ -1066,9 +1150,10 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "renforge_scene_tree": ToolDefinition(
         description=(
-            "Read the full scene graph (logical scene data). Unlike `renforge_list_ui_elements` this is broad and includes non-"
-            "focusable nodes, so use it for full-tree inspection when semantic selectors are ambiguous. `save_as` or "
-            "`diff_against` may create `.renforge/scenes/`; `save_as` writes and overwrites the named JSON snapshot. Omit both "
+            "Inspect a bounded scene inventory with completed-frame logical geometry where established. Beyond "
+            "renforge_list_ui_elements it includes non-focusable nodes and uncertain custom input. Natural text overflow "
+            "is explicitly unavailable. Use this when semantic selectors are ambiguous. `save_as` or "
+            "`diff_against` may create `<state>/scenes/`; `save_as` writes and overwrites the named JSON snapshot. Omit both "
             "options for read-only inspection."
         ),
         annotations=_ann(
@@ -1086,8 +1171,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "ids": "Optional element id filters.",
             "include": "Optional expensive node properties: `color`, `style`, and `overflow`.",
             "format": "Return format (`json` or `wireframe`).",
-            "save_as": "Optional snapshot name saved under `.renforge/scenes/<name>.json`; reusing a name overwrites it.",
-            "diff_against": "Optional snapshot name for diff context; compare against existing `.renforge/scenes/<name>.json` entry.",
+            "save_as": "Optional snapshot name saved under `<state>/scenes/<name>.json`; reusing a name overwrites it.",
+            "diff_against": "Optional snapshot name for diff context; compare against existing `<state>/scenes/<name>.json` entry.",
             "max_output_depth": "Maximum traversal depth before truncation, from 0 through 20.",
             "max_items": "Maximum total nodes, from 1 through 10000.",
             "max_output_bytes": "Payload cap, from 64 through 2000000 bytes.",
@@ -1171,7 +1256,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     "renforge_autopilot": ToolDefinition(
         description=(
             "Auto-play branches by stopping any current manual session and launching a fresh session for every replay. It writes "
-            "incremental progress to `.renforge/autopilot.json` and may download/cache the required SDK. Best for broad checks; "
+            "incremental progress to `<state>/autopilot.json` and may download/cache the required SDK. Best for broad checks; "
             "not deterministic and potentially expensive."
         ),
         annotations=_ann(
@@ -1361,7 +1446,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "renforge_capture_screenshot": ToolDefinition(
         description=(
-            "Persist the current frame under `.renforge/captures/` and return the output path plus hash. This writes disk and may "
+            "Persist the current frame under `<state>/captures/` and return the output path plus hash. This writes disk and may "
             "overwrite an existing name."
         ),
         annotations=_ann(

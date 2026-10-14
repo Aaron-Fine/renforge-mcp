@@ -9,6 +9,7 @@ from renforge.ui import activity as activity_module
 from renforge.ui import graph
 from renforge.ui import poller
 from renforge.tools import live as live_module
+from renforge.state import project_state_dir
 
 try:
     from starlette.testclient import TestClient
@@ -463,47 +464,33 @@ def test_project_selection_switches_runtime_and_notifies_clients(tmp_path: Path,
     assert broadcasts[0]["payload"]["project"] == str(target)
 
 
-def test_list_choices_filters_out_non_choice_screen_controls(monkeypatch, tmp_path) -> None:
+def test_list_choices_uses_engine_membership_on_custom_screens(monkeypatch, tmp_path) -> None:
     class FakeClient:
         def get_state(self):
-            return {"menu": True}
+            raise AssertionError("menu discovery must not depend on conventional screen names")
 
-        def list_choices(self):
-            return [
-                {"index": 0, "text": "history", "screen": "quick_menu"},
-                {"index": 10, "text": "Continue", "screen": "choice"},
-                {"index": 11, "text": "Retry", "screen": "choice"},
-                {"index": 12, "text": "Auto", "screen": None},
-            ]
+        def list_menu_choices(self):
+            return [{"index": 10, "text": "Continue", "screen": "branch_picker"},
+                    {"index": 11, "text": "Retry", "screen": "branch_picker"}]
 
     monkeypatch.setattr(live_module, "_client", lambda _path: FakeClient())
     result = live_module.list_choices(str(tmp_path))
-    assert result == {
-        "ok": True,
-        "choices": [
-            {"index": 10, "text": "Continue", "screen": "choice"},
-            {"index": 11, "text": "Retry", "screen": "choice"},
-        ],
-    }
+    assert result == {"ok": True, "choices": FakeClient().list_menu_choices()}
 
 
 def test_list_choices_returns_empty_when_no_active_menu(monkeypatch, tmp_path) -> None:
     class FakeClient:
-        def get_state(self):
-            return {"menu": False}
-
-        def list_choices(self):
-            return [{"index": 0, "text": "should not see", "screen": "choice"}]
+        def list_menu_choices(self):
+            return []
 
     monkeypatch.setattr(live_module, "_client", lambda _path: FakeClient())
-    result = live_module.list_choices(str(tmp_path))
-    assert result == {"ok": True, "choices": []}
+    assert live_module.list_choices(str(tmp_path)) == {"ok": True, "choices": []}
 
 
 @pytest.mark.skipif(TestClient is None, reason="starlette not installed")
 def test_api_activity_recent_endpoint_returns_tail_events_and_skips_invalid_lines(tmp_path: Path) -> None:
     project_root = _project_root(tmp_path)
-    activity_path = project_root / ".renforge" / "activity.jsonl"
+    activity_path = project_state_dir(project_root) / "activity.jsonl"
     activity_path.parent.mkdir(parents=True, exist_ok=True)
     activity_path.write_text(
         "\n".join(
@@ -565,7 +552,7 @@ class _RecordingHub:
 
 def test_tail_activity_broadcasts_stable_activity_envelope(tmp_path: Path, monkeypatch) -> None:
     project_root = _project_root(tmp_path)
-    path = project_root / ".renforge" / "activity.jsonl"
+    path = project_state_dir(project_root) / "activity.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     activity = {"ts": 1234567890, "name": "tool-call"}
     path.write_text(json.dumps(activity) + "\n", encoding="utf-8")
@@ -632,8 +619,8 @@ def test_story_map_signature_changes_on_script_or_autopilot_change(tmp_path: Pat
     changed_script_sig = graph._story_map_signature(project)
     assert root_sig != changed_script_sig
 
-    autopilot_dir = project / ".renforge"
-    autopilot_dir.mkdir(exist_ok=True)
+    autopilot_dir = project_state_dir(project)
+    autopilot_dir.mkdir(parents=True, exist_ok=True)
     (autopilot_dir / "autopilot.json").write_text("{}", encoding="utf-8")
     with_autopilot_sig = graph._story_map_signature(project)
     assert changed_script_sig != with_autopilot_sig

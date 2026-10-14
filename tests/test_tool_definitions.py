@@ -36,7 +36,7 @@ def test_tool_definitions_cover_all_registered_tools_and_parameters() -> None:
 
     expected = set(TOOL_DEFINITIONS)
     assert set(registered) == expected
-    assert len(registered) == 58
+    assert len(registered) == 60
 
     for name, definition in TOOL_DEFINITIONS.items():
         tool = registered[name]
@@ -242,7 +242,7 @@ def test_tool_definitions_describe_real_side_effects_and_exact_options() -> None
     assert "layout" in parameter("renforge_scene_tree", "detail")
     assert "wireframe" in parameter("renforge_scene_tree", "format")
     assert "yaml" not in parameter("renforge_scene_tree", "format")
-    assert ".renforge/scenes" in description("renforge_scene_tree")
+    assert "<state>/scenes" in description("renforge_scene_tree")
     assert "overwrite" in description("renforge_scene_tree")
 
     assert "arbitrary python" in description("renforge_wait_until")
@@ -399,7 +399,7 @@ def test_catalog_states_exact_runtime_and_filesystem_contracts() -> None:
     assert "does not resolve label names" in launch.parameters["warp"].lower()
     assert "never deletes" in launch.parameters["persistent"].lower()
     assert "game/" in launch.description
-    assert ".renforge/control" in launch.description
+    assert "<state>/control" in launch.description
     assert "arbitrary save directory" in launch.parameters["savedir"].lower()
     assert "user's normal" in launch.parameters["savedir"].lower()
     assert "`existing`" in launch.parameters["savedir"]
@@ -426,11 +426,11 @@ def test_catalog_states_exact_runtime_and_filesystem_contracts() -> None:
     assert "case-insensitive substring" in definitions["renforge_select_choice"].description.lower()
     assert "optional" in definitions["renforge_click_element"].parameters["expected_frame_id"].lower()
     assert "may create" in definitions["renforge_scene_tree"].description.lower()
-    assert ".renforge/scenes" in definitions["renforge_scene_tree"].description.lower()
+    assert "<state>/scenes" in definitions["renforge_scene_tree"].description.lower()
 
     autopilot = definitions["renforge_autopilot"].description.lower()
     assert "fresh session" in autopilot
-    assert ".renforge/autopilot.json" in autopilot
+    assert "<state>/autopilot.json" in autopilot
     assert "current state" not in autopilot
 
     web_build = definitions["renforge_web_build"].description.lower()

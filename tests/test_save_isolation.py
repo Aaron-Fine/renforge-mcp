@@ -22,8 +22,10 @@ from renforge.save_isolation import (
     list_host_slots,
     parse_save_directory,
     path_exposes_user_saves,
+    renpy_tool_environment,
     resolve_launch_isolation,
     resolve_save_isolation,
+    TOOL_SAVES_ADAPTER_FILENAME,
 )
 
 
@@ -250,6 +252,59 @@ def test_session_init_payload_installs_storage_before_persistent_load() -> None:
     assert "unlink" not in text
 
 
+def test_session_storage_handles_first_initialization_and_reinitialization(monkeypatch, tmp_path):
+    import textwrap
+    from types import ModuleType, SimpleNamespace
+    from renforge.bridge.artifacts import session_init_payload
+
+    calls = []
+
+    class Locations:
+        def __init__(self):
+            self.locations = []
+
+        def add(self, location):
+            self.locations.append(location)
+
+        def scan(self):
+            calls.append("scan")
+
+    class Thread:
+        def __init__(self, target):
+            self.target = target
+
+        def start(self):
+            calls.append("start")
+
+    storage = SimpleNamespace(scan_thread=None, quit_scan_thread=False,
+                              MultiLocation=Locations,
+                              FileLocation=lambda path: SimpleNamespace(directory=path),
+                              run_scan_thread=lambda: None)
+
+    def quit():
+        assert storage.scan_thread is not None
+        calls.append("quit")
+
+    storage.quit = quit
+    engine = ModuleType("renpy")
+    engine.config = SimpleNamespace(savedir="original")
+    engine.savelocation = storage
+    engine.loadsave = SimpleNamespace(location=None)
+    # Legacy engines do not expose emscripten and have no scan thread yet.
+    monkeypatch.setitem(sys.modules, "renpy", engine)
+    monkeypatch.setenv("RENFORGE_SAVEDIR", str(tmp_path / "isolated"))
+    namespace = {}
+    exec(textwrap.dedent(session_init_payload().decode().split("\n", 1)[1]), namespace)
+    namespace["_renforge_threading"] = SimpleNamespace(Thread=Thread)
+    storage.init()
+    first_location = engine.loadsave.location.locations[0]
+    assert calls == ["scan", "start"]
+    assert first_location.directory == str(tmp_path / "isolated")
+    storage.init()
+    assert calls == ["scan", "start", "quit", "scan", "start"]
+    assert engine.loadsave.location.locations == [first_location]
+
+
 def test_low_level_defaults_match_mcp_defaults(monkeypatch) -> None:
     monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
     isolation = resolve_launch_isolation()
@@ -439,3 +494,34 @@ def test_live_saves_list_user_and_import(
         assert blocked["code"] == "SAVE_IMPORT_NOT_ISOLATED"
     finally:
         live._SESSIONS.pop(live._key(project), None)
+
+
+def test_renpy_tool_environment_keeps_one_shot_commands_out_of_player_saves(monkeypatch) -> None:
+    # Ren'Py writes persistent data on every start, lint included.
+    monkeypatch.setenv("RENPY_SEARCHPATH", "/already/there")
+    with renpy_tool_environment() as env:
+        home = Path(env["HOME"])
+        assert home.is_dir() and home != Path.home()
+        assert Path(env["RENFORGE_SAVEDIR"]).is_dir()
+        adapter_dir, existing = env["RENPY_SEARCHPATH"].split("::", 1)
+        assert existing == "/already/there"
+        adapter = (Path(adapter_dir) / TOOL_SAVES_ADAPTER_FILENAME).read_text(encoding="utf-8")
+        assert "renpy.savelocation.init = " in adapter
+    assert not home.exists()
+
+
+def test_import_finds_the_save_folder_the_running_game_names(tmp_path: Path, host_save_root: Path) -> None:
+    # Games shipped as .rpa/.rpyc only have no loose options.rpy to read.
+    project = tmp_path / "game-root"
+    (project / "game").mkdir(parents=True)
+    host_saves = host_save_root / "archived-game"
+    host_saves.mkdir(parents=True)
+    (host_saves / "1-1-LT1.save").write_bytes(b"SLOT")
+    dest = tmp_path / "state" / "saves"
+
+    assert import_host_slots(project, dest, slot="1-1")["ok"] is False
+    imported = import_host_slots(project, dest, slot="1-1", save_name="archived-game")
+    assert imported["ok"] is True
+    assert (dest / "1-1-LT1.save").read_bytes() == b"SLOT"
+    assert (host_saves / "1-1-LT1.save").read_bytes() == b"SLOT"
+

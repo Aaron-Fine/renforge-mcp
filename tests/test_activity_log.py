@@ -6,10 +6,11 @@ from pathlib import Path
 import pytest
 
 from renforge.activity_log import log_tool_call
+from renforge.state import project_state_dir
 
 
 def _read_activity(project: Path) -> bytes:
-    return (project / ".renforge" / "activity.jsonl").read_bytes()
+    return (project_state_dir(project) / "activity.jsonl").read_bytes()
 
 
 def test_activity_log_redacts_compound_secret_keys(tmp_path: Path) -> None:
@@ -93,10 +94,10 @@ def test_activity_log_does_not_follow_dir_swapped_after_validation(
         log_tool_call(tmp_path, "renforge_set_var", {"name": "x"}, 1.0, {"ok": True})
 
     assert list(outside.iterdir()) == []
-    assert not (tmp_path / ".renforge" / "activity.jsonl").is_file()
+    assert not (project_state_dir(tmp_path) / "activity.jsonl").is_file()
 
 
-def test_activity_log_does_not_follow_project_swapped_after_validation(
+def test_activity_log_is_not_redirected_by_a_project_swapped_after_validation(
     monkeypatch, tmp_path: Path
 ) -> None:
     from renforge import activity_log as logmod
@@ -104,7 +105,7 @@ def test_activity_log_does_not_follow_project_swapped_after_validation(
     project = tmp_path / "game"
     project.mkdir()
     outside = tmp_path / "outside"
-    (outside / ".renforge").mkdir(parents=True)
+    (project_state_dir(outside)).mkdir(parents=True)
     real_ensure = logmod.ensure_nofollow_directory
 
     def swap_project_after_validation(path: Path) -> Path:
@@ -115,7 +116,10 @@ def test_activity_log_does_not_follow_project_swapped_after_validation(
 
     monkeypatch.setattr(logmod, "ensure_nofollow_directory", swap_project_after_validation)
 
-    with pytest.raises((OSError, ValueError)):
-        log_tool_call(project, "renforge_set_var", {"name": "x"}, 1.0, {"ok": True})
+    state = project_state_dir(project)
+    # The log lives outside the project, in the folder chosen before the swap.
+    log_tool_call(project, "renforge_set_var", {"name": "x"}, 1.0, {"ok": True})
 
-    assert not (outside / ".renforge" / "activity.jsonl").exists()
+    assert not (project_state_dir(outside) / "activity.jsonl").exists()
+    assert (state / "activity.jsonl").is_file()
+    assert not (outside / ".renforge").exists()

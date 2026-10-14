@@ -16,6 +16,7 @@ from renforge.editor_say_who_position_runner import (
     SPEAKER,
     run_editor_say_who_style_position_live_scenario,
 )
+from renforge.state import project_state_dir
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("RENFORGE_SAY_WHO_STYLE_POSITION_LIVE"),
@@ -66,7 +67,7 @@ def test_say_who_style_position_live_product_path_pass(clean_fixture_copy: Path)
     sdk = get_or_install_sdk("8.5.3", project_root=clean_fixture_copy)
     screens_path = clean_fixture_copy / "game" / "screens.rpy"
     gui_path = clean_fixture_copy / "game" / "gui.rpy"
-    screenshot_path = clean_fixture_copy / ".renforge" / "say-who-live.png"
+    screenshot_path = project_state_dir(clean_fixture_copy) / "say-who-live.png"
 
     with launch_with_bridge(
         sdk,

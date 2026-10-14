@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import stat
+import sys
 import threading
 import time
 from pathlib import Path
@@ -22,9 +23,23 @@ from renforge.editor.exceptions import EditorError
 from renforge.launch_env import LaunchError
 from renforge.project import RenpyProject
 from renforge.sdk import RenpySdk
+from renforge.state import control_dir, project_state_dir
 
 
 _LAUNCHER_NAME = "renpy.exe" if os.name == "nt" else "renpy.sh"
+
+
+def test_legacy_sdk_rejected_before_project_lock_or_artifacts(tmp_path, monkeypatch):
+    from renforge.bridge import launcher
+
+    (tmp_path / "game").mkdir()
+    (tmp_path / "sdk").mkdir()
+    sdk = RenpySdk(version="7.8.7", root=tmp_path / "sdk")
+    monkeypatch.setattr(launcher, "ProjectBridgeLock", lambda *args: pytest.fail("must not acquire lock"))
+    with pytest.raises(LaunchError) as exc:
+        launch_with_bridge(sdk, RenpyProject(tmp_path))
+    assert exc.value.code == "UNSUPPORTED_RENPY_VERSION"
+    assert not (control_dir(tmp_path)).exists()
 
 
 class _FakeProcess:
@@ -92,11 +107,11 @@ def _valid_token(label: str = "token") -> str:
 
 
 def _bridge_info_path(project_root: Path) -> Path:
-    return project_root / ".renforge" / "control" / "bridge.json"
+    return control_dir(project_root) / "bridge.json"
 
 
 def _artifacts_path(project_root: Path) -> Path:
-    return project_root / ".renforge" / "control" / "artifacts.json"
+    return control_dir(project_root) / "artifacts.json"
 
 
 def _owned_bridge_rpy(project_root: Path) -> Path:
@@ -188,7 +203,17 @@ def test_launch_with_bridge_builds_run_command(monkeypatch, tmp_path: Path, warp
     assert len(env["RENFORGE_BRIDGE_TOKEN"]) == 64
     assert all(ch in "0123456789abcdef" for ch in env["RENFORGE_BRIDGE_TOKEN"])
     assert env["RENFORGE_BRIDGE_PROJECT_ROOT"] == str(project_root.resolve())
-    starting = project_root / ".renforge" / "control" / "bridge.json"
+    assert env["RENFORGE_BRIDGE_CONTROL_DIR"] == str(control_dir(project_root))
+    # Isolated preferences: transitions are turned off for the agent.
+    assert env["RENFORGE_BRIDGE_TRANSITIONS"] == "off"
+    # Frames never wait for the display unless the user asks for vsync.
+    assert env["RENPY_GL_VSYNC"] == "0"
+    # A crash never opens traceback.txt in the user's editor.
+    editor_scope: dict = {}
+    exec(Path(env["RENPY_EDIT_PY"]).read_text(encoding="utf-8"), editor_scope)
+    editor = editor_scope["Editor"]()
+    editor.begin(new_window=True), editor.open("traceback.txt", 1), editor.end()
+    starting = control_dir(project_root) / "bridge.json"
     # reserved before spawn; fake popen overwrote it to ready for the ping path
     assert starting.exists()
     session.close(timeout=0.1)
@@ -363,7 +388,7 @@ def test_remove_bridge_artifacts_deletes_injected_and_runtime_files(tmp_path: Pa
     legacy_inject.write_text("# unowned\n", encoding="utf-8")
     (game / "renforge_bridge.rpyc").write_bytes(b"\x00")
     (tmp_path / "traceback.txt").write_text("boom", encoding="utf-8")
-    renforge = tmp_path / ".renforge"
+    renforge = project_state_dir(tmp_path)
     renforge.mkdir(parents=True, exist_ok=True)
     legacy = renforge / "bridge.json"
     legacy.write_text('{"legacy":true}', encoding="utf-8")
@@ -439,7 +464,7 @@ def test_failed_launch_removes_every_generated_bridge_artifact(monkeypatch, tmp_
 
     assert not list((root / "game").glob("zzrenforge_bridge_*.rpy"))
     assert not list((root / "game").glob("zzrenforge_bridge_*.rpyc"))
-    assert not (root / ".renforge" / "control" / "bridge.json").exists()
+    assert not (control_dir(root) / "bridge.json").exists()
     assert not _artifacts_path(root).exists()
     # Unowned traceback is preserved (schema-3 cleanup never deletes it).
     assert (root / "traceback.txt").read_text(encoding="utf-8") == "preexisting"
@@ -501,7 +526,7 @@ def test_launch_cancellation_stops_process_and_cleans_artifacts(monkeypatch, tmp
     assert getattr(excinfo.value, "code", None) == "LAUNCH_CANCELLED"
     assert process.terminated is True
     assert not list((project_root / "game").glob("zzrenforge_bridge_*.rpy"))
-    assert not (project_root / ".renforge" / "control" / "bridge.json").exists()
+    assert not (control_dir(project_root) / "bridge.json").exists()
 
 
 def test_second_launch_same_project_fails_without_touching_first_session(
@@ -521,7 +546,7 @@ def test_second_launch_same_project_fails_without_touching_first_session(
 
     first = launch_with_bridge(sdk, project, token=_valid_token("first-token"))
     injected_before = _owned_bridge_rpy(project_root).read_bytes()
-    manifest_before = (project_root / ".renforge" / "control" / "bridge.json").read_bytes()
+    manifest_before = (control_dir(project_root) / "bridge.json").read_bytes()
 
     with pytest.raises(LaunchError) as excinfo:
         launch_with_bridge(sdk, project, token=_valid_token("second-token"))
@@ -530,11 +555,11 @@ def test_second_launch_same_project_fails_without_touching_first_session(
     assert getattr(excinfo.value, "phase", None) == "acquiring_project_lock"
     assert popen_calls["count"] == 1
     assert _owned_bridge_rpy(project_root).read_bytes() == injected_before
-    assert (project_root / ".renforge" / "control" / "bridge.json").read_bytes() == manifest_before
+    assert (control_dir(project_root) / "bridge.json").read_bytes() == manifest_before
 
     first.close(timeout=0.1)
-    assert (project_root / ".renforge" / "control" / "bridge.lock").exists()
-    assert not (project_root / ".renforge" / "bridge.lock").exists()
+    assert (control_dir(project_root) / "bridge.lock").exists()
+    assert not (project_state_dir(project_root) / "bridge.lock").exists()
 
 
 def test_sessions_for_different_projects_are_isolated(monkeypatch, tmp_path: Path) -> None:
@@ -554,9 +579,9 @@ def test_sessions_for_different_projects_are_isolated(monkeypatch, tmp_path: Pat
     session_a.close(timeout=0.1)
 
     assert not list((root_a / "game").glob("zzrenforge_bridge_*.rpy"))
-    assert not (root_a / ".renforge" / "control" / "bridge.json").exists()
+    assert not (control_dir(root_a) / "bridge.json").exists()
     assert _owned_bridge_rpy(root_b).exists()
-    assert json.loads((root_b / ".renforge" / "control" / "bridge.json").read_text())["token"] == _valid_token("token-b")
+    assert json.loads((control_dir(root_b) / "bridge.json").read_text())["token"] == _valid_token("token-b")
 
     session_b.close(timeout=0.1)
 
@@ -661,9 +686,196 @@ def test_allowlisted_bridge_startup_error_fails_before_timeout(monkeypatch, tmp_
 
     assert excinfo.value.code == "BRIDGE_INFO_CONFLICT"
     assert excinfo.value.phase == "waiting_for_bridge"
-    assert not (project_root / ".renforge" / "control" / "bridge.json").exists()
+    assert not (control_dir(project_root) / "bridge.json").exists()
 
 
+
+
+def test_game_error_report_during_startup_fails_before_timeout(monkeypatch, tmp_path: Path) -> None:
+    """Astreon: a translation error at init shows Ren'Py's error screen, so no bridge."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    report = (
+        "\ufeffI'm sorry, but an uncaught exception occurred.\n\nWhile running game code:\n"
+        '  File "game/tl/chinese/ProfileMenu.rpy", line 6, in script\n'
+        "Exception: A translation for \"Character\" already exists.\n\n"
+        "-- Full Traceback ------\nmore\n"
+    )
+
+    def fake_popen(*_args, **_kwargs):
+        (project_root / "traceback.txt").write_text(report, encoding="utf-8")
+        return _FakeProcess()
+
+    def fail_client(_config):
+        raise AssertionError("no bridge manifest exists")
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", fail_client)
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("renforge.bridge.launcher._GAME_ERROR_GRACE_S", 0.0)
+
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert excinfo.value.code == "GAME_STARTUP_ERROR"
+    assert 'already exists' in str(excinfo.value)
+    assert "Full Traceback" not in excinfo.value.details["report"]
+
+
+def test_a_launch_that_compiled_scripts_and_stopped_on_an_error_is_retried_once(monkeypatch, tmp_path: Path) -> None:
+    """Eden, Found in Translation: the compiling launch raises, the next one loads fine."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    (project_root / "game").mkdir(exist_ok=True)
+    launches = {"count": 0}
+
+    def fake_popen(*_args, **kwargs):
+        launches["count"] += 1
+        if launches["count"] == 1:
+            (project_root / "game" / "tl.rpyc").write_bytes(b"fresh")
+            (project_root / "traceback.txt").write_text(
+                "While running game code:\nException: A translation for \"Language\" already exists.\n",
+                encoding="utf-8")
+        else:
+            _write_bridge_info(project_root, kwargs["env"])
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("renforge.bridge.launcher._GAME_ERROR_GRACE_S", 0.0)
+
+    session = launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert launches["count"] == 2
+    assert "already exists" in session.startup_warning
+    session.close(timeout=0.1)
+
+    # Without compiled scripts the error is the game's own: no retry.
+    launches["count"] = 0
+    (project_root / "traceback.txt").unlink()
+
+    def failing_popen(*_args, **_kwargs):
+        launches["count"] += 1
+        (project_root / "traceback.txt").write_text("Exception: boom %d\n" % launches["count"], encoding="utf-8")
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", failing_popen)
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert excinfo.value.code == "GAME_STARTUP_ERROR" and launches["count"] == 1
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the Wayland driver default is Linux-only")
+def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkeypatch, tmp_path: Path) -> None:
+    """Inanna's Revenge, Island Echoes: a transparent presplash needs a shaped window."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.delenv("SDL_VIDEODRIVER", raising=False)
+    project, sdk, project_root = _make_project(tmp_path)
+    drivers = []
+
+    class _Stream:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def read(self, _size=-1):
+            payload, self._payload = self._payload, b""
+            return payload
+
+    def fake_popen(*_args, **kwargs):
+        drivers.append(kwargs["env"].get("SDL_VIDEODRIVER"))
+        process = _FakeProcess()
+        if kwargs["env"].get("SDL_VIDEODRIVER") == "wayland,x11":
+            process.returncode = 1
+            process.stdout = _Stream(b"")
+            process.stderr = _Stream(
+                b'  File "renpy/display/presplash.py", line 131, in start\n'
+                b"    window = pygame.display.Window(\n"
+                b'  File "renpy/pygame/display.pyx", line 176, in renpy.pygame.display.Window.__init__\n'
+                b"renpy.pygame.error.error\n")
+        else:
+            _write_bridge_info(project_root, kwargs["env"])
+        return process
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+
+    session = launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert drivers == ["wayland,x11", "x11"]
+    assert "Wayland" in session.startup_warning
+    session.close(timeout=0.1)
+
+    # Ren'Py 8.4's pygame_sdl2 says "Invalid window".
+    from renforge.bridge.launcher import _shaped_presplash_failed
+    older = LaunchError("DISPLAY_START_FAILED", "exited", phase="starting_renpy", details={"stderr": (
+        '  File "renpy/display/presplash.py", line 131, in start\n'
+        "    window = pygame_sdl2.display.Window(\npygame_sdl2.error.error: Invalid window\n")})
+    assert _shaped_presplash_failed(older, None) is True
+
+    # A driver the user chose is theirs: no retry.
+    drivers.clear()
+    with pytest.raises(LaunchError):
+        launch_with_bridge(sdk, project, startup_timeout=30.0, extra_env={"SDL_VIDEODRIVER": "wayland,x11"})
+    assert drivers == ["wayland,x11"]
+
+
+def test_a_launch_whose_scripts_do_not_parse_fails_even_with_the_bridge_up(monkeypatch, tmp_path: Path) -> None:
+    """Fleeting Memories: the compiling launch shows _parse_errors; the bridge still starts."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    (project_root / "game").mkdir(exist_ok=True)
+    launches = {"count": 0}
+
+    def fake_popen(*_args, **kwargs):
+        launches["count"] += 1
+        if launches["count"] == 1:
+            (project_root / "game" / "screens.rpyc").write_bytes(b"fresh")
+            (project_root / "errors.txt").write_text(
+                "I'm sorry, but errors were detected in your script.\n\n"
+                "The label alt_view_toggle is defined twice, at File \"screens.rpyc\", line 2:\n", encoding="utf-8")
+        _write_bridge_info(project_root, kwargs["env"])
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    session = launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert launches["count"] == 2 and "defined twice" in session.startup_warning
+    session.close(timeout=0.1)
+
+
+def test_the_error_line_is_read_from_either_kind_of_report() -> None:
+    from renforge.bridge.launcher import _game_error_line
+
+    errors = (
+        "I'm sorry, but errors were detected in your script. Please correct the\n"
+        "errors listed below, and try again.\n\n"
+        'File "game/01base_stats.rpy", line 123: invalid syntax\n'
+        '    raise TypeError, "Supplied value"\n\n'
+        "Ren'Py Version: Ren'Py 8.0.3.22090809\nTue Oct 13 20:56:14 2026\n"
+    )
+    assert _game_error_line(errors) == 'File "game/01base_stats.rpy", line 123: invalid syntax'
+    traceback = (
+        "I'm sorry, but an uncaught exception occurred.\n\nWhile running game code:\n"
+        '  File "game/tl/x.rpy", line 6, in script\n    old "Language"\n'
+        'Exception: A translation for "Language" already exists.\n'
+    )
+    assert _game_error_line(traceback) == 'Exception: A translation for "Language" already exists.'
+
+
+def test_an_old_game_error_report_does_not_fail_a_launch(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    (project_root / "traceback.txt").write_text("from an earlier run\n", encoding="utf-8")
+    clock = iter((0.0, 0.0, 0.5, 2.0))
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", lambda *_a, **_k: _FakeProcess())
+    monkeypatch.setattr("renforge.bridge.launcher.time.time", lambda: next(clock))
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("renforge.bridge.launcher._GAME_ERROR_GRACE_S", 0.0)
+
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=1.0)
+    assert excinfo.value.code == "BRIDGE_CONNECTION_TIMEOUT"
 
 
 def test_close_keeps_lock_and_artifacts_until_process_exit(
@@ -688,7 +900,7 @@ def test_close_keeps_lock_and_artifacts_until_process_exit(
     assert "process_alive" in first_close["failed"]
     assert first.closed is False
     assert _owned_bridge_rpy(project_root).exists()
-    assert (project_root / ".renforge" / "control" / "bridge.json").exists()
+    assert (control_dir(project_root) / "bridge.json").exists()
     with pytest.raises(LaunchError) as excinfo:
         launch_with_bridge(sdk, project, token=_valid_token("blocked-token"))
     assert excinfo.value.code == "BRIDGE_PROJECT_LOCKED"
@@ -699,7 +911,7 @@ def test_close_keeps_lock_and_artifacts_until_process_exit(
     assert retry_close.get("failed") is None
     assert first.closed is True
     assert not list((project_root / "game").glob("zzrenforge_bridge_*.rpy"))
-    assert not (project_root / ".renforge" / "control" / "bridge.json").exists()
+    assert not (control_dir(project_root) / "bridge.json").exists()
 
     second = launch_with_bridge(sdk, project, token=_valid_token("second-token"))
     assert launches["count"] == 2
@@ -769,7 +981,7 @@ def test_lock_file_open_permission_error_is_not_reported_as_contention(
 
 def test_lock_rejects_symlink_without_repair(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
-    control = project_root / ".renforge" / "control"
+    control = control_dir(project_root)
     control.mkdir(parents=True)
     os.chmod(control, 0o700)
     victim = tmp_path / "victim"
@@ -784,7 +996,7 @@ def test_lock_rejects_symlink_without_repair(tmp_path: Path) -> None:
     assert excinfo.value.phase == "preparing_control_directory"
     assert victim.read_bytes() == b"secret-bytes"
     assert lock_path.is_symlink()
-    assert not (project_root / ".renforge" / "bridge.lock").exists()
+    assert not (project_state_dir(project_root) / "bridge.lock").exists()
 
 
 def test_preplanted_unsafe_bridge_info_fails_closed_without_unlink(
@@ -792,7 +1004,7 @@ def test_preplanted_unsafe_bridge_info_fails_closed_without_unlink(
 ) -> None:
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)
-    control = project_root / ".renforge" / "control"
+    control = control_dir(project_root)
     control.mkdir(parents=True)
     if os.name != "nt":
         os.chmod(control, 0o700)
@@ -826,7 +1038,7 @@ def test_preplanted_unsafe_bridge_info_fails_closed_without_unlink(
 
 def test_lock_rejects_world_writable_control_dir(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
-    control = project_root / ".renforge" / "control"
+    control = control_dir(project_root)
     control.mkdir(parents=True)
     os.chmod(control, 0o777)
 
@@ -1558,10 +1770,13 @@ def test_injected_payload_is_the_sum_of_every_source_file() -> None:
     assert screens, "expected the region screens to live in their own files"
     assert {path.name for path in screens} >= {"rf_toolbar.rpy", "rf_tree.rpy"}
 
-    payload = _editor_payload()
-    assert payload.startswith(_EDITOR_RESOURCE.read_bytes())
+    from renforge.bridge.guard import guard_rpy
+
+    # Each source arrives with its init python blocks guarded (guard.py).
+    payload = _editor_payload().decode("utf-8")
+    assert payload.startswith(guard_rpy(_EDITOR_RESOURCE.read_text(encoding="utf-8"), imports=False))
     for path in screens:
-        assert path.read_bytes() in payload
+        assert guard_rpy(path.read_text(encoding="utf-8"), imports=False) in payload
 
     # Order must not drift with the filesystem, or the digest changes for no reason.
     assert [path.name for path in screens] == sorted(path.name for path in screens)
@@ -1613,7 +1828,7 @@ def test_no_widget_id_is_claimed_by_two_region_screens() -> None:
 def test_private_directory_create_and_validate(tmp_path: Path) -> None:
     from renforge.util.files import ensure_private_directory
 
-    control = tmp_path / ".renforge" / "control"
+    control = control_dir(tmp_path)
     created = ensure_private_directory(control)
     assert created == (control if control.is_absolute() else control.absolute())
     assert created.is_dir()
@@ -1649,18 +1864,19 @@ def test_private_directory_rejects_ancestor_symlink_without_touching_victim(
 ) -> None:
     from renforge.util.files import PrivatePathError, ensure_private_directory
 
-    # project/.renforge is a symlink outside the project; control under it must fail closed.
+    # The project's state folder is a symlink elsewhere; control under it must fail closed.
     project = tmp_path / "project"
     project.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
     marker = outside / "secret.txt"
     marker.write_text("keep-me", encoding="utf-8")
-    renforge_link = project / ".renforge"
+    renforge_link = project_state_dir(project)
+    renforge_link.parent.mkdir(parents=True, exist_ok=True)
     renforge_link.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(PrivatePathError) as exc_info:
-        ensure_private_directory(project / ".renforge" / "control")
+        ensure_private_directory(control_dir(project))
     assert exc_info.value.code == "PRIVATE_DIRECTORY_UNSAFE"
     assert marker.read_text(encoding="utf-8") == "keep-me"
     assert not (outside / "control").exists()
@@ -2044,3 +2260,15 @@ def test_pipe_reader_handles_split_chunk_stream() -> None:
     finally:
         os.close(w_fd)
         r_file.close()
+
+
+def test_startup_timeout_defaults_and_reads_the_environment(monkeypatch):
+    from renforge.bridge import launcher
+
+    monkeypatch.delenv(launcher.STARTUP_TIMEOUT_ENV, raising=False)
+    assert launcher.default_startup_timeout() == 180.0
+    monkeypatch.setenv(launcher.STARTUP_TIMEOUT_ENV, "420")
+    assert launcher.default_startup_timeout() == 420.0
+    for bad in ("", "soon", "0", "-5", "inf", "nan"):
+        monkeypatch.setenv(launcher.STARTUP_TIMEOUT_ENV, bad)
+        assert launcher.default_startup_timeout() == 180.0

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Iterable
 
+import json
 import os
 import re
 import shutil
@@ -162,7 +163,8 @@ def _sdk_internal_version(root: Path) -> str | None:
     Releases from 8.1 onward write ``version = '8.1.2.23090503'`` in
     ``renpy/vc_version.py``. Ren'Py 8.0 writes only a numeric ``vc_version``
     there and keeps the triple in ``renpy/__init__.py``, once for the Python 2
-    line and once for Python 3. The Python 3 triple is the one this bridge runs.
+    line and once for Python 3. The Python 3 triple is the one this bridge
+    runs, unless the build ships only Python 2 runtimes.
     """
     version_file = root / "renpy" / "vc_version.py"
     try:
@@ -170,7 +172,7 @@ def _sdk_internal_version(root: Path) -> str | None:
     except (OSError, UnicodeError):
         text = ""
     match = re.search(
-        r"(?m)^\s*version\s*=\s*(['\"])(?P<version>\d+\.\d+\.\d+[^'\"]*)\1",
+        r"(?m)^\s*version\s*=\s*[uU]?(['\"])(?P<version>\d+\.\d+\.\d+[^'\"]*)\1",
         text,
     )
     if match is not None:
@@ -189,7 +191,18 @@ def _sdk_internal_version(root: Path) -> str | None:
         tuples.append((triple, found.group(4)))
     if not tuples:
         return None
-    triple, build = max(tuples, key=lambda item: item[0])
+    # A dual 7.5/8.0 build runs on Python 3 only when it ships a py3 runtime.
+    # With only lib/py2-* its launcher starts the Python 2 engine, the one
+    # its scripts are written for.
+    pick = max
+    try:
+        runtimes = [entry.name for entry in (root / "lib").iterdir()]
+    except OSError:
+        runtimes = []
+    if (any(name.startswith("py2-") for name in runtimes)
+            and not any(name.startswith("py3-") for name in runtimes)):
+        pick = min
+    triple, build = pick(tuples, key=lambda item: item[0])
     version = ".".join(str(part) for part in triple)
     if build is not None:
         version = f"{version}.{build}"
@@ -214,18 +227,65 @@ def _compatible_sdk_version(installed: str, required: str) -> bool:
     )
 
 
-def bundled_engine_version(project_root: Path) -> str | None:
-    """Return ``X.Y.Z`` from a distributed game's ``renpy/vc_version.py``.
+PROJECT_FILE: Final = "renforge.json"
 
-    The file records the engine the game shipped with (``8.1.2.23090503``
-    becomes ``8.1.2``). A source project with no ``renpy/`` directory returns
-    None and keeps the stable SDK.
+
+def _declared_project_version(root: Path) -> tuple[int, int, int] | None:
+    """``renpy_version`` from the project's ``renforge.json``, if any.
+
+    Ren'Py never reads this file, so pinning a source project here changes
+    nothing about how the game runs.
     """
-    reported = _sdk_internal_version(Path(project_root))
-    triple = _version_tuple(reported or "")
-    if triple is None:
+    try:
+        payload = json.loads((root / PROJECT_FILE).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
         return None
+    version = payload.get("renpy_version") if isinstance(payload, dict) else None
+    return _version_tuple(version) if isinstance(version, str) else None
+
+
+def bundled_engine_version(project_root: Path) -> str | None:
+    """Return the ``X.Y.Z`` engine a game was made for, or None.
+
+    In order: ``renpy_version`` in the project's ``renforge.json`` (an explicit
+    pin for source projects); the shipped engine's ``renpy/vc_version.py``
+    (``8.1.2.23090503`` becomes ``8.1.2``); then ``game/script_version.txt``
+    (``(8, 5, 2)``), which Ren'Py writes into builds. Adding a
+    ``script_version.txt`` to a source project is not a neutral pin: Ren'Py
+    turns developer mode off when it exists. A project with none of these keeps
+    the stable SDK.
+    """
+    root = Path(project_root)
+    triple = _declared_project_version(root) or _version_tuple(_sdk_internal_version(root) or "")
+    if triple is None:
+        try:
+            declared = (root / "game" / "script_version.txt").read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return None
+        match = re.match(r"^\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", declared)
+        if match is None:
+            return None
+        triple = tuple(int(part) for part in match.groups())
     return f"{triple[0]}.{triple[1]}.{triple[2]}"
+
+
+def require_supported_runtime(version: str = "stable", *, project_root: Path) -> None:
+    """Reject legacy game/SDK engines before runtime launch has side effects."""
+    from .launch_env import LaunchError
+
+    bundled = bundled_engine_version(project_root)
+    requested = bundled if bundled and (not version or version == "stable") else version
+    selected = _validate_version_identifier(_resolve_version(requested))
+    for source, candidate in (("bundled_engine", bundled), ("selected_sdk", selected)):
+        if candidate is not None and int(candidate.split(".", 1)[0]) < 8:
+            raise LaunchError(
+                "UNSUPPORTED_RENPY_VERSION",
+                f"Ren'Py {candidate} is incompatible with RenForge runtime control; Ren'Py 8.0 or newer is required.",
+                phase="checking_runtime_compatibility",
+                suggested_fix="Use a game build targeting Ren'Py 8.x or newer.",
+                details={"source": source, "detected_version": bundled,
+                         "selected_version": selected, "minimum_version": "8.0.0"},
+            )
 
 
 def _validated_sdk_version(root: Path, required_version: str) -> str | None:

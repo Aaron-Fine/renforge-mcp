@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from renforge.ui.server import create_ui_app
+from renforge.state import project_state_dir
 
 try:
     from starlette.testclient import TestClient
@@ -149,8 +150,8 @@ def test_api_coverage_reports_missing_file_with_code(tmp_path: Path) -> None:
 @pytest.mark.skipif(TestClient is None, reason="starlette not installed")
 def test_api_coverage_does_not_expose_parser_exception_details(tmp_path: Path) -> None:
     project = _project_root(tmp_path)
-    coverage_file = project / ".renforge" / "autopilot.json"
-    coverage_file.parent.mkdir()
+    coverage_file = project_state_dir(project) / "autopilot.json"
+    coverage_file.parent.mkdir(parents=True)
     coverage_file.write_text("{invalid-json", encoding="utf-8")
     client = TestClient(create_ui_app(project, ui_token="token"))
 

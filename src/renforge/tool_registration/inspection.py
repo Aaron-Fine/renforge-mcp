@@ -9,6 +9,7 @@ from typing import Any
 TOOL_NAMES = (
     "renforge_diff_screenshots",
     "renforge_scene_tree",
+    "renforge_explain",
     "renforge_measure",
     "renforge_screenshot",
     "renforge_capture_screenshot",
@@ -90,7 +91,7 @@ def build_wrappers(context):
         or `raw`; `layers`/`types`/`screen`/`ids` scope the result.
         `include=["color","style","overflow"]` opts into composited colour,
         declared style, and best-effort text overflow. `format="wireframe"` adds
-        an ASCII map. `save_as` persists a snapshot under `.renforge/scenes/`;
+        an ASCII map. `save_as` persists a snapshot under `<state>/scenes/`;
         `diff_against` diffs the live scene against a saved snapshot.
         """
         return _log_tool_call(
@@ -126,6 +127,55 @@ def build_wrappers(context):
                 "max_items": max_items,
                 "max_output_depth": max_output_depth,
                 "max_output_bytes": max_output_bytes,
+            },
+        )
+
+
+    def renforge_explain(
+        project_path: str,
+        label: str = "",
+        screen: str = "",
+        id: str = "",
+        limit: int = 200,
+        source: str = "",
+        query: str = "",
+        search: str = "",
+        variables: list[str] | None = None,
+    ) -> dict:
+        """Explain where game content is defined and what it does, without evaluating it.
+
+        Reads the running game's loaded syntax trees, so it also works for
+        games that ship only ``.rpa``/``.rpyc``. With no selector it indexes
+        labels and screens, filtered by ``query``. ``label`` lists a label's
+        statements, ``screen`` its displayable tree, and ``id`` (a control id
+        from ``renforge_observe``) or ``source`` (a ``file:line`` from observe or
+        an input candidate) the statement there with its enclosing conditions.
+        """
+        return _log_tool_call(
+            name="renforge_explain",
+            params={
+                "project_path": project_path,
+                "label": label,
+                "screen": screen,
+                "id": id,
+                "limit": limit,
+                "source": source,
+                "query": query,
+                "search": search,
+                "variables": variables,
+            },
+            project_root=project_path,
+            fn=live.explain,
+            args=(project_path,),
+            kwargs={
+                "label": label or None,
+                "screen": screen or None,
+                "id": id or None,
+                "source": source or None,
+                "query": query or None,
+                "search": search or None,
+                "limit": limit,
+                "variables": variables or None,
             },
         )
 

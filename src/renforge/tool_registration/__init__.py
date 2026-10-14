@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..tool_definitions import TOOL_DEFINITIONS
-from . import content_build, inspection, interaction, lifecycle, project_analysis, runtime_state, scenarios
+from . import content_build, inspection, interaction, lifecycle, mods, project_analysis, runtime_state, scenarios
 from .registry import ToolRegistrar
 from .wrappers import build_tool_wrappers
 
@@ -17,6 +17,7 @@ DOMAIN_MODULES = (
     inspection,
     scenarios,
     content_build,
+    mods,
 )
 
 
@@ -31,9 +32,11 @@ def register_all_tools(app: Any) -> None:
         domain.register(registrar, wrappers)
 
     expected = set(TOOL_DEFINITIONS)
-    if set(wrappers) != expected or registrar.registered_names != expected:
-        missing = sorted(expected - registrar.registered_names)
-        extra = sorted(registrar.registered_names - expected)
+    # Tools in groups RENFORGE_TOOLSETS leaves out still count as wired.
+    accounted = registrar.registered_names | registrar.hidden_names
+    if set(wrappers) != expected or accounted != expected:
+        missing = sorted(expected - accounted)
+        extra = sorted(accounted - expected)
         orphaned = sorted(set(wrappers) - expected)
         raise RuntimeError(
             f"Tool registration drift: missing={missing} extra={extra} orphaned={orphaned}"

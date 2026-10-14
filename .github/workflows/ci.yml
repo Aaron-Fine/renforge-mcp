@@ -174,8 +174,8 @@ jobs:
             .engine-test-artifacts/pytest/**/log.txt
             .engine-test-artifacts/pytest/**/traceback.txt
             .engine-test-artifacts/pytest/**/errors.txt
-            .engine-test-artifacts/pytest/**/.renforge/captures/*.png
-            .engine-test-artifacts/pytest/**/.renforge/autopilot.json
+            .engine-test-artifacts/pytest/**/projects/*/captures/*.png
+            .engine-test-artifacts/pytest/**/projects/*/autopilot.json
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7

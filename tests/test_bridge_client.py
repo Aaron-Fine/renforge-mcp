@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from renforge.bridge.client import BridgeClient, BridgeConfig, BridgeProtocolError
+from renforge.state import control_dir, project_state_dir
 
 
 def _start_test_server(handler):
@@ -369,7 +370,7 @@ def _write_ready_bridge_info(
         "token": token or _token(),
     }
     payload.update(overrides)
-    path = project_root / ".renforge" / "control" / "bridge.json"
+    path = control_dir(project_root) / "bridge.json"
     atomic_write_private_json(path, payload, max_bytes=16 * 1024)
     return payload
 
@@ -468,7 +469,7 @@ def test_bridge_info_rejects_invalid_ready_payload(tmp_path: Path, mutate) -> No
         "token": _token(),
     }
     mutate(payload)
-    path = root / ".renforge" / "control" / "bridge.json"
+    path = control_dir(root) / "bridge.json"
     atomic_write_private_json(path, payload, max_bytes=16 * 1024)
 
     with pytest.raises(BridgeProtocolError, match="^bridge metadata failed validation$") as excinfo:
@@ -497,8 +498,8 @@ def test_ensure_control_dir_rejects_symlink_control_path(tmp_path: Path) -> None
     from renforge.launch_env import LaunchError
 
     root = _control_project(tmp_path)
-    renforge = root / ".renforge"
-    renforge.mkdir()
+    renforge = project_state_dir(root)
+    renforge.mkdir(parents=True)
     real = tmp_path / "elsewhere"
     real.mkdir()
     (renforge / "control").symlink_to(real)
@@ -553,7 +554,7 @@ def test_from_project_ignores_legacy_bridge_json(tmp_path: Path) -> None:
 
     root = _control_project(tmp_path)
     ensure_control_dir(root)
-    legacy = root / ".renforge" / "bridge.json"
+    legacy = project_state_dir(root) / "bridge.json"
     legacy.write_text(
         json.dumps(
             {

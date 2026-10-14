@@ -54,13 +54,13 @@ def autopilot(
     max_runs: int = 16,
     max_steps: int = 60,
     settle: float = 0.4,
-    startup_timeout: float = 90.0,
+    startup_timeout: float | None = None,
     progress_callback: Callable[[dict], None] | None = None,
 ) -> dict[str, Any]:
     """Explore the game and return a coverage/crash report.
 
     After each run a partial report is written to
-    ``<project>/.renforge/autopilot.json`` and passed to ``progress_callback``
+    ``<project state>/autopilot.json`` and passed to ``progress_callback``
     (if given), so long explorations can be followed incrementally.
     """
     total_labels = _story_labels(project.root)
@@ -74,6 +74,7 @@ def autopilot(
     seen_prefixes: set[tuple[int, ...]] = set()
     runs = 0
 
+    project.cache_dir.mkdir(parents=True, exist_ok=True)
     progress_path = project.cache_dir / "autopilot.json"
 
     def _report(done: bool) -> dict[str, Any]:

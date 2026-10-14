@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Final, Iterable, Sequence
 
 from .sdk import RenpySdk
+from .state import project_state_dir
 
 
 RENPY_GAME_DIR: Final = "game"
-RENFORGE_CACHE_DIR: Final = ".renforge"
 
 # A real project's game/ dir holds scripts or archives; requiring one avoids
 # misdetecting an unrelated directory that merely contains a "game" folder.
@@ -75,8 +75,8 @@ class RenpyProject:
                 f"Invalid Ren'Py project: missing '{RENPY_GAME_DIR}/' in {canonical}"
             )
 
-        cache_dir = canonical / RENFORGE_CACHE_DIR
-        cache_dir.mkdir(parents=True, exist_ok=True)
+        # RenForge's own state lives outside the game folder; created on use.
+        cache_dir = project_state_dir(canonical)
         object.__setattr__(self, "root", canonical)
         object.__setattr__(self, "game_dir", game_dir)
         object.__setattr__(self, "cache_dir", cache_dir)

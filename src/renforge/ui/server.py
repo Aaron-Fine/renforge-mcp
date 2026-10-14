@@ -29,6 +29,7 @@ from .graph import build_story_map, resolve_game_file_path, resolve_warp_target
 from .errors import error_response
 from .poller import poll_bridge
 from .ws import WebSocketHub, build_ws_envelope
+from ..state import project_state_dir
 
 
 def _renforge_version() -> str:
@@ -68,7 +69,7 @@ def _as_dict(value: Any) -> dict[str, Any]:
 
 
 def _read_autopilot(project_root: Path) -> dict[str, Any]:
-    path = project_root / ".renforge" / "autopilot.json"
+    path = project_state_dir(project_root) / "autopilot.json"
     if not path.exists():
         return {"ok": False, "error": "coverage file not found"}
     try:
@@ -727,6 +728,14 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
         preferences = payload.get("preferences")
         cleanup_on_stop = payload.get("cleanup_on_stop", True)
         timeout = payload.get("timeout")
+        start_label = payload.get("start_label")
+        if start_label is not None and (not isinstance(start_label, str) or not start_label.strip()):
+            return error_response(
+                code="launch_start_label_invalid",
+                error="start_label must be a non-empty string",
+                status_code=400,
+                details={"start_label": start_label},
+            )
         if not isinstance(version, str) or not version:
             return error_response(
                 code="launch_version_invalid",
@@ -817,6 +826,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             timeout=float(timeout) if timeout is not None else None,
             home=home,
             preferences=preferences,
+            start_label=start_label,
         )
         return JSONResponse(result)
 

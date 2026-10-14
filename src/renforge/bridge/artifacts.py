@@ -1,4 +1,4 @@
-"""Schema-3 session artifact ownership under ``.renforge/control/artifacts.json``."""
+"""Schema-3 session artifact ownership under ``<project state>/control/artifacts.json``."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from renforge.util.files import (
     sha256_bytes,
     write_exclusive_bytes,
 )
+from ..state import control_dir
 
 _ARTIFACTS_NAME: Final[str] = "artifacts.json"
 _ARTIFACTS_SCHEMA: Final[int] = 3
@@ -77,7 +78,7 @@ class MaterializedArtifacts:
 
 
 def artifacts_path(project_root: Path) -> Path:
-    return Path(project_root) / ".renforge" / "control" / _ARTIFACTS_NAME
+    return control_dir(project_root) / _ARTIFACTS_NAME
 
 
 def bridge_basename(session_id: str) -> str:
@@ -151,7 +152,8 @@ def session_init_payload() -> bytes:
             # Use the engine's normal file storage and scan lifecycle, with
             # exactly one location. Do not register game/saves or extra_savedirs.
             storage = _renforge_engine.savelocation
-            storage.quit()
+            if getattr(storage, "scan_thread", None) is not None:
+                storage.quit()
             storage.quit_scan_thread = False
             _renforge_engine.config.savedir = _renforge_savedir
             current = _renforge_engine.loadsave.location
@@ -160,7 +162,7 @@ def session_init_payload() -> bytes:
             location.add(previous.get(_renforge_savedir) or storage.FileLocation(_renforge_savedir))
             location.scan()
             _renforge_engine.loadsave.location = location
-            if not _renforge_engine.emscripten:
+            if not getattr(_renforge_engine, "emscripten", False):
                 storage.scan_thread = _renforge_threading.Thread(target=storage.run_scan_thread)
                 storage.scan_thread.start()
 
@@ -427,7 +429,7 @@ def _publish_intent(project_root: Path, manifest: Mapping[str, Any]) -> None:
             "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
             exc.message,
             phase="publishing_artifact_intent",
-            suggested_fix="Remove unsafe paths under .renforge/control and retry.",
+            suggested_fix="Remove unsafe paths in the project's RenForge control folder and retry.",
         ) from exc
     fsync_directory(path.parent)
 
@@ -762,7 +764,7 @@ def _validate_owned_bridge_info(
     *,
     expected_session_id: str | None,
 ) -> Path | None:
-    info_path = Path(project_root) / ".renforge" / "control" / _BRIDGE_INFO_BASENAME
+    info_path = control_dir(project_root) / _BRIDGE_INFO_BASENAME
     try:
         info_path.lstat()
     except FileNotFoundError:
@@ -772,7 +774,7 @@ def _validate_owned_bridge_info(
             "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
             "Bridge metadata path is a symlink and was left untouched.",
             phase="cleaning_bridge_artifacts",
-            suggested_fix="Remove unsafe paths under .renforge/control and retry.",
+            suggested_fix="Remove unsafe paths in the project's RenForge control folder and retry.",
         )
     try:
         read_bridge_info(
@@ -787,7 +789,7 @@ def _validate_owned_bridge_info(
             "BRIDGE_INFO_CONFLICT",
             "Bridge metadata failed validation and was left untouched.",
             phase="cleaning_bridge_artifacts",
-            suggested_fix="Remove the conflicting .renforge/control/bridge.json and retry.",
+            suggested_fix="Remove the conflicting bridge.json from the project's RenForge control folder and retry.",
         ) from exc
     return info_path
 

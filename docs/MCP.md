@@ -138,6 +138,22 @@ with a short public-tool `agent_workflow` and a pointer to
 [docs/LIVE_EDITOR.md](LIVE_EDITOR.md). Use only public MCP tools with the
 editor — never private test-only `editor_task0_*` handlers.
 
+## Runtime compatibility
+
+Runtime launch requires **Ren'Py 8.0 or newer**. A distributed game's engine
+record in `renpy/vc_version.py` and the selected SDK are checked before SDK
+download, bridge injection, or process launch. If either is below 8.0, launch
+returns `code="UNSUPPORTED_RENPY_VERSION"`,
+`phase="checking_runtime_compatibility"`, and details containing the detected
+version, selected version, minimum version, and incompatibility source. The agent
+should stop for that game. Selecting a newer SDK does not bypass a legacy game's
+engine requirement. A 7.5/8.0 build that lists both engines counts as 8.x
+only when it ships a Python 3 runtime (`lib/py3-*`); with only `lib/py2-*` its
+own launcher runs the Python 2 engine its scripts are written for, so it is
+refused. Projects without bundled engine metadata use the normal
+configured stable SDK, which must also be 8.0 or newer. The same restriction
+applies to autopilot and the low-level bridge launcher.
+
 ## Save isolation
 
 MCP launches do **not** read or write the user's normal Ren'Py saves,
@@ -204,6 +220,54 @@ renforge_launch(project_path=project, savedir="existing", authorize=true)
 can read and write host saves. When `RENFORGE_POLICY=enforce`, pass
 `authorize=true`. The same isolation knobs exist on `renforge_jump` and
 `renforge_new_game`.
+
+Sessions with isolated preferences (the default) also start with scene
+transitions turned off, so dissolves and fades never leave half-drawn frames
+to wait out. Set `RENFORGE_TRANSITIONS=on` on the server to keep them. A
+session using the player's own preferences is never changed.
+
+## Where RenForge keeps its files
+
+RenForge never writes into a game's folder except for the bridge script it
+injects under `game/` while a session runs (removed on stop) and mods written
+on purpose under `game/mods/`. Everything else (activity log, bridge control
+files, captures, scene snapshots, autopilot coverage, packaged mods, editor
+transactions) goes to a per-project state folder, `<state>`:
+
+```
+$RENFORGE_STATE_DIR/projects/<name>-<hash>/       # when set
+~/.local/state/renforge/projects/<name>-<hash>/   # default ($XDG_STATE_HOME)
+%LOCALAPPDATA%\renforge\projects\<name>-<hash>\   # Windows
+```
+
+`<hash>` comes from the project's resolved path, so two copies of a game get
+separate folders. An optional `<project>/.renforge/policy.json` is still read
+from the project, because the project owner writes it.
+
+## Toolsets
+
+Every tool belongs to one group. `play` is the agent loop, with one tool per
+task: `renforge_info`, `renforge_session`, `renforge_observe`, `renforge_act`,
+`renforge_explain`, and `renforge_mod`. The other groups keep every earlier
+capability for existing clients, scripts, and the Live Editor:
+
+| Toolset | What it holds |
+| --- | --- |
+| `live` | Launch/stop/saves, advancing, clicks, keys, choices, UI listings, screenshots, the scene tree |
+| `debug` | Game state, variables, `eval`, events, errors, waits, scenarios, autopilot |
+| `editor` | The Live Editor |
+| `project` | Static project analysis, lint, references, assets |
+| `translation` | Languages, dialogue export, translation generation and stats |
+| `build` | Web build and distribution |
+| `docs` | Ren'Py documentation search |
+
+`RENFORGE_TOOLSETS` (comma-separated, default `all`) chooses which groups the
+server lists. Unknown names stop the server at startup.
+
+```bash
+RENFORGE_TOOLSETS=play renforge serve          # the agent loop only
+RENFORGE_TOOLSETS=play,debug renforge serve    # plus state inspection
+```
 
 ## Recommended workflow
 
@@ -416,9 +480,9 @@ renforge_list_ui_elements(project_path)
 renforge_get_ui_element_bounds(project_path, element_id=id)
   -> focus_bounds, painted_bounds (idle), state="idle"
 renforge_capture_screenshot(project_path, name="idle")
-  -> path under .renforge/captures/   # invalidates the previous frame_id
+  -> path under <state>/captures/
 renforge_list_ui_elements(project_path)
-  -> fresh frame_id
+  -> current source frame_id
 renforge_hover_element(project_path, element_id=id, expected_frame_id=frame_id)
   -> hovered without click
 renforge_get_ui_element_bounds(project_path, element_id=id)
@@ -429,53 +493,277 @@ renforge_estimate_translation(before_path=idle.path, after_path=hover.path, ...)
   # best on named PNG captures; ambiguous on heavily scaled live frames
 ```
 
-Re-list UI elements after every capture or screenshot when using `expected_frame_id`
-guards: each capture hashes a new frame.
+Frame guards are content hashes, not capture counters: an unchanged engine frame
+can retain its ID across captures. Refresh after an action or guard refusal. Use
+interaction/session/observation guards to detect state changes even when pixels
+remain identical.
 
 ## Look, then act
 
-`renforge_observe` is the snapshot to take before choosing an input. It is safe
-during a transition (`stable` is false, and that snapshot cannot be passed to
-`renforge_act`). `forward` says what kinetic advance may do:
+Playing is two tools. `renforge_observe` returns one compact snapshot:
+`observation_id`, stability, dialogue, controls, readout, `forward`, and an
+optional screenshot. Defaults and repeats are left out and chrome is reduced to
+id and text; `renforge_explain(id=...)` returns a control's full record.
+`renforge_act` then takes that `observation_id` and one of:
 
-- `dismiss` — a say, NVL, or soft pause. Overlay chrome such as the quick menu
-  does not block it.
-- `choose` — a modal screen, a text field (`renpy.input` or an Input on a
-  showing screen), or a hard pause that is showing a real control (the usual
-  freeroam map: non-modal image buttons held by `renpy.pause(hard=True)`).
-- `wait` — a hard pause with no decision controls, such as a timed cutscene.
-  `renforge_advance_until` polls and does not dismiss.
-- `none` — nothing is listening and there is no pointer control.
+- a control `id`, with an optional `value`: text for an input field (submitted
+  with Enter), a number for a bar, `{"x", "y"}` for a viewport, or a control id
+  for a drag's drop target (an empty string drops on nothing);
+- `key/<name>` for a physical key (a-z, arrows, escape, return, space, tab),
+  with `value` true to hold or false to release (omit it for a tap);
+- no `id`, to continue from the observed state.
 
-`renforge_advance_until` only posts Ren'Py's `dismiss` event. It does not click
-choices, hotspots, or quick-menu buttons, and it does not enable skip. Call
-`renforge_act` with the snapshot's `interaction` and a control `id` to take a
-choice, or with `key` and no id to post one physical key on that same
-interaction. Omit `hold` for a tap (`KEYDOWN` then `KEYUP`). `hold` true is
-key-down only, and `hold` false is key-up only. Accepted keys are a-z, the
-arrows, escape, return, and space. Pass `text` for an `input` control; the
-bridge replaces the current value and submits with Enter. The field's allow,
-exclude, and length still apply. `dialogue.who` is the name on the say
-window, `dialogue.what` is that line with text tags removed, and `dialogue` is
-null when that window is not showing. `readout` lists other visible text, such
-as a day, a clock, or a history line. It is not a control, and it does not
-change `forward`. A button with no label still carries `action`, such as
-`Start("start")`, `ShowMenu("load")`, `SetVariable("show_button", False)`, or
-`Function(ChangeLocation, newLocation="beach")`. That action is the control
-id when the widget has no id of its own. `image` is the idle picture's file
-name and is added to the id only when siblings share an action. Activating
-the control runs that action; a button with no action is clicked at the
-center of its focus rectangle. Coordinate clicks stay on `renforge_click_at`.
-A bar takes `value` and the bridge calls `adjustment.change`. A viewport takes
-`x`, `y`, or both, one number per adjustment. A drag's id is its `drag_name`
-when it has one; pass `drop` as another control id to run its dragged callback,
-omit `drop` to click it, or pass an empty `drop` to release it on nothing.
-`selected` is the action's selected state. `alternate` and `hovered` name those
-actions when the control has them. `adjustment` publishes the current value,
-range, step, and page.
-Play launches should use `editor=false`; injected editor screens are
-classified as chrome. Keyboard shortcuts are not inventoried.
-`renforge_advance_until` does not send keys.
+After the input the game progresses to the next decision (see below) and the
+result carries the next observation, so the loop is observe once, then act
+repeatedly. Acting on a control in a changed game refuses with
+`error="stale"` and returns the current observation. Continuing (no `id`) is
+never refused: it cannot choose anything, so it proceeds from the current state
+and reports `continued_from_newer_state`. On a line the player could click past
+that stopped only for optional buttons (a hotspot or a photo beside the line),
+continuing clicks past it (`clicked_past_line`). Buttons on screens kept up
+across lines with `show screen` (a phone or codex HUD) never stop such a line,
+and an advance that comes round to a line it already passed stops with
+`stop="loop"` so the agent can break the loop. When nothing can continue because the game waits
+for one of its controls (a hard pause behind a button), the result says so in
+`hint`. Input controls report what is typed so far as `value`. An unstable snapshot cannot authorize
+input on a control.
+
+The earlier `live` toolset still offers `renforge_advance`, `renforge_click_element`,
+`renforge_select_choice`, `renforge_send_input`, and the rest, with their own
+ids; `renforge_list_ui_elements` reports each element's `control_id`, its id
+in `renforge_observe`.
+
+`seen` is true when the current statement (a line, menu, or hub) already
+finished once since the game launched; loading a save does not reset it. Lines
+in `renforge_act`'s `progress.crossed` transcript carry `seen: true` when they repeat.
+Together they show when a playthrough is going in circles, for example a
+retry loop after a bad ending.
+
+`forward` describes progression:
+
+- `dismiss`: narrative or a soft pause can advance.
+- `choose`: a modal screen, editable input, or hard-pause hub needs attention.
+- `wait`: a hard pause has no gameplay decision controls; poll without dismissing.
+- `none`: no supported progression was established, including incomplete
+  custom-input discovery. Check `omitted` and `input_candidates` before acting.
+
+Controls from `renforge_observe` carry a `source` field: the `file:line` of the
+screen-language statement that built them, or null for controls built in
+Python. Pass a control `id` to `renforge_explain` to see that statement, its
+keyword arguments (such as `action`), and the `if`/`for`/`use` conditions that
+enclose it. `renforge_explain` reads the loaded syntax trees and never evaluates
+anything, so it is safe to call on a live game.
+
+To check that what is on screen fits the playthrough, `renforge_explain`
+also reads state: results for a label, screen, control, or source carry
+`values`, the current values of the plain variables their conditions read,
+and `variables=["day", "calendar.dayCount"]` reads named store variables or
+dotted fields directly. Game objects come back as their simple public fields;
+functions are never called.
+
+The conventional `quick_menu` and injected `_renforge_` screens are chrome.
+Custom overlay screens remain gameplay controls: overlay registration is a
+rendering detail, not a reason to ignore a hub. Readout text does not stop
+progression. Custom displayables and keyboard shortcuts are not fully
+inventoried; `omitted` reports focus/traversal limits, unclassified custom input,
+and readout truncation. Readout truncation alone does not block progression.
+
+A play session starts with `renforge_session(action="launch")` (saves and
+preferences kept apart from the player's, no Live Editor); poll
+`action="status"` until ready. For testing and modding, `label="..."` starts
+the story at that label instead: the game leaves its splash screen or main
+menu for it, which works for games shipped only as archives. Nothing the
+story did before the label has happened (variables keep their defaults, and a
+label normally reached with `call` ends the run when it returns), so every
+observation carries `started_at_label`; an unknown label is reported as
+`start_label_error`. Play from saves when the earlier state matters. To
+start from the player's real progress, `action="list"` shows their slots as
+`player_slots`, and `action="import", slot="..."` copies one into the
+session's saves (the player's file is only read); then `action="load"` it.
+Ren'Py asks whether to trust a save made on another device: choose Yes for the
+save, then No for the device.
+
+```python
+snapshot = renforge_observe(project_path=project)
+result = renforge_act(project_path=project,
+                      observation_id=snapshot["observation_id"],
+                      id=chosen["id"])          # or no id to continue
+snapshot = result["observation"]
+```
+
+`ok` describes whether the action succeeded and `action_outcome` is
+`succeeded`, `refused`, `unknown`, or `none` (when continuing). The follow-up is
+reported separately in `observation_status`: `ready`, `timeout`,
+`transport_error`, `exited`, or `crash`. `action_outcome=unknown` with
+`retry_safe=false` marks a lost input reply: observe before deciding whether to
+retry. A successful action must not be repeated merely because its follow-up
+failed. `timeout` (default 30 seconds) budgets the action and its progression.
+
+Coordinate clicks on unfocused creator-defined displayables hold a synthetic
+cursor through a short hover/render interval before mouse-down/up. The bridge
+serializes this fallback and replies after clearing its cursor/button state;
+a 0.75-second lease and an interaction-generation guard prevent delayed clicks
+from starting in a different interaction. Ordinary focused controls keep their
+immediate dispatch path. Custom displayables may still have no semantic control
+ID. Inspect `input_candidates` and the screenshot, then pass the gameplay
+`frame` descriptor with `coordinate_space="screenshot"` for a pixel click. An
+empty control list does not prove that no clickable content exists.
+
+Controls advertise the `operations` they support: `click`, `text`, `value`
+(bars and viewports), and `drop`. A button runs its action in its screen
+context, or receives a pointer click when it has no action. Inputs respect
+allow/exclude/length filters. Drops check eligibility and run drag callbacks;
+they do not simulate a pointer trajectory. The `live` toolset keeps
+`renforge_send_input` for semantic key names that follow the game's keymap.
+
+`renforge_act` progresses with bounded native Ren’Py skip, including unread
+narrative. The bridge
+pauses skip at every new interaction and resumes only after inspecting a known
+narrative interaction. It stops before choices, inputs, custom actionable UI,
+or unknown interactions. It never chooses a control automatically. Hard pauses
+are allowed to elapse without forced input.
+
+Skip-unseen, skip-after-choices, text-speed, and transition preferences are
+changed only for this operation and restored when it stops. An in-engine lease
+enforces time and step bounds even if the host disconnects. A stalled main
+thread cannot perform cleanup until it resumes; a lost connection reports
+`cleanup="lease_expiry_pending"` rather than claiming cleanup succeeded. A
+concurrent progression operation or pre-existing manual skip is refused. It
+stops at actionable UI, even when dialogue is also visible. The time budget
+includes cleanup, final observation, and transcript retrieval; `progress`
+reports `stop`, `steps`, `elapsed_ms`, and the crossed dialogue.
+Timeouts and transport failures are distinct from verified runtime exceptions.
+If the final frame cannot settle, `observation` is null; `last_observation` is
+explicitly historical. Stale `act` refusals include a fresh observation when
+available, which may itself still be unstable.
+
+When the game raises an exception, Ren'Py shows its error screen. The
+observation then carries `game_error` (`message`, the exception line, and
+`traceback_file`), progression stops with `stop="error"`, and the screen's
+Rollback, Ignore, and Quit buttons are its controls.
+
+Ending detection uses engine evidence. Observations include `lifecycle` with
+`phase` (`playing`, `main_menu`, `ended`, or `unknown`) and `ending` (an evidence
+object or null). `renforge_act`'s `progress` reports:
+
+- `stop="end"` after a root gameplay script `return` with an empty return stack,
+  confirmed by arrival at the engine main menu. `ending` contains a session-local
+  monotonic `id`, `reason="script_return"`, and the return's `statement` location.
+- `stop="main_menu"` for an initial menu or a menu return without that evidence,
+  including `MainMenu`/`renpy.full_restart()` actions. `ending` is null.
+
+The evidence persists across subsequent observations and main-menu Settings,
+and clears when root gameplay resumes (including custom `Start(label)` targets),
+or on a new start/load/warp/replay. Called-scene returns, nested contexts,
+and replays do not establish an ending. Menu detection uses Ren’Py context flags;
+custom screen and label names cannot establish completion. A confirmed ending
+also emits one `ending` event through `renforge_poll_events`.
+
+This detects the end of an engine run, not completion of every branch or all
+available content. Custom endings that remain in gameplay, quit the process,
+or explicitly restart without a root `return` do not have confirmed end evidence.
+A process exit alone is not a completion signal. When a retained owned process
+proves termination, progression reports `exited` for exit code zero or `crash`
+for a nonzero exit, with process evidence. A disconnected live process remains a
+transport failure. The last reliable observation is retained as historical;
+termination never creates ending evidence. If the final frame does not
+settle, progression returns `ending=null`; historical observations are not proof
+of a current ending.
+
+Gameplay observation images are limited to 384 KiB of PNG data so large scenes do not
+routinely exceed MCP event limits. `frame_hash` hashes the exact returned PNG;
+`frame_id` identifies the source capture used by engine guards; it can differ
+from `frame_hash` after resizing. `frame` carries that source identity, session,
+returned image dimensions, source capture dimensions, and logical dimensions.
+Pass the complete descriptor to click a pixel in the returned gameplay image:
+
+```python
+snapshot = renforge_observe(project_path=project, screenshot=True)
+renforge_click_at(project_path=project, x=image_x, y=image_y,
+                  coordinate_space="screenshot", expected_frame_id=snapshot["frame"])
+```
+
+Descriptor-backed clicks validate session, source frame, dimensions, and image
+bounds before input. Bare screenshot-coordinate calls retain their legacy
+meaning: pixels in the engine's full capture. Resized, cropped, or annotated
+legacy captures do not carry the gameplay descriptor; their delivered PNG hash
+and pixels cannot be substituted for a full-capture guard and coordinates. A string guard must be a source
+`frame_id`, not a resized image's `frame_hash`. There is no implicit last-image
+cache. `screenshot` retains original/returned dimensions and scaling metadata.
+Control bounds stay in logical coordinates. Request `screenshot=false` for
+text-only progression or observations.
+
+Observation, UI listings, actions, hit tests, and scene inspection share a control
+collector. IDs returned by UI listings now use the same canonical IDs as
+observation; refresh old listings before acting. Explicit bare widget IDs remain
+accepted by the legacy UI resolver, with ambiguity checks and an optional screen
+filter. Menu entries are identified by
+current engine actions on any active layer, independently of screen names or
+caption equality. Duplicate captions remain distinct. `select_choice` refuses
+ambiguous text and accepts optional `interaction`, `session_id`, and
+`observation_id` guards. Its listed indices retain the broader textual-control
+ordering; use the returned index rather than counting menu rows yourself.
+A current eligible menu action remains selectable when viewport clipping hides
+its button; `semantic=true` distinguishes that operation from a pointer hit.
+
+An active screen absent from the completed render returns `stable=false` with
+`unstable_reason="not_ready"`; fetch a fresh observation after it draws.
+A timed `pause` of 5 seconds or less returns `stable=false` with
+`unstable_reason="pause"` until it ends, because the script moves on by
+itself (screens shown under a fade can still be clickable). Longer pauses
+are stable and can be dismissed.
+Boundary stop reasons reflect the settled final observation; step/time budgets
+and failures retain their actual stop reason.
+Geometry comes from the completed frame, with transforms and clipping applied.
+`bounds=null` and `bounds_reason` explain unavailable geometry; `occurrences`
+preserves repeated placements and render paths. Bounds enclose a region and do
+not guarantee every enclosed pixel is interactive. `click_point` is a point
+proved eligible by bounded engine focus probes. Unproven coverage remains
+unknown rather than declaring an entire control covered from its center.
+Alpha inspection rasterizes completed renders; it does not re-render game
+widgets. Optional natural-text overflow measurements report unavailable when
+that size cannot be established from the completed frame.
+
+`input_candidates` reports on-screen custom event handlers whose semantics are
+unsupported, including their screen/layer and geometry when established.
+Handlers with nothing to point at (hidden, or at most one pixel, such as gamepad
+and key listeners) are left out. These regions have
+no inferred action, label, sensitivity, or clickability. Visible unresolved
+candidates set `omitted.unclassified=true`; both progression modes stop with
+`unsupported` and guarded dismiss refuses input. Known engine widgets and
+ordinary decorative displayables do not require custom adapters. Conditional
+custom handlers and story prerequisites remain unknown. A custom region may
+render across the entire frame, so its enclosing bounds can be too broad to
+locate a specific hotspot. Use the visible UI and
+bounded coordinate input without inspecting game flags.
+
+`crossed` preserves distinct repeated dialogue occurrences, including rendered
+speaker names, and merges callback/frame copies. Events are drained throughout
+progression and again after stopping. `crossed_truncated` reports event-buffer
+gaps or failed retrieval. A follow-up observation returned by `act` does not
+consume the transcript cursor; explicit `observe` and progression do.
+
+## Modding
+
+`renforge_mod` writes a mod into a game without touching the game's own files.
+Each mod lives in `game/mods/<name>/` and records every file it writes in
+`renforge-mod.json`, so removal deletes exactly what RenForge created.
+
+The loop for an agent:
+
+```text
+renforge_mod(project_path=project, action="write", name="demo", path="intro.rpy", content="...")
+renforge_mod(project_path=project, action="lint", name="demo")          # diagnostics inside the mod only
+renforge_mod(project_path=project, action="reload")                     # hot reload, errors, fresh observation
+renforge_observe(project_path=project)                                  # check the result in the running game
+renforge_mod(project_path=project, action="remove", name="demo")        # listed files, .rpyc siblings, empty dirs
+```
+
+`package` zips the mod into `<state>/mods/<name>.zip`. `list` shows each
+mod's files plus any `missing` (listed but gone) or `unlisted` files. Paths must
+be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
+1,000,000 UTF-8 bytes. Symlinks under `game/` are refused. `guide` returns modding idioms
+(`init offset`, screen replacement, `config.label_overrides`, overlay screens).
 
 ## Tool catalogue
 
@@ -495,6 +783,7 @@ classified as chrome. Keyboard shortcuts are not inventoried.
 
 | Tool | Purpose |
 | --- | --- |
+| `renforge_session` | The play-session lifecycle (`play` toolset): `launch` with agent-mode defaults (isolated saves and preferences, no Live Editor), `status`, `save`/`load`/`list` named slots (`load` returns the restored game's observation; `list` also shows the player's `player_slots`), `import` to copy one of the player's slots in, and `stop`. The tools below remain for existing workflows. |
 | `renforge_launch` | Start or reuse a game with the **Live Editor enabled by default** and inject the temporary bridge. After launch, poll `renforge_launch_status`, observe with `renforge_screenshot` / `renforge_scene_tree`, then use guarded clicks — see [LIVE_EDITOR.md](LIVE_EDITOR.md). The call waits at most 20 seconds, then returns `status=starting` while startup continues in the background. A competing launch returns `code=LAUNCH_IN_PROGRESS` instead of discarding its parameters. `warp` accepts `file:line`; `display`/`audio` default to `auto`; **saves, preferences, and HOME default to isolated temporary locations** so the session does not read or write the user's normal Ren'Py state (`~/.renpy` / `game/saves` / host preferences). Ready payloads include `session_id` and an `isolation` object. Pass `savedir=existing` (host HOME follows unless `home` is set) or set `RENFORGE_ISOLATION=existing` to use the user's files; that requires `authorize=true` when `RENFORGE_POLICY=enforce`. Prefer `renforge_saves(action="import")` to copy selected host slots. `timeout` controls the background startup deadline. |
 | `renforge_launch_status` | Report `starting`, `ready`, `failed`, or `idle` for the latest launch. While cancellation is pending it keeps `status=starting` and sets `cancel_requested=true`. Ready payloads repeat `session_id` and `isolation`. |
 | `renforge_jump` | Restart at a label or `file:line`; it uses the same non-blocking launch lifecycle and the same isolation knobs as `renforge_launch`. |
@@ -503,34 +792,39 @@ classified as chrome. Keyboard shortcuts are not inventoried.
 | `renforge_game_state` | Complete state, including variables. Pass `include=["metrics", "audio"]` to add compact render/cache/window metrics and registered-channel audio state. Omitting `include` preserves the default response. Optional `state_profile` filters the store. |
 | `renforge_game_state_compact` | Bounded state (`state_profile=interaction` by default); select variables by name or prefix; supports serialization limits. |
 | `renforge_advance` | Advance the current dialogue. |
-| `renforge_observe` | One interaction snapshot: dialogue (speaker and line with text tags removed, or null when the say window is hidden), `readout` (other visible text, which does not change `forward`), screens, `focus_list` controls, text fields that are not in `focus_list`, chrome, and `forward` (`dismiss`, `choose`, `wait`, or `none`). Button `action` includes its target, including `Function` callables and `SetVariable` names. A control id is the widget id or menu index when Ren'Py has one, otherwise a drag's `drag_name`, otherwise that action. `image` is the idle picture's file name and joins the id only when siblings share a drag name or an action. `selected`, `alternate`, `hovered`, and `adjustment` publish the state Ren'Py already keeps on the control. `screenshot` true attaches the PNG whose SHA-256 is `frame_hash`. Mid-transition snapshots return `stable` false and are not legal act tokens. Overlay and `_renforge_` screens are chrome. Keyboard shortcuts are omitted. |
-| `renforge_act` | Activate one `controls` or `chrome` id from an observe snapshot, or post one physical key (`key`, optional `hold`) on that interaction. The bridge re-checks the interaction immediately before input and returns `stale`, `unstable`, `covered`, `disabled`, `missing`, `key_or_control`, `value_required`, or `unsupported` without posting input. A button or hotspot runs its action; one with no action is clicked at the center of its focus rectangle. A bar takes `value`. A viewport takes `x`, `y`, or both. A drag takes `drop` as another control id; omit it to click, or pass an empty string to release on nothing. An Input takes `text` and is submitted with Enter. A key is `KEYDOWN`/`KEYUP` for a-z, arrows, escape, return, or space. Does not enable skip. |
-| `renforge_advance_until` | Post `dismiss` until the player must choose, a text field is showing, a hard-pause hub is showing, or nothing is listening. Returns `stop`, `steps`, and the last observation. Never clicks a choice, hotspot, or quick-menu button, never sends a key, and never enables skip. Readout text does not stop it. A hard pause with no decision controls stops as `wait`. |
+| `renforge_observe` | Read one interaction: identities, readiness, lifecycle/ending evidence, controls, chrome, readout, uncertain input candidates, completeness flags, and an optional bounded PNG with its frame descriptor. Compact; `renforge_explain(id=...)` has the full record. |
+| `renforge_act` | The play step (`play` toolset): act on a control id, `key/<name>`, or nothing with the `observation_id` it was chosen from, plus an optional `value`; then progress to the next decision and return `progress` and the next compact observation. |
 | `renforge_control` | Run one action: `advance`, `rollback`, `toggle_skip`, `toggle_auto`, `toggle_afm`, `game_menu`, `hide_windows`, `quick_save`, `quick_load`, `reload_script`, `restart_interaction`, or `quit`. Emits correlated business events; `wait_for_effect=true` waits for the matching event. |
-| `renforge_send_input` | Send exactly one `text`, named `key`, or logical-coordinate `scroll` operation. Text posts character-by-character events to a focused Ren'Py `Input`; `submit=true` presses Enter. Supported keys include `enter`, `esc`, arrows, `pageup`, `pagedown`, `backspace`, `delete`, `home`, `end`, `space`, `tab`, and `f1`-`f12`. Scroll uses `{"x": ..., "y": ..., "direction": "up"|"down", "amount": 1}`. |
+| `renforge_send_input` | Send exactly one `text`, named `key`, or logical-coordinate `scroll` operation. Text replaces the contents of a focused Ren'Py `Input` (falling back to character events when needed); `submit=true` presses Enter. Supported keys include `enter`, `esc`, arrows, `pageup`, `pagedown`, `backspace`, `delete`, `home`, `end`, `space`, `tab`, and `f1`-`f12`. Scroll uses `{"x": ..., "y": ..., "direction": "up"|"down", "amount": 1}`. |
 | `renforge_saves` | Run `save`, `load`, `list`, `list_user`, or `import` for named slots. `list` reads the running session; `list_user` observes host slots without a running game; `import` copies selected host slots (`slot`, `slots`, or `regexp`) into the isolated session and refuses when the session exposes the user tree. Save/load require `slot`; save accepts optional `extra_info`; load returns `restored_label`; list/list_user accept optional `regexp` and return `name`, `extra_info`, and `mtime` without screenshots. |
 | `renforge_screenshot` | Capture a frame; width, height, crop, scale, and `grid`/`rulers`/`crosshair` overlays are optional. Passing only one of `width`/`height` keeps the game's aspect ratio. |
+
+### Mods
+
+| Tool | Purpose |
+| --- | --- |
+| `renforge_mod` | Write, test, and remove a mod under `game/mods/<name>/`. `action` is `write` (`path`, `content`), `list`, `lint`, `reload`, `remove`, `package`, or `guide`; every action except `list` and `guide` takes `name`. Game files outside that directory are never modified. `remove` deletes only manifest-listed files plus their `.rpyc` siblings, and reports unlisted files under `kept`. `reload` hot-reloads the running game and returns `reload`, `observation`, and `errors`. See [Modding](#modding). |
 
 ### Choices and user interface
 
 | Tool | Purpose |
 | --- | --- |
-| `renforge_list_choices` | Visible narrative choices. |
-| `renforge_select_choice` | Select a choice by text, preferably, or index. |
-| `renforge_list_ui_elements` | Visible focusable controls: semantic `id`, text, role, screen, `action`, bounds, center, `zorder`, `covered`, `clickable`, and `frame_id`. Coordinates are logical Ren'Py space. |
+| `renforge_list_choices` | Current engine menu entries across layers, including clipped choices. Use the returned indices; they retain legacy textual-control ordering. |
+| `renforge_select_choice` | Select an eligible menu entry by unique text or listed index. Accepts interaction/session/observation guards; ambiguous captions require an index. |
+| `renforge_list_ui_elements` | Supported controls and engine menu actions with canonical IDs, operations, visibility/coverage, logical bounds when available, and a source `frame_id`. A clipped menu action can remain semantically selectable. |
 | `renforge_hover_element` | Move the pointer over a control by ID or text without clicking. Supports `exact`, `screen`, and `expected_frame_id`. |
 | `renforge_get_ui_element_bounds` | Report `focus_bounds` and, for `ImageButton` controls, rendered `painted_bounds` for the active state. Returns `painted_bounds_available: false` with a reason when the painted content cannot be measured. |
 | `renforge_click_element` | Click a control by ID or text. Supports `exact`, `screen`, `expected_frame_id`, `interaction_id`, and `wait_for_effect`. Returns `received_by` when another control owns the hit point. |
 | `renforge_editor` | Public Live Editor: `status`, `select` (overlay hit path), and `save` (reload + attest). Locked targets return the lock code. Never call private `editor_task0_*` handlers. |
-| `renforge_click_at` | Click `logical` or `screenshot` coordinates, with `expected_frame_id` and `expected_state` guards. |
+| `renforge_click_at` | Click logical or source-capture pixels; pass `expected_frame_id=observation.frame` to map and guard pixels from a delivered gameplay image. Also accepts `expected_state`. |
 | `renforge_hit_test` | Inspect the interactive focus stack at a point (`topmost` + `underneath`) to diagnose overlays that intercept clicks. |
-| `renforge_capture_screenshot` | Persist the current frame as a named PNG under `<project>/.renforge/captures/` and return `path`, `relative_path`, SHA-256, and dimensions for later diff/translation tools. |
+| `renforge_capture_screenshot` | Persist the current frame as a named PNG under `<state>/captures/` and return `path`, `relative_path`, SHA-256, and dimensions for later diff/translation tools. |
 | `renforge_estimate_translation` | Estimate `dx`/`dy` between two saved PNGs with Pillow, returning `confidence`, `support`, and explicit unavailability when the measure is ambiguous. Search work is bounded; use a tighter region or lower `max_shift` when needed. |
 | `renforge_find_image_on_screen` | Locate a local PNG template in the current frame and return confidence, bounds, center, and frame guard. |
 | `renforge_get_displayable_bounds` | Report the logical bounds and center where a shown image tag was rendered. |
 | `renforge_position_element` | Reposition a shown image tag live (`xpos`, `ypos`, anchors, align, offsets, `zoom`, `rotate`) and return its new bounds. |
 | `renforge_diff_screenshots` | Diff two frames (or a saved PNG against the live frame) and return the changed region's bounding box. |
-| `renforge_scene_tree` | Perceive the whole scene as logical-coordinate nodes — every layer displayable, focusable control, and text block — with `id`, `type`, `bounds`, `center`, `zorder`, `screen`, and an `omitted` completeness hint. Unlike `renforge_list_ui_elements` (focusables only) it also reports non-focusable text and images. `detail` is `semantic` (default), `layout`, or `raw`; `layers`/`types`/`screen`/`ids` scope it; `include=["color","style","overflow"]` adds composited colour, declared style, and best-effort text overflow; `format="wireframe"` adds an ASCII map; `save_as`/`diff_against` persist and diff snapshots under `<project>/.renforge/scenes/`. |
+| `renforge_scene_tree` | Inspect a bounded scene inventory with completed-frame logical geometry — layer displayables, supported controls, and text — with `id`, `type`, `bounds`, `center`, `zorder`, `screen`, and an `omitted` completeness hint. Beyond `renforge_list_ui_elements` (supported controls/menu actions) it also reports non-focusable text and images. `detail` is `semantic` (default), `layout`, or `raw`; `layers`/`types`/`screen`/`ids` scope it; `include=["color","style","overflow"]` adds composited colour and declared style; natural-text overflow remains explicitly unavailable; `format="wireframe"` adds an ASCII map; `save_as`/`diff_against` persist and diff snapshots under `<project>/.renforge/scenes/`. |
 | `renforge_measure` | Measure pixel relationships between scene nodes (by `id`) or literal bounds without vision: `align`, `gap`, `distribute`, `center`, `overlap`, `fit`, and WCAG `contrast`. Returns logical-pixel deltas and, with `tolerance`, a `pass` verdict. |
 
 ### State and controlled execution
@@ -539,9 +833,10 @@ classified as chrome. Keyboard shortcuts are not inventoried.
 | --- | --- |
 | `renforge_eval` | Evaluate a Python expression in `store`. Use for diagnosis and development only. Open-world: requires `authorize=true` when `RENFORGE_POLICY=enforce`. |
 | `renforge_inspect_screen` | Inspect whether a screen is active and, when shown, return its layer, JSON-safe scope, and passed arguments. |
+| `renforge_explain` | Explain where game content is defined and what it does, read from the running game's loaded syntax trees without evaluating anything. Works for `.rpa`/`.rpyc`-only games. No selector returns an index of labels, screens, and files; `label` lists a label's statements; `screen` lists a screen's displayable tree; `id` (a control from `renforge_observe`) returns the statement that built it, its keyword arguments, and the enclosing `if`/`for`/`use` conditions. Bounded by `limit`. |
 | `renforge_get_var` | Read a store variable. |
 | `renforge_set_var` | Write a store variable. |
-| `renforge_poll_events` | Read label, dialogue, exception, and business events (`quick_save.completed`, `skip.stopped`, …) from a cursor. Events may carry `correlation_id` and `timestamp`. |
+| `renforge_poll_events` | Read label, dialogue, confirmed ending, exception, and business events (`quick_save.completed`, `skip.stopped`, …) from a cursor. Events may carry `correlation_id` and `timestamp`. |
 | `renforge_get_errors` | Read recent bridge errors or bounded crash-file tails with mtimes and exit code when tracked. |
 | `renforge_wait_until` | Wait for exactly one `label`, `screen`, or `expr` condition with bounded `timeout` (maximum 120 seconds) and polling `interval`. Returns compact state by default (`state_profile=interaction`); pass `include` for extra fields and `state_profile=full` only when needed. |
 | `renforge_run_scenario` | Execute a multi-step live scenario (`set`, `click`, `wait`, `assert`, …) in one call; captures diagnostics on failure. |
@@ -585,6 +880,14 @@ change the response. Metrics report `render_time_ms`, an FPS estimate,
 registered channel with its playing filename, volume, and pause state when
 Ren'Py exposes them.
 
+Running code in the game (`renforge_eval`, `renforge_set_var`, and the
+conditions of `renforge_wait_until` and `renforge_run_scenario`) needs the
+bridge's `eval`. A server whose toolsets include neither `debug` nor `editor`
+(`RENFORGE_TOOLSETS=play`, say) launches games whose bridge refuses it
+(`eval_disabled`); reading variables and the play loop are unaffected.
+`renforge_mod` still writes scripts on purpose; under `RENFORGE_POLICY=enforce`
+writing one needs `authorize=true`.
+
 `renforge_inspect_screen` is read-only and reports `active=false` clearly when
 the requested screen is not shown. There is intentionally no separate style
 tool yet: use `renforge_eval` as the controlled style-introspection escape
@@ -598,7 +901,7 @@ allowlist permits them. See [POLICY.md](POLICY.md) for the operation-level
 model, its relationship to MCP `ToolAnnotations`, and the compatibility plan.
 
 `renforge_scene_tree` is read-mostly: it never changes game state, but `save_as`
-writes a JSON snapshot under `<project>/.renforge/scenes/` for later diffing.
+writes a JSON snapshot under `<state>/scenes/` for later diffing.
 `renforge_measure` is read-only. Requesting `include=["style"]` on
 `renforge_scene_tree` is the structured alternative to the `renforge_eval` style
 escape hatch above.
@@ -619,10 +922,12 @@ Recommended practices:
 | --- | --- |
 | `no running game` | If launch status is `starting`, wait and call `renforge_launch_status` again. Otherwise call `renforge_launch` or start the dashboard with `renforge ui`. |
 | No `active_project` | Provide `project_path` explicitly (every tool accepts it), run the server from the game's directory, or select a project in the dashboard. |
-| `expected_frame_id guard failed` | The screen changed; call `renforge_list_ui_elements` or `renforge_find_image_on_screen` again. |
+| `expected_frame_id guard failed` | Refresh the observation/listing. For resized gameplay images, pass the complete `frame` descriptor rather than the delivered image hash. |
 | A click lands at the wrong place under WSLg | Reuse the `coordinate_space` returned by visual search. |
 | The MCP client cannot open a display | Start `renforge ui --project …`; launch requests are delegated to the display-owning process. |
 | An MCP tool is missing | Update RenForge, then restart the MCP session to reload its catalogue. |
+| Launch fails with `GAME_STARTUP_ERROR` | The game stopped on Ren'Py's error screen before the bridge started; `details.report` holds its `traceback.txt`. Players see the same error. A launch that failed while recompiling changed scripts is already retried once. |
+| A ready launch carries `startup_warning` | The first attempt failed and a second one started: a recompile error that did not recur, or a shaped presplash that SDL's Wayland driver cannot open (the game then runs under X11, which needs an unlocked screen). |
 
 ## Quick verification
 
@@ -632,4 +937,5 @@ After configuration, ask the agent:
 > controls.
 
 A successful response contains the active project, a project summary, and
-controls with bounds and a `frame_id`.
+controls with canonical IDs, capabilities, bounds where established, and a source
+`frame_id`. Unsupported custom input appears in `renforge_observe.input_candidates`.

@@ -6,8 +6,9 @@ data, preferences, and ``$HOME/.renpy``). Pass ``savedir=existing`` /
 ``home=existing`` / ``RENFORGE_ISOLATION=existing`` to use the user's files.
 
 Selected host slots can be copied into an isolated session with
-``renforge_saves(action="import")``. This module never bind-mounts the user
-tree.
+``renforge_session(action="import")`` or ``renforge_saves(action="import")``.
+One-shot Ren'Py commands (lint, compile, translate) run under
+``renpy_tool_environment``. This module never bind-mounts the user tree.
 
 This is not the Linux Bubblewrap/FUSE sandbox. That helper stays test-only
 and is not on the MCP launch path.
@@ -20,6 +21,8 @@ import os
 import re
 import shutil
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -442,10 +445,16 @@ def host_save_directories(
     project_root: str | Path,
     *,
     home: Path | None = None,
+    save_name: str | None = None,
 ) -> list[Path]:
-    """Existing host directories that may contain this project's user saves."""
+    """Existing host directories that may contain this project's user saves.
+
+    ``save_name`` is the game's ``config.save_directory`` when the caller
+    already knows it (from the running game); otherwise it is read from the
+    game's loose ``.rpy`` files.
+    """
     directories: list[Path] = []
-    save_name = parse_save_directory(project_root)
+    save_name = save_name or parse_save_directory(project_root)
     if save_name:
         host_dir = host_renpy_root(home=home) / save_name
         if host_dir.is_dir():
@@ -461,6 +470,7 @@ def list_host_slots(
     *,
     regexp: str | None = None,
     home: Path | None = None,
+    save_name: str | None = None,
 ) -> dict[str, Any]:
     """List host save slots without touching a running game or writing files."""
     compiled = None
@@ -472,7 +482,7 @@ def list_host_slots(
         except re.error as exc:
             return {"ok": False, "error": f"invalid regexp: {exc}"}
 
-    directories = host_save_directories(project_root, home=home)
+    directories = host_save_directories(project_root, home=home, save_name=save_name)
     slots: list[dict[str, Any]] = []
     seen: set[str] = set()
     for directory in directories:
@@ -499,6 +509,7 @@ def import_host_slots(
     slots: Iterable[str] | None = None,
     regexp: str | None = None,
     home: Path | None = None,
+    save_name: str | None = None,
 ) -> dict[str, Any]:
     """Copy selected host slot files into an isolated session savedir."""
     dest = Path(destination).expanduser().resolve()
@@ -511,13 +522,13 @@ def import_host_slots(
     dest.mkdir(parents=True, exist_ok=True)
 
     resolved = select_host_slot_names(
-        project_root, slot=slot, slots=slots, regexp=regexp, home=home
+        project_root, slot=slot, slots=slots, regexp=regexp, home=home, save_name=save_name
     )
     if not resolved.get("ok"):
         return resolved
     selected = list(resolved.get("names") or [])
     missing = list(resolved.get("missing") or [])
-    listed = list_host_slots(project_root, regexp=None, home=home)
+    listed = list_host_slots(project_root, regexp=None, home=home, save_name=save_name)
     if not listed.get("ok"):
         return listed
     available = {item["name"]: item for item in listed.get("slots", [])}
@@ -555,6 +566,7 @@ def select_host_slot_names(
     slots: Iterable[str] | None = None,
     regexp: str | None = None,
     home: Path | None = None,
+    save_name: str | None = None,
 ) -> dict[str, Any]:
     """Resolve import selectors to host slot names."""
     names: list[str] = []
@@ -593,7 +605,7 @@ def select_host_slot_names(
     if not names and compiled is None:
         return {"ok": False, "error": "import requires slot, slots, or regexp"}
 
-    listed = list_host_slots(project_root, regexp=None, home=home)
+    listed = list_host_slots(project_root, regexp=None, home=home, save_name=save_name)
     if not listed.get("ok"):
         return listed
     available = [item["name"] for item in listed.get("slots", [])]
@@ -759,3 +771,54 @@ def _preserve_x11_auth(host_env: Mapping[str, str]) -> dict[str, str]:
         if xauth.is_file():
             extra["XAUTHORITY"] = str(xauth.resolve())
     return extra
+
+
+# Loaded by Ren'Py from RENPY_SEARCHPATH before it reads persistent data or
+# sets up save locations. Sessions do the same from a ``python early`` file.
+TOOL_SAVES_ADAPTER_FILENAME = "renforge_tool_saves.rpe.py"
+TOOL_SAVES_ADAPTER_SOURCE = """\
+import os
+import renpy
+
+_savedir = os.environ["RENFORGE_SAVEDIR"]
+renpy.config.savedir = _savedir
+
+
+def _renforge_one_save_location():
+    # One private location: no game/saves, no extra_savedirs, no scan thread.
+    storage = renpy.savelocation
+    location = storage.MultiLocation()
+    location.add(storage.FileLocation(_savedir))
+    location.scan()
+    renpy.loadsave.location = location
+
+
+renpy.savelocation.init = _renforge_one_save_location
+"""
+
+
+@contextmanager
+def renpy_tool_environment() -> Iterator[dict[str, str]]:
+    """Environment for a one-shot Ren'Py command run against a game.
+
+    Ren'Py writes the game's persistent data (and save tokens) whenever it
+    starts, even for ``lint``. Without this, a lint run rewrites the player's
+    ``~/.renpy/<game>/persistent`` and ``game/saves/persistent``. The command
+    gets a disposable HOME and one disposable save location instead. Callers
+    that need their own ``RENPY_SEARCHPATH`` entry prepend it with ``::``.
+    """
+    with tempfile.TemporaryDirectory(prefix="renforge-tool-") as root:
+        base = Path(root)
+        adapter_dir = base / "adapter"
+        adapter_dir.mkdir()
+        (adapter_dir / TOOL_SAVES_ADAPTER_FILENAME).write_text(TOOL_SAVES_ADAPTER_SOURCE, encoding="utf-8")
+        home = base / HOME_DIRNAME
+        _prepare_isolated_home(home)
+        saves = base / SAVES_DIRNAME
+        saves.mkdir()
+        env = _home_environ(home, host_env=None)
+        env["RENFORGE_SAVEDIR"] = str(saves)
+        existing = os.environ.get("RENPY_SEARCHPATH", "")
+        env["RENPY_SEARCHPATH"] = f"{adapter_dir}::{existing}" if existing else str(adapter_dir)
+        yield env
+

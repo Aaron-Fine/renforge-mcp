@@ -174,6 +174,30 @@ def test_renpy_8_0_version_tuple_identifies_the_python3_line(tmp_path: Path) -> 
     assert sdk.bundled_engine_version(root) == "8.0.3"
 
 
+def test_a_dual_build_with_only_python2_runtimes_is_its_python2_engine(tmp_path: Path) -> None:
+    """Special Harem Class ships 7.5.3/8.0.3 with lib/py2-* only; its scripts are Python 2."""
+    root = tmp_path / "game"
+    (root / "renpy").mkdir(parents=True)
+    (root / "renpy" / "vc_version.py").write_text("vc_version = 22090809\n")
+    (root / "renpy" / "__init__.py").write_text(
+        "if PY2:\n    version_tuple = (7, 5, 3, vc_version)\nelse:\n    version_tuple = (8, 0, 3, vc_version)\n",
+        encoding="utf-8",
+    )
+    for runtime in ("py2-linux-x86_64", "py2-windows-x86_64", "python2.7"):
+        (root / "lib" / runtime).mkdir(parents=True)
+    assert sdk._sdk_internal_version(root).startswith("7.5.3")
+    (root / "lib" / "py3-linux-x86_64").mkdir()
+    assert sdk._sdk_internal_version(root).startswith("8.0.3")
+
+
+def test_a_python2_build_records_its_version_as_a_unicode_literal(tmp_path: Path) -> None:
+    """Price of Power (7.7.3): `version = u'7.7.3.24061702'`."""
+    root = tmp_path / "game"
+    (root / "renpy").mkdir(parents=True)
+    (root / "renpy" / "vc_version.py").write_text("branch = u'fix'\nversion = u'7.7.3.24061702'\n")
+    assert sdk._sdk_internal_version(root) == "7.7.3.24061702"
+
+
 def test_newer_same_minor_patch_satisfies_older_request(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -456,3 +480,36 @@ def test_sdk_install_rechecks_cache_after_acquiring_lock(
 
 def test_default_renpy_version_tracks_current_stable() -> None:
     assert sdk.DEFAULT_RENPY_VERSION == "8.5.3"
+
+
+def test_script_version_declares_the_engine_for_a_source_project(tmp_path: Path) -> None:
+    (tmp_path / "game").mkdir()
+    assert sdk.bundled_engine_version(tmp_path) is None
+    (tmp_path / "game" / "script_version.txt").write_text("(8, 5, 3)\n", encoding="utf-8")
+    assert sdk.bundled_engine_version(tmp_path) == "8.5.3"
+    (tmp_path / "game" / "script_version.txt").write_text("not a version", encoding="utf-8")
+    assert sdk.bundled_engine_version(tmp_path) is None
+
+
+def test_bundled_engine_wins_over_script_version(tmp_path: Path) -> None:
+    (tmp_path / "game").mkdir()
+    (tmp_path / "game" / "script_version.txt").write_text("(8, 5, 3)\n", encoding="utf-8")
+    (tmp_path / "renpy").mkdir()
+    (tmp_path / "renpy" / "vc_version.py").write_text("version = '8.1.2.23090503'\n", encoding="utf-8")
+    assert sdk.bundled_engine_version(tmp_path) == "8.1.2"
+
+
+def test_renforge_json_pin_wins_and_leaves_ren_py_files_alone(tmp_path: Path) -> None:
+    (tmp_path / "game").mkdir()
+    (tmp_path / "game" / "script_version.txt").write_text("(8, 1, 0)\n", encoding="utf-8")
+    (tmp_path / "renforge.json").write_text('{"renpy_version": "8.5.3"}', encoding="utf-8")
+    assert sdk.bundled_engine_version(tmp_path) == "8.5.3"
+    (tmp_path / "renforge.json").write_text("not json", encoding="utf-8")
+    assert sdk.bundled_engine_version(tmp_path) == "8.1.0"
+
+
+def test_demo_game_pins_its_engine_without_script_version() -> None:
+    demo = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
+    # script_version.txt would switch Ren'Py's developer mode off.
+    assert not (demo / "game" / "script_version.txt").exists()
+    assert sdk.bundled_engine_version(demo) == "8.5.3"

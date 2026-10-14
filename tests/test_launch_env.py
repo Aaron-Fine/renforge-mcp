@@ -58,3 +58,16 @@ def test_resolve_audio_auto_uses_dummy_when_unavailable():
     caps = detect_environment({})
     caps.audio_available = False
     assert resolve_audio_strategy("auto", caps) == {"SDL_AUDIODRIVER": "dummy"}
+
+
+def test_native_display_prefers_wayland_unless_the_user_chose_a_driver(monkeypatch):
+    monkeypatch.setattr("renforge.launch_env.sys.platform", "linux")
+    caps = detect_environment({"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0"})
+    assert resolve_display_strategy("auto", caps) == ("native", {"SDL_VIDEODRIVER": "wayland,x11"})
+    assert resolve_display_strategy("native", caps) == ("native", {"SDL_VIDEODRIVER": "wayland,x11"})
+
+    chosen = detect_environment({"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0", "SDL_VIDEODRIVER": "x11"})
+    assert resolve_display_strategy("auto", chosen) == ("native", {})
+
+    x11_only = detect_environment({"DISPLAY": ":0"})
+    assert resolve_display_strategy("auto", x11_only) == ("native", {})

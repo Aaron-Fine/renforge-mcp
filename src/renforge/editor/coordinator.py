@@ -26,7 +26,6 @@ from .constants import (
     MAX_STRING_BYTES,
     PROTOCOL_NAME,
     PROTOCOL_VERSION,
-    RENFORGE_DIRNAME,
     TRANSACTION_DIRNAME,
 )
 from .exceptions import EditorError
@@ -79,6 +78,7 @@ from .source import (
     textbutton_patch_kwargs,
     uses_runtime_delta_position,
 )
+from ..state import project_state_dir
 
 
 def expected_measurement_method(statement_kind: str) -> str:
@@ -218,7 +218,7 @@ class EditorCoordinator:
         self._lock = threading.RLock()
         self._request_lock = threading.Lock()
 
-        self._transaction_root = self._project.root / RENFORGE_DIRNAME / TRANSACTION_DIRNAME
+        self._transaction_root = project_state_dir(self._project.root) / TRANSACTION_DIRNAME
         self._transaction_root.mkdir(parents=True, exist_ok=True)
         fsync_directory(self._transaction_root.parent)
         fsync_directory(self._transaction_root)

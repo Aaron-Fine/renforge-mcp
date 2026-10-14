@@ -9,6 +9,7 @@ from typing import Annotated, Any, Callable, Literal, get_args, get_origin, get_
 
 from pydantic import Field
 
+from ..toolsets import allowed_tools
 from ..tool_definitions import TOOL_DEFINITIONS
 
 
@@ -20,6 +21,9 @@ class ToolRegistrar:
         self.app = app
         self.tool_decorator = tool_decorator
         self.registered_names: set[str] = set()
+        # RENFORGE_TOOLSETS chooses which tool groups are listed; see toolsets.
+        self.allowed_names = allowed_tools(TOOL_DEFINITIONS)
+        self.hidden_names: set[str] = set()
 
     @staticmethod
     def _to_annotations(raw: dict[str, bool]) -> Any:
@@ -108,6 +112,9 @@ class ToolRegistrar:
                 f"Tool definition drift for {name}: params mismatch "
                 f"missing={missing} extra={extra}"
             )
+        if name not in self.allowed_names:
+            self.hidden_names.add(name)
+            return fn
 
         annotated_tool = self._annotate_parameters(fn, metadata)
         decorator_kwargs = {

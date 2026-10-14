@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..compact import compact_observation
+
 TOOL_NAMES = (
     "renforge_advance",
     "renforge_observe",
     "renforge_act",
-    "renforge_advance_until",
     "renforge_control",
     "renforge_send_input",
     "renforge_saves",
@@ -31,6 +32,20 @@ def build_wrappers(context):
     _log_tool_call = context.log_tool_call
     _png_content = context.png_content
 
+    def _image_result(result):
+        if not isinstance(result, dict):
+            return result
+        png = result.pop("_png", None)
+        return [result, _png_content(png)] if isinstance(png, bytes) and png else result
+
+    def _compact(result):
+        """Observations from the play tools are always compact."""
+        if not isinstance(result, dict):
+            return result
+        if isinstance(result.get("observation"), dict):
+            return dict(result, observation=compact_observation(result["observation"]))
+        return compact_observation(result)
+
     def renforge_advance(project_path: str) -> dict:
         """Advance the current dialogue."""
         return _log_tool_call(
@@ -46,13 +61,7 @@ def build_wrappers(context):
         """Read the current interaction snapshot, optionally with its PNG."""
 
         def _tool() -> Any:
-            result = live.observe(project_path, screenshot=screenshot)
-            if not isinstance(result, dict):
-                return result
-            png = result.pop("_png", None)
-            if isinstance(png, bytes) and png:
-                return [result, _png_content(png)]
-            return result
+            return _image_result(_compact(live.observe(project_path, screenshot=screenshot)))
 
         return _log_tool_call(
             name="renforge_observe",
@@ -65,73 +74,23 @@ def build_wrappers(context):
 
     def renforge_act(
         project_path: str,
-        interaction: int,
+        observation_id: str,
         id: str | None = None,
-        text: str | None = None,
-        key: str | None = None,
-        hold: bool | None = None,
-        value: int | float | None = None,
-        x: int | float | None = None,
-        y: int | float | None = None,
-        drop: str | None = None,
-    ) -> dict:
-        """Activate one observed control, or post one physical key, in that interaction."""
-        return _log_tool_call(
-            name="renforge_act",
-            params={
-                "project_path": project_path,
-                "interaction": interaction,
-                "id": id,
-                "text": text,
-                "key": key,
-                "hold": hold,
-                "value": value,
-                "x": x,
-                "y": y,
-                "drop": drop,
-            },
-            project_root=project_path,
-            fn=live.act,
-            args=(project_path, interaction),
-            kwargs={
-                "control_id": id,
-                "text": text,
-                "key": key,
-                "hold": hold,
-                "value": value,
-                "x": x,
-                "y": y,
-                "drop": drop,
-            },
-        )
-
-    def renforge_advance_until(
-        project_path: str,
-        max_steps: int = 30,
+        value: str | float | bool | dict[str, float] | None = None,
+        screenshot: bool = True,
         timeout: float = 30.0,
     ):
-        """Dismiss dialogue until the player must choose or a budget runs out."""
+        """Act on one control, a key, or nothing, then continue to the next decision."""
+        params = {"project_path": project_path, "observation_id": observation_id, "id": id,
+                  "value": value, "screenshot": screenshot, "timeout": timeout}
 
-        def _tool() -> Any:
-            result = live.advance_until(project_path, max_steps=max_steps, timeout=timeout)
-            if not isinstance(result, dict):
-                return result
-            png = result.pop("_png", None)
-            if isinstance(png, bytes) and png:
-                return [result, _png_content(png)]
-            return result
+        def _tool():
+            return _image_result(_compact(live.play(
+                project_path, observation_id, id, value, screenshot=screenshot, timeout=timeout)))
 
         return _log_tool_call(
-            name="renforge_advance_until",
-            params={
-                "project_path": project_path,
-                "max_steps": max_steps,
-                "timeout": timeout,
-            },
-            project_root=project_path,
-            fn=_tool,
-            args=(),
-            kwargs={},
+            name="renforge_act", params=params, project_root=project_path,
+            fn=_tool, args=(), kwargs={},
         )
 
 
@@ -266,17 +225,23 @@ def build_wrappers(context):
         project_path: str,
         text: str | None = None,
         index: int | None = None,
+        interaction: int | None = None,
+        session_id: str | None = None,
+        observation_id: str | None = None,
     ) -> dict:
         """Select a menu choice by visible text (preferred) or by index."""
         return _log_tool_call(
             name="renforge_select_choice",
-            params={"project_path": project_path, "text": text, "index": index},
+            params={"project_path": project_path, "text": text, "index": index, "interaction": interaction, "session_id": session_id, "observation_id": observation_id},
             project_root=project_path,
             fn=live.select_choice,
             args=(project_path,),
             kwargs={
                 "text": text or None,
-                "index": index if isinstance(index, int) and index >= 0 else None,
+                "index": index,
+                "interaction": interaction,
+                "session_id": session_id,
+                "observation_id": observation_id,
             },
         )
 
@@ -452,7 +417,7 @@ def build_wrappers(context):
         project_path: str,
         x: float,
         y: float,
-        expected_frame_id: str = "",
+        expected_frame_id: str | dict[str, Any] = "",
         expected_state: dict[str, Any] | None = None,
         coordinate_space: str = "logical",
     ) -> dict:

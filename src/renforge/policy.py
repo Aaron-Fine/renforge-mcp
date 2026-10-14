@@ -54,6 +54,29 @@ SAVES_ACTIONS: dict[str, str] = {
     "load": RISK_DESTRUCTIVE,
 }
 
+MOD_ACTIONS: dict[str, str] = {
+    # A mod file is code the game runs on reload, like renforge_eval.
+    "write": RISK_OPEN_WORLD,
+    # Matches renforge_control(action="reload_script").
+    "reload": RISK_DESTRUCTIVE,
+    "remove": RISK_MUTATING,
+    "list": RISK_OBSERVATIONAL,
+    "lint": RISK_OBSERVATIONAL,
+    "guide": RISK_OBSERVATIONAL,
+    "package": RISK_OBSERVATIONAL,
+}
+
+SESSION_ACTIONS: dict[str, str] = {
+    # Launch is always isolated here, unlike renforge_launch(savedir=existing).
+    "launch": RISK_MUTATING,
+    "status": RISK_OBSERVATIONAL,
+    "list": RISK_OBSERVATIONAL,
+    "import": RISK_MUTATING,
+    "save": RISK_MUTATING,
+    "load": RISK_DESTRUCTIVE,
+    "stop": RISK_MUTATING,
+}
+
 EDITOR_ACTIONS: dict[str, str] = {
     "status": RISK_OBSERVATIONAL,
     "select": RISK_MUTATING,
@@ -208,6 +231,24 @@ def classify(name: str, params: Mapping[str, Any] | None = None) -> tuple[str, s
         if risk is None:
             return f"renforge_saves.{action}", RISK_MALFORMED
         return f"renforge_saves.{action}", risk
+    if name == "renforge_mod":
+        action = payload.get("action")
+        if not isinstance(action, str) or not action.strip():
+            return "renforge_mod", RISK_MALFORMED
+        action = action.strip()
+        risk = MOD_ACTIONS.get(action)
+        if risk is None:
+            return f"renforge_mod.{action}", RISK_MALFORMED
+        return f"renforge_mod.{action}", risk
+    if name == "renforge_session":
+        action = payload.get("action")
+        if not isinstance(action, str) or not action.strip():
+            return "renforge_session", RISK_MALFORMED
+        action = action.strip()
+        risk = SESSION_ACTIONS.get(action)
+        if risk is None:
+            return f"renforge_session.{action}", RISK_MALFORMED
+        return f"renforge_session.{action}", risk
     if name == "renforge_editor":
         action = payload.get("action")
         if not isinstance(action, str) or not action.strip():
@@ -226,9 +267,9 @@ def classify(name: str, params: Mapping[str, Any] | None = None) -> tuple[str, s
         return _classify_scenario(payload.get("steps"))
     if name in _LAUNCH_TOOLS:
         return _classify_launch(name, payload)
-    if name == "renforge_observe":
+    if name in {"renforge_observe", "renforge_explain"}:
         return name, RISK_OBSERVATIONAL
-    if name in {"renforge_act", "renforge_advance_until"}:
+    if name == "renforge_act":
         return name, RISK_MUTATING
     return name, RISK_UNMANAGED
 
