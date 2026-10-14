@@ -6784,6 +6784,20 @@ def test_screens_a_save_restores_count_as_kept_up(running_bridge, monkeypatch):
     screens = globs["_renforge_collect_interaction"](inventory)[0]
     assert {s["name"]: s["kept_up"] for s in screens} == {"character_menu_button": True, "say": False}
 
+    # A restored screen Ren'Py rebuilds before the first interaction (IA2's
+    # quick menu, after changing language on load) still counts by name.
+    bridge.screen_first_seen = {}
+    bridge.restored_screens = (40, {("character_menu_button", "screens")})
+    rebuilt = ScreenDisplayable("character_menu_button", False)
+    inventory = {"nodes": [(rebuilt, "screens", None, None, ())], "truncated": False}
+    assert globs["_renforge_collect_interaction"](inventory)[0][0]["kept_up"] is True
+
+    # A game that assigns its own after_load list during init (IA2) gets the
+    # hook back at the next interaction.
+    renpy.config.after_load_callbacks = ["game's own"]
+    renpy.config.start_interact_callbacks[0]()
+    assert renpy.config.after_load_callbacks[-1].__name__ == "_renforge_mark_restored_screens"
+
 
 @pytest.mark.parametrize("phase_main_menu,label,expected", [
     (True, "chapter2", "out_of_context"),

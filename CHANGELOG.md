@@ -122,6 +122,9 @@ versioning.
   (a HUD), the first time it comes up; a pause the game returns to is still a
   hub that stops as a choice. Screens restored by loading a save count as kept
   up, so a HUD no longer stops the first line after a load. Found in Artifice.
+  The hook is re-added if a game assigns its own `config.after_load_callbacks`
+  list (IA2), and a restored screen Ren'Py rebuilds before the first
+  interaction still counts by name.
 - A launch whose game stops on Ren'Py's error screen before the bridge comes
   up (an exception during init) fails within seconds with
   `GAME_STARTUP_ERROR` and the game's `traceback.txt`/`errors.txt` report,

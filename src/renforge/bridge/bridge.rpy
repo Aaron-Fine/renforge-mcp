@@ -4852,7 +4852,15 @@ init python:
         bridge = _renforge_runtime.bridge
         generation = getattr(bridge, "observe_generation", 0) if bridge is not None else 0
         before = getattr(bridge, "screen_first_seen", None) or {}
-        first_seen = {id(node): before.get(id(node), generation) for node in screen_nodes}
+        restored_at, restored = getattr(bridge, "restored_screens", None) or (None, ())
+        first_seen = {}
+        for node, layer in zip(screen_nodes, layers):
+            if id(node) in before:
+                first_seen[id(node)] = before[id(node)]
+            elif generation == restored_at and (_renforge_observe_screen_node_name(node), layer) in restored:
+                first_seen[id(node)] = -1
+            else:
+                first_seen[id(node)] = generation
         if bridge is not None:
             bridge.screen_first_seen = first_seen
         seen_screens = {}
@@ -4861,6 +4869,18 @@ init python:
             _renforge_observe_record_screen(node, layer, screens, seen_screens, kept_up)
         say_dismiss = _renforge_runtime.interaction.normalize_say_dismiss(dismiss)
         return screens, say_dismiss, inventory["truncated"], screen_nodes
+
+    def _renforge_ensure_after_load_hook():
+        """Keep the restored-screen hook in config.after_load_callbacks.
+
+        A game may assign its own list during init, after the bridge added
+        the hook (IA2: ``config.after_load_callbacks = [after_load_setup_custom]``).
+        """
+        after_load = getattr(renpy.config, "after_load_callbacks", None)
+        if isinstance(after_load, builtins.list) and not any(
+                getattr(callback, "__name__", "") == "_renforge_mark_restored_screens"
+                for callback in after_load):
+            after_load.append(_renforge_mark_restored_screens)
 
     def _renforge_mark_restored_screens():
         """Screens a save restores were shown before it was made, so kept up.
@@ -4876,12 +4896,17 @@ init python:
         except Exception:
             return
         first_seen = builtins.dict(getattr(bridge, "screen_first_seen", None) or {})
-        for entries in layers.values():
+        names = builtins.set()
+        for layer, entries in layers.items():
             for entry in entries:
                 node = getattr(entry, "displayable", None)
                 if node.__class__.__name__ == "ScreenDisplayable":
                     first_seen[id(node)] = -1
+                    names.add((_renforge_observe_screen_node_name(node), layer))
         bridge.screen_first_seen = first_seen
+        # Ren'Py can rebuild a restored screen before the first interaction
+        # (changing language on load), so its name counts for that one.
+        bridge.restored_screens = (getattr(bridge, "observe_generation", 0) + 1, names)
 
     def _renforge_observe_record_screen(node, layer_name, screens, seen_screens, kept_up=False):
         name = getattr(node, "screen_name", None)
@@ -8245,6 +8270,7 @@ init python:
         def _renforge_on_start_interact():
             # Once per ui.interact, before the redraw loop. restart_interaction
             # stays inside that call and must not change the observe generation.
+            _renforge_ensure_after_load_hook()
             operation = bridge.progression
             if operation is not None and operation["active"]:
                 # Freeze skip before the next interaction is constructed. The
@@ -8315,11 +8341,7 @@ init python:
             renpy.config.quit_callbacks = quit_callbacks
         if not any(getattr(callback, "__name__", "") == "_renforge_on_quit" for callback in quit_callbacks):
             quit_callbacks.append(_renforge_on_quit)
-        after_load = getattr(renpy.config, "after_load_callbacks", None)
-        if isinstance(after_load, builtins.list) and not any(
-                getattr(callback, "__name__", "") == "_renforge_mark_restored_screens"
-                for callback in after_load):
-            after_load.append(_renforge_mark_restored_screens)
+        _renforge_ensure_after_load_hook()
 
     def renforge_start_bridge():
         existing = getattr(_renforge_runtime, "bridge", None)
