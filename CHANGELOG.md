@@ -160,6 +160,11 @@ versioning.
   `observation_status="ready"` with the current observation and a hint to
   observe again, instead of `timeout`; the refusal is immediate and nothing
   timed out (Eden's splash screen).
+- A choice button whose action hands its menu item to a game callback
+  (`action Function(menu_choice_intercept, menu_item=i)`, Light of my Life) is
+  that item: one control per choice, with the item's caption and the button's
+  bounds, and choosing it runs the game's callback. Before, each choice was
+  listed twice, once as a button and once as a bound-less `choice/item/N`.
 
 ### Added
 

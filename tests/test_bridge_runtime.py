@@ -6404,6 +6404,67 @@ def test_a_choice_the_screen_draws_without_an_action_is_disabled(running_bridge)
     assert refused['ok'] is False and calls == []
 
 
+def test_a_choice_button_that_wraps_its_item_in_a_function_is_the_item(running_bridge):
+    """Light of my Life: `textbutton "1. " + i.caption action Function(menu_choice_intercept, menu_item=i)`."""
+    from renforge.observe import classify
+    renpy = running_bridge.renpy
+    calls = []
+
+    class Action:
+        def __init__(self, value):
+            self.value = value
+
+        def __call__(self):
+            calls.append(self.value)
+
+    class Function:
+        def __init__(self, callable, *args, **kwargs):
+            self.callable, self.args, self.kwargs = callable, args, kwargs
+
+        def __call__(self):
+            return self.callable(*self.args, **self.kwargs)
+
+    class ScreenDisplayable:
+        screen_name = ('choice', None)
+        layer = 'screens'
+        modal = False
+        hiding = False
+        children = []
+        widgets = {}
+
+    def intercept(menu_item):
+        calls.append("intercepted")
+        menu_item.action()
+
+    items = [types.SimpleNamespace(caption='Get closer.', action=Action("closer")),
+             types.SimpleNamespace(caption='Stay back.', action=Action("back"))]
+    screen = ScreenDisplayable()
+    screen.scope = {'items': items}
+    class Button(_FakeWidget):
+        pass
+
+    focuses = []
+    for number, item in enumerate(items):
+        button = Button('%d. %s' % (number + 1, item.caption))
+        button.clicked = button.action = Function(intercept, menu_item=item)
+        focus = _FakeFocus(None, 0, 50 * number, 200, 40, widget=button)
+        focus.screen = screen
+        focuses.append(focus)
+    _arm_stable_interaction(running_bridge, generation=14)
+    renpy.game.context = lambda: types.SimpleNamespace(interacting=True,
+        scene_lists=types.SimpleNamespace(layers={'screens': [types.SimpleNamespace(displayable=screen)]}))
+    renpy.display.focus.focus_list[:] = focuses
+    renpy.display.behavior.is_sensitive = lambda action: True
+    renpy.display.behavior.run = lambda action: action()
+    snapshot = classify(running_bridge.client.observe(screenshot=False))
+    # One control per item, with its bounds, not a drawn button plus a bound-less item.
+    assert [control['text'] for control in snapshot['controls']] == ['Get closer.', 'Stay back.']
+    assert all(control.get('bounds') for control in snapshot['controls'])
+    acted = running_bridge.client.act(interaction=14, control_id=snapshot['controls'][1]['id'])
+    assert acted['ok'] is True, acted
+    assert calls == ["intercepted", "back"]  # the game's own callback ran
+
+
 def test_nested_interaction_replies_before_the_handler_returns(running_bridge):
     """ShowMenu outside the game menu runs a nested interaction inside the handler."""
     renpy = running_bridge.renpy

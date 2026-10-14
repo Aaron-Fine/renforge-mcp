@@ -4362,6 +4362,25 @@ init python:
         return False
 
 
+    def _renforge_action_wraps(container, wanted):
+        """A Function action handed the menu item or its action as an argument.
+
+        A choice screen may route each item through its own callback
+        (Light of my Life: ``action Function(menu_choice_intercept,
+        menu_item=i)``); that button is the item.
+        """
+        for action in _renforge_action_list(container):
+            args = getattr(action, "args", None)
+            kwargs = getattr(action, "kwargs", None)
+            values = builtins.list(args) if _renforge_observe_is_sequence(args) else []
+            if isinstance(kwargs, builtins.dict):
+                values.extend(kwargs.values())
+            for value in values:
+                if value is wanted or getattr(value, "action", None) is wanted:
+                    return True
+        return False
+
+
     def _renforge_observe_focus_pairs(inventory=None):
         """Collect current controls once; legacy listings are views of these pairs."""
         if inventory is None:
@@ -4384,7 +4403,10 @@ init python:
                         w=getattr(focus, "w", None), h=getattr(focus, "h", None))
             screen = getattr(focus, "screen", None)
             for entry_number, (owner, index, caption, action) in enumerate(menu):
-                if owner is screen and _renforge_action_contains(_renforge_focus_action_value(focus), action):
+                if owner is not screen:
+                    continue
+                value = _renforge_focus_action_value(focus)
+                if _renforge_action_contains(value, action):
                     matched_menu.add(entry_number)
                     record["menu_index"] = index
                     record["text"] = caption
@@ -4392,6 +4414,13 @@ init python:
                     focus = types.SimpleNamespace(widget=widget, screen=owner, action=action,
                         menu_action=action, x=getattr(focus, "x", None), y=getattr(focus, "y", None),
                         w=getattr(focus, "w", None), h=getattr(focus, "h", None))
+                    break
+                if _renforge_action_wraps(value, action):
+                    # The item, but a click runs the game's own callback.
+                    matched_menu.add(entry_number)
+                    record["menu_index"] = index
+                    record["text"] = caption
+                    record["semantic"] = True
                     break
             record["widget_id"] = _renforge_observe_widget_id(focus, widget, inventory["named"])
             record["source"] = _renforge_source_location(widget)
