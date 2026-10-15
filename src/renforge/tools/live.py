@@ -28,7 +28,7 @@ from ..observe import apply_screenshot
 from ..interaction import classify, crossed_transcript, validate_act_payload, _real_number, progression_boundary
 from ..progression import failure_status, process_exit, run_advance_until, run_native_skip, settle
 from ..toolsets import bridge_eval_allowed
-from ..bridge.client import BridgeClient, BridgeError
+from ..bridge.client import BridgeClient, BridgeError, BridgeNotRunningError
 from ..bridge.launcher import (
     BridgeSession,
     launch_with_bridge,
@@ -446,8 +446,8 @@ def _client(project_path: str | Path) -> BridgeClient:
 def _with_client(project_path: str | Path, fn: Callable[[BridgeClient], dict]) -> dict:
     try:
         client = _client(project_path)
-    except FileNotFoundError:
-        return {"ok": False, "error": "no running game (bridge not found); call renforge_launch first"}
+    except BridgeNotRunningError as exc:
+        return {"ok": False, "code": exc.code, "error": str(exc)}
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     try:
@@ -1330,7 +1330,17 @@ def play(
         if value is not None and not isinstance(value, bool):
             return {"ok": False, "error": "a key takes value true (hold), false (release), or nothing (tap)"}
         return act(project_path, key=control_id[len(KEY_CONTROL_PREFIX):], hold=value, **common)
-    return act(project_path, control_id=control_id, input_value=value, **common)
+    result = act(project_path, control_id=control_id, input_value=value, **common)
+    if result.get("error") == "missing":
+        # A mistyped or remembered id: say so, and show what is there now.
+        result["message"] = (f"{control_id!r} is not a control on the current screen; use an id from "
+                             "the observation's controls or chrome, or key/<name>")
+        if not result.get("observation"):
+            current = observe(project_path, screenshot=False)
+            if current.get("ok") is not False and current.get("observation_id"):
+                current.pop("ok", None)
+                result["observation"] = current
+    return result
 
 
 def advance_until(
@@ -1349,9 +1359,9 @@ def advance_until(
                 "error": "Require max_steps 1..200, timeout 0.1..120, boolean screenshot, and mode skip or dismiss"}
     try:
         client = _client(project_path)
-    except FileNotFoundError:
+    except BridgeNotRunningError as exc:
         return {"ok": False, "stop": "not_running", "steps": 0, "observation": None,
-                "error": "no running game (bridge not found); call renforge_launch first"}
+                "code": exc.code, "error": str(exc)}
     except Exception as exc:
         return {"ok": False, "stop": "transport_error", "steps": 0, "observation": None,
                 "error": f"{type(exc).__name__}: {exc}"}

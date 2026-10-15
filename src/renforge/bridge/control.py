@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Final, Mapping
 
-from renforge.bridge.client import BridgeProtocolError
+from renforge.bridge.client import BridgeNotRunningError, BridgeProtocolError
 from renforge.launch_env import LaunchError
 from renforge.util.files import (
     PrivatePathError,
@@ -41,6 +42,14 @@ _BRIDGE_INFO_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 _VALIDATION_MESSAGE: Final[str] = "bridge metadata failed validation"
+_NOT_RUNNING_MESSAGE: Final[str] = (
+    'no game is running for this project; start one with renforge_session(action="launch") '
+    "(or renforge_launch)"
+)
+_STARTING_MESSAGE: Final[str] = (
+    'the game is still starting; poll renforge_session(action="status") (or renforge_launch_status) '
+    "until it is ready"
+)
 
 
 @dataclass(frozen=True)
@@ -118,8 +127,11 @@ def read_bridge_info(
 ) -> BridgeInfo:
     """Read and validate private bridge metadata for *project_root*."""
     root = _canonical_project_root(project_root)
-    validate_control_dir(root)
     path = _bridge_info_path(root)
+    if not os.path.lexists(path.parent) or not os.path.lexists(path):
+        # Nothing was launched, or the session was stopped and cleaned up.
+        raise BridgeNotRunningError(_NOT_RUNNING_MESSAGE, code="NO_RUNNING_GAME")
+    validate_control_dir(root)
     try:
         raw = read_regular_file_nofollow(path, max_bytes=_BRIDGE_INFO_MAX_BYTES)
     except PrivatePathError as exc:
@@ -132,7 +144,7 @@ def read_bridge_info(
 
     info = _parse_bridge_info(payload, expected_project_root=root)
     if require_ready and info.state != _STATE_READY:
-        raise BridgeProtocolError(_VALIDATION_MESSAGE)
+        raise BridgeNotRunningError(_STARTING_MESSAGE, code="GAME_STARTING")
     if expected_session_id is not None and info.session_id != expected_session_id:
         raise BridgeProtocolError(_VALIDATION_MESSAGE)
     return info

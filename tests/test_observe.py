@@ -1380,3 +1380,16 @@ def test_a_screens_key_bindings_are_reported_with_the_key_to_send():
     assert snapshot["keys"] == keys
     assert compact_observation(snapshot)["keys"] == keys
     assert "keys" not in compact_observation(classify(_raw()))
+
+
+def test_act_on_an_id_the_screen_does_not_list_says_so(monkeypatch):
+    from renforge.tools import live
+
+    current = {"ok": True, "observation_id": "obs_2", "controls": [{"id": "choice/item/0"}]}
+    monkeypatch.setattr(live, "act", lambda *_a, **_k: {"ok": False, "error": "missing",
+                                                        "action_outcome": "refused"})
+    monkeypatch.setattr(live, "observe", lambda *_a, **_k: dict(current))
+    result = live.play("/game", "obs_1", "choice/item/7", screenshot=False)
+    assert result["error"] == "missing"
+    assert "'choice/item/7' is not a control" in result["message"]
+    assert result["observation"]["observation_id"] == "obs_2"
