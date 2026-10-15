@@ -1,6 +1,7 @@
 """Tool groups the server can list, chosen with ``RENFORGE_TOOLSETS``.
 
-``play`` is the canonical agent loop: one tool per task. The other groups keep
+``play`` is the canonical agent loop: one tool per task. ``mod`` adds
+``renforge_mod``, which writes and reloads game code. The other groups keep
 every earlier capability available for existing clients, scripts, and the
 Live Editor, and are listed unless the server is limited to fewer groups.
 
@@ -23,6 +24,10 @@ TOOLSETS: dict[str, tuple[str, ...]] = {
         "renforge_observe",
         "renforge_act",
         "renforge_explain",
+    ),
+    # Writing and reloading a mod runs code the agent wrote in the game, so it
+    # is its own group: a server limited to `play` cannot run code at all.
+    "mod": (
         "renforge_mod",
     ),
     # Earlier live-session tools. Each overlaps the play loop: launch/stop/
@@ -128,7 +133,8 @@ def allowed_tools(known: Iterable[str], environ: Mapping[str, str] | None = None
 
 # Groups whose tools run arbitrary expressions in the game (renforge_eval,
 # renforge_set_var, wait_until and scenario conditions) or that the Live
-# Editor drives through the bridge's eval.
+# Editor drives through the bridge's eval. `mod` runs code through script
+# reloads, not the bridge's eval, so the bridge's eval stays off for it.
 EVAL_TOOLSETS = frozenset({"debug", "editor"})
 
 
@@ -136,7 +142,8 @@ def bridge_eval_allowed(environ: Mapping[str, str] | None = None) -> bool:
     """Whether launched games should accept the bridge's eval and set_var.
 
     A server limited to groups that never evaluate code (``play``, say) starts
-    games whose bridge refuses both, so no code can be run through it.
+    games whose bridge refuses both. With ``play`` alone no tool can run code
+    in the game; ``mod`` writes scripts on purpose.
     """
     env = os.environ if environ is None else environ
     raw = env.get(TOOLSETS_ENV, "").strip()

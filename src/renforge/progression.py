@@ -41,6 +41,12 @@ def failure_status(error: Exception, process=None) -> str:
 SETTLE_SAME_INTERACTION = 4
 
 
+def _busy(raw, deadline) -> bool:
+    """A reply that timed out while budget remains: the game's main thread was
+    busy (decoding a new scene's images, say), so asking again is safe."""
+    return raw.get("status") == "timeout" and deadline - time.monotonic() > POLL_SECONDS
+
+
 def settle(fetch, deadline, *, screenshot=True):
     """Require two matching stable observations after progression is disabled.
 
@@ -53,6 +59,9 @@ def settle(fetch, deadline, *, screenshot=True):
     while time.monotonic() < deadline:
         raw = fetch(False)
         if raw.get("ok") is False:
+            if _busy(raw, deadline):
+                time.sleep(POLL_SECONDS)
+                continue
             return None, raw.get("status", "transport_error"), raw.get("error")
         before = last
         last = classify(raw)
@@ -123,6 +132,9 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, betwe
                 continue
             raw = fetch(False)
             if raw.get("ok") is False:
+                if _busy(raw, deadline):
+                    time.sleep(POLL_SECONDS)
+                    continue
                 result.update(ok=False, stop=raw.get("status", "transport_error"), error=raw.get("error"))
                 break
             snapshot = classify(raw)

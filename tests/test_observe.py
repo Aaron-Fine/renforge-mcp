@@ -1342,3 +1342,29 @@ def test_a_pause_beside_buttons_that_do_nothing_is_dismissed():
     snapshot = classify(_raw(dialogue=None, screens=screens, elements=elements))
     assert snapshot["forward"] == "dismiss"
     assert snapshot["controls"][0]["inert"] is True
+
+
+def test_a_reply_that_times_out_while_the_game_is_busy_is_asked_again():
+    """Entering a scene can hold the main thread past one reply's deadline."""
+    import time
+
+    from renforge.progression import run_native_skip, settle
+
+    busy = {"ok": False, "status": "timeout", "error": "timed out waiting for a frame"}
+    frames = iter([busy, _raw(interaction=2, observation_id="new"), _raw(interaction=2, observation_id="new")])
+    result, status, error = settle(lambda shot: next(frames), time.monotonic() + 2, screenshot=False)
+    assert status == "ready" and error is None and result["interaction"] == 2
+
+    # Progression polls again too, and a menu it then sees is its stop.
+    menu = _raw(interaction=3, observation_id="menu", say_dismiss=None, dialogue=None,
+                screens=[{"name": "choice", "layer": "screens", "modal": True}],
+                elements=[_element(screen="choice", text="Go", menu_index=0)])
+    replies = iter([busy, menu])
+    progress = run_native_skip(None, lambda shot: next(replies), max_steps=5,
+                               deadline=time.monotonic() + 2, total_deadline=time.monotonic() + 2)
+    assert progress["ok"] is True and progress["stop"] != "timeout"
+
+    # Out of budget, a timeout is still reported.
+    stuck = iter([busy] * 100)
+    result, status, error = settle(lambda shot: next(stuck), time.monotonic() + 0.01, screenshot=False)
+    assert status == "timeout"

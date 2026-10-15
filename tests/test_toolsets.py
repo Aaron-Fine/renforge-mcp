@@ -40,6 +40,8 @@ def test_only_servers_with_a_code_running_tool_let_games_run_code():
     assert bridge_eval_allowed({"RENFORGE_TOOLSETS": "play,editor"}) is True
     assert bridge_eval_allowed({"RENFORGE_TOOLSETS": "play"}) is False
     assert bridge_eval_allowed({"RENFORGE_TOOLSETS": "play, live, docs"}) is False
+    # Only the groups above and `mod` run code; `play` alone never does.
+    assert "renforge_mod" in TOOLSETS["mod"] and "renforge_mod" not in TOOLSETS["play"]
     # Every tool that evaluates code is in one of those groups.
     for tool in ("renforge_eval", "renforge_set_var", "renforge_wait_until", "renforge_run_scenario", "renforge_editor"):
         assert any(tool in TOOLSETS[group] for group in ("debug", "editor"))
