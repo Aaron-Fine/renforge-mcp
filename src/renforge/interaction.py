@@ -645,6 +645,9 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
         "chrome": chrome,
         "readout": _without_dialogue(_readout(raw), _dialogue(raw)),
         "input_candidates": list(raw.get("input_candidates") or []),
+        # Key bindings of the screens shown: a screen may continue only on a
+        # key ("Press SPACE to continue"); `act` sends the given key/<name>.
+        "keys": [dict(item) for item in raw.get("keys") or () if isinstance(item, Mapping)],
         "frame_hash": frame_hash or None,
         "frame_id": raw.get("frame_id"),
         "frame": raw.get("frame"),

@@ -529,7 +529,9 @@ across lines with `show screen` (a phone or codex HUD) never stop such a line,
 and an advance that comes round to a line it already passed stops with
 `stop="loop"` so the agent can break the loop. When nothing can continue because the game waits
 for one of its controls (a hard pause behind a button), the result says so in
-`hint`. Input controls report what is typed so far as `value`. An unstable snapshot cannot authorize
+`hint`. `keys` lists the key bindings of the screens shown (a screen that continues
+on Space, say), each with its action and the `key/<name>` to send when `act`
+can press that key. Input controls report what is typed so far as `value`. An unstable snapshot cannot authorize
 input on a control.
 
 The earlier `live` toolset still offers `renforge_advance`, `renforge_click_element`,

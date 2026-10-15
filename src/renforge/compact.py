@@ -54,6 +54,8 @@ def compact_observation(snapshot: Any) -> Any:
     for key, value in snapshot.items():
         if value is None:
             continue
+        if key == "keys" and not value:
+            continue
         if key == "controls" and isinstance(value, list):
             out[key] = [compact_control(item) for item in value if isinstance(item, Mapping)]
         elif key == "chrome" and isinstance(value, list):

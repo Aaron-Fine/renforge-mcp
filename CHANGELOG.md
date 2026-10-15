@@ -276,6 +276,11 @@ versioning.
 - `renforge_mod` moves to its own `mod` toolset. Writing and reloading a mod
   runs game code, so a server limited to `play` can no longer run code in the
   game; `RENFORGE_TOOLSETS=play,mod` keeps modding.
+- Observations list the key bindings of the screens shown as `keys`: the
+  binding, its action, and the `key/<name>` that `act` can send. A settings
+  screen that continues only on `key "K_SPACE" action Return()` said so only
+  in its text ("Press SPACE to continue"). Interface and do-nothing bindings
+  are left out, and bindings never count as decisions.
 - A button whose click does nothing (`NullAction()`, or only a sound or a
   selected/sensitive state) is `inert` and never a decision, so a `pause`
   beside a tutorial's decorative icons is clicked past instead of stopping

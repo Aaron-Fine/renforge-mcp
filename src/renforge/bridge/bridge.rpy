@@ -4694,6 +4694,48 @@ init python:
         return pairs, truncated
 
 
+    def _renforge_key_bindings(inventory, limit=20):
+        """A screen's own key bindings (`key "K_SPACE" action Return()`).
+
+        Such a screen often continues only on that key, and the only hint
+        is text such as "Press SPACE to continue". Each binding names its
+        action and, when renforge_act can press the key, the `key/<name>` to
+        send. Interface actions (menus, rollback) and actions that do nothing
+        are left out, and bindings never count as decisions.
+        """
+        keymap_type = getattr(getattr(renpy.display, "behavior", None), "Keymap", None)
+        if not isinstance(keymap_type, type):
+            return []
+        act_names = builtins.dict()
+        for name, attr in _RENFORGE_ACT_KEY_ATTRS.items():
+            act_names.setdefault(attr, name)
+        found = []
+        seen = builtins.set()
+        for widget, _layer, name, screen, _parents in inventory["nodes"]:
+            if screen is None or not isinstance(widget, keymap_type):
+                continue
+            bindings = getattr(widget, "keymap", None)
+            if not isinstance(bindings, builtins.dict):
+                continue
+            for binding, action in bindings.items():
+                if not isinstance(binding, builtins.str) or action is None or binding.startswith("mouse"):
+                    continue
+                actions = _renforge_action_list(action)
+                if _renforge_engine_chrome_action(actions) or _renforge_inert_action(actions):
+                    continue
+                key = (name, binding)
+                if key in seen:
+                    continue
+                seen.add(key)
+                act = act_names.get(binding)
+                found.append({"screen": name, "binding": binding,
+                              "act": "key/" + act if act else None,
+                              "action": _renforge_observe_format_action(action)})
+                if len(found) >= limit:
+                    return found
+        return found
+
+
     def _renforge_scene_roots():
         try:
             scene_lists = renpy.game.context().scene_lists
@@ -5355,6 +5397,7 @@ init python:
             "elements": elements,
             "readout": readout,
             "input_candidates": candidates,
+            "keys": _renforge_key_bindings(inventory),
             "omitted": {
                 "focus_truncated": bool(focus_truncated),
                 "unclassified": bool(walk_truncated or unclassified or inventory["geometry"]["truncated"]),

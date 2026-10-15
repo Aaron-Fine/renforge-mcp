@@ -1368,3 +1368,15 @@ def test_a_reply_that_times_out_while_the_game_is_busy_is_asked_again():
     stuck = iter([busy] * 100)
     result, status, error = settle(lambda shot: next(stuck), time.monotonic() + 0.01, screenshot=False)
     assert status == "timeout"
+
+
+def test_a_screens_key_bindings_are_reported_with_the_key_to_send():
+    """A settings screen continues only on `key "K_SPACE" action Return()`."""
+    from renforge.compact import compact_observation
+
+    keys = [{"screen": "intro_prefs", "binding": "K_SPACE", "act": "key/space", "action": "Return()"}]
+    snapshot = classify(_raw(dialogue=None, say_dismiss=None, keys=keys,
+                             screens=[{"name": "intro_prefs", "layer": "screens", "modal": True}]))
+    assert snapshot["keys"] == keys
+    assert compact_observation(snapshot)["keys"] == keys
+    assert "keys" not in compact_observation(classify(_raw()))
