@@ -281,6 +281,10 @@ versioning.
   screen that continues only on `key "K_SPACE" action Return()` said so only
   in its text ("Press SPACE to continue"). Interface and do-nothing bindings
   are left out, and bindings never count as decisions.
+- `act` with a letter key now types that letter, as a keyboard does. A
+  quick-time event bound to `key "d"` matched only the typed character, so
+  `key/d` never fired it. Such bindings, and `keydown_K_d`, now report
+  `key/d`.
 - A button whose click does nothing (`NullAction()`, or only a sound or a
   selected/sensitive state) is `inert` and never a decision, so a `pause`
   beside a tutorial's decorative icons is clicked past instead of stopping
