@@ -269,6 +269,13 @@ versioning.
   `~/library/renpy` is the player's `~/Library/RenPy`), and a custom `home`
   whose Ren'Py save folder resolves into the player's tree counts too, as
   does a save path inside any game's `game/saves`, not only this project's.
+- A reply that times out while the game's main thread is busy (entering a
+  scene that decodes large images) no longer ends `act` or `advance_until`
+  with `stop="timeout"`: progression and the final observation ask again
+  while budget remains.
+- `renforge_mod` moves to its own `mod` toolset. Writing and reloading a mod
+  runs game code, so a server limited to `play` can no longer run code in the
+  game; `RENFORGE_TOOLSETS=play,mod` keeps modding.
 - A button whose click does nothing (`NullAction()`, or only a sound or a
   selected/sensitive state) is `inert` and never a decision, so a `pause`
   beside a tutorial's decorative icons is clicked past instead of stopping

@@ -248,11 +248,14 @@ from the project, because the project owner writes it.
 
 Every tool belongs to one group. `play` is the agent loop, with one tool per
 task: `renforge_info`, `renforge_session`, `renforge_observe`, `renforge_act`,
-`renforge_explain`, and `renforge_mod`. The other groups keep every earlier
-capability for existing clients, scripts, and the Live Editor:
+and `renforge_explain`. `mod` holds `renforge_mod`, which writes and reloads
+game code, so a server limited to `play` cannot run code in the game. The
+other groups keep every earlier capability for existing clients, scripts, and
+the Live Editor:
 
 | Toolset | What it holds |
 | --- | --- |
+| `mod` | `renforge_mod`: write, lint, reload, remove, and package mods |
 | `live` | Launch/stop/saves, advancing, clicks, keys, choices, UI listings, screenshots, the scene tree |
 | `debug` | Game state, variables, `eval`, events, errors, waits, scenarios, autopilot |
 | `editor` | The Live Editor |
@@ -265,7 +268,8 @@ capability for existing clients, scripts, and the Live Editor:
 server lists. Unknown names stop the server at startup.
 
 ```bash
-RENFORGE_TOOLSETS=play renforge serve          # the agent loop only
+RENFORGE_TOOLSETS=play renforge serve          # the agent loop only; no code runs in the game
+RENFORGE_TOOLSETS=play,mod renforge serve      # plus writing mods
 RENFORGE_TOOLSETS=play,debug renforge serve    # plus state inspection
 ```
 
@@ -885,8 +889,8 @@ conditions of `renforge_wait_until` and `renforge_run_scenario`) needs the
 bridge's `eval`. A server whose toolsets include neither `debug` nor `editor`
 (`RENFORGE_TOOLSETS=play`, say) launches games whose bridge refuses it
 (`eval_disabled`); reading variables and the play loop are unaffected.
-`renforge_mod` still writes scripts on purpose; under `RENFORGE_POLICY=enforce`
-writing one needs `authorize=true`.
+`renforge_mod`, in the separate `mod` toolset, writes scripts on purpose;
+under `RENFORGE_POLICY=enforce` writing one needs `authorize=true`.
 
 `renforge_inspect_screen` is read-only and reports `active=false` clearly when
 the requested screen is not shown. There is intentionally no separate style
