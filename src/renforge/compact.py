@@ -75,6 +75,9 @@ def compact_observation(snapshot: Any) -> Any:
             continue  # the frame already gives the image size
         elif key == "frame_hash" and value == snapshot.get("frame_id"):
             continue
+        elif (key == "frame_id" and isinstance(snapshot.get("frame"), Mapping)
+              and snapshot["frame"].get("frame_id") == value):
+            continue  # frame carries it
         elif key == "screens" and isinstance(value, list):
             out[key] = [{k: v for k, v in item.items() if v is not False} if isinstance(item, Mapping) else item
                         for item in value]

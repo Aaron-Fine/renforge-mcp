@@ -44,6 +44,7 @@ def test_compact_observation_reduces_chrome_and_repeats():
     }
     out = compact_observation(snapshot)
     assert "dialogue" not in out and "frame_hash" not in out and "screenshot" not in out
+    assert "frame_id" not in out  # frame carries it
     assert "omitted" not in out
     assert out["frame"] == {"frame_id": "f", "width": 8, "height": 4}
     assert out["chrome"] == [{"id": "quick_menu/Skip", "text": "Skip", "enabled": False}]

@@ -131,6 +131,15 @@ def allowed_tools(known: Iterable[str], environ: Mapping[str, str] | None = None
     return names & known_set
 
 
+def enabled_toolsets(environ: Mapping[str, str] | None = None) -> list[str]:
+    """The groups the server lists, in catalogue order (all of them by default)."""
+    env = os.environ if environ is None else environ
+    tokens = {part.strip() for part in env.get(TOOLSETS_ENV, "").split(",") if part.strip()}
+    if not tokens or "all" in tokens:
+        return list(TOOLSETS)
+    return [name for name in TOOLSETS if name in tokens]
+
+
 # Groups whose tools run arbitrary expressions in the game (renforge_eval,
 # renforge_set_var, wait_until and scenario conditions) or that the Live
 # Editor drives through the bridge's eval. `mod` runs code through script

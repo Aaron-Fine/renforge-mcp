@@ -275,6 +275,9 @@ RENFORGE_TOOLSETS=play,debug renforge serve    # plus state inspection
 
 ## Recommended workflow
 
+To play a game, use [Look, then act](#look-then-act). The workflow below is
+for the Live Editor and the earlier `live` tools.
+
 ```text
 renforge_info
   -> active_project, live_editor (enabled_by_default, launch_tool, guide)
@@ -504,7 +507,27 @@ remain identical.
 
 ## Look, then act
 
-Playing is two tools. `renforge_observe` returns one compact snapshot:
+The `play` toolset plays a game with one tool per task:
+
+```text
+renforge_session(project_path, action="launch")   # then action="status" until ready
+loop:
+  renforge_observe(project_path)                  # once; every act returns the next observation
+  renforge_act(project_path, observation_id, id=...)   # a control, key/<name>, or no id
+renforge_explain(project_path, id=... | search=... | label=...)   # when unsure what something does
+renforge_session(project_path, action="save" | "load" | "stop", slot=...)
+```
+
+Each observation's `forward` says what to do next:
+
+| `forward` | Meaning | Next call |
+| --- | --- | --- |
+| `dismiss` | A line or pause the player would click past | `renforge_act` with no `id` |
+| `wait` | A pause that ends by itself | `renforge_act` with no `id` (it waits) |
+| `choose` | The game waits for a decision: a menu, input, button, or modal screen | `renforge_act` with a control `id` (or a key from `keys`) |
+| `none` | Nothing RenForge knows moves the game on | Look at `omitted`, `input_candidates`, and the screenshot |
+
+`renforge_observe` returns one compact snapshot:
 `observation_id`, stability, dialogue, controls, readout, `forward`, and an
 optional screenshot. Defaults and repeats are left out and chrome is reduced to
 id and text; `renforge_explain(id=...)` returns a control's full record.
@@ -567,16 +590,26 @@ and `variables=["day", "calendar.dayCount"]` reads named store variables or
 dotted fields directly. Game objects come back as their simple public fields;
 functions are never called.
 
-The conventional `quick_menu` and injected `_renforge_` screens are chrome.
-Custom overlay screens remain gameplay controls: overlay registration is a
-rendering detail, not a reason to ignore a hub. Readout text does not stop
-progression. Custom displayables and keyboard shortcuts are not fully
-inventoried; `omitted` reports focus/traversal limits, unclassified custom input,
-and readout truncation. Readout truncation alone does not block progression.
+`chrome` holds the game's interface: the conventional `quick_menu`, injected
+`_renforge_` screens, and buttons whose only actions are Ren'Py interface
+actions (opening the game menu, saving, loading, skipping, rolling back,
+preferences). When nothing else on the interaction's own screen moves the game
+on, those buttons become its controls (a disclaimer whose only buttons are
+`MainMenu()` and `Quit()`). Custom overlay screens remain gameplay controls:
+overlay registration is a rendering detail, not a reason to ignore a hub.
+Readout text does not stop progression. Custom displayables are not fully
+inventoried; `omitted` reports focus/traversal limits, unclassified custom
+input, and readout truncation. Readout truncation alone does not block
+progression. Each binding in `keys` names the `key/<name>` that fires it, or
+`act: null` when `act` cannot press it (a function key, or one that needs a
+modifier); mouse bindings and interface bindings (menus, rollback) are left
+out.
 
-A play session starts with `renforge_session(action="launch")` (saves and
-preferences kept apart from the player's, no Live Editor); poll
-`action="status"` until ready. For testing and modding, `label="..."` starts
+`renforge_session(action="launch")` keeps saves and preferences apart from
+the player's (in the project's state folder, so they survive relaunches),
+gives the game its own HOME, and leaves the Live Editor out. Calling
+`renforge_observe` or `renforge_act` before the game is running returns
+`code="NO_RUNNING_GAME"`, or `GAME_STARTING` while it starts. For testing and modding, `label="..."` starts
 the story at that label instead: the game leaves its splash screen or main
 menu for it, which works for games shipped only as archives. Nothing the
 story did before the label has happened (variables keep their defaults, and a

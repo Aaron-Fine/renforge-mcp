@@ -63,3 +63,28 @@ def test_a_play_only_server_launches_games_that_refuse_eval(monkeypatch, tmp_pat
         monkeypatch.setenv("RENFORGE_TOOLSETS", toolsets)
         live.launch_game(str(tmp_path), editor=False)
     assert [env.get("RENFORGE_BRIDGE_EVAL") for env in seen] == ["off", None]
+
+
+def test_info_and_instructions_name_only_the_listed_tools(monkeypatch):
+    """A play-only server never points an agent at tools it does not list."""
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    from fastmcp import Client
+
+    from renforge.server import _instructions, create_app
+
+    monkeypatch.setenv("RENFORGE_TOOLSETS", "play")
+
+    async def info():
+        async with Client(create_app()) as client:
+            return (await client.call_tool("renforge_info", {})).structured_content
+
+    payload = asyncio.run(info())
+    assert payload["toolsets"] == ["play"]
+    assert "live_editor" not in payload
+    assert any("renforge_act" in step for step in payload["play"]["loop"])
+
+    play_only = _instructions(["play"])
+    assert "renforge_act" in play_only and "forward" in play_only
+    assert "renforge_mod" not in play_only and "toolsets keep the earlier tools" not in play_only
+    everything = _instructions(list(TOOLSETS))
+    assert "renforge_mod" in everything and "Live Editor" in everything
