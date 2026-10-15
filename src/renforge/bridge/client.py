@@ -39,6 +39,10 @@ class BridgeProtocolError(BridgeError):
         self.code = code
 
 
+class BridgeNotRunningError(BridgeProtocolError):
+    """No game is running for the project, or its bridge is still starting."""
+
+
 @dataclass
 class BridgeConfig:
     host: str = "127.0.0.1"

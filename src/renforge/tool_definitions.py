@@ -103,8 +103,9 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     "renforge_info": ToolDefinition(
         description=(
             "Call this first. It returns the active project target (dashboard, \"serve_default\" "
-            "or cwd), plus local runtime hints and RenForge version. Use this to determine the "
-            "project path you should pass to project-scoped tools."
+            "or cwd), the toolsets this server lists, the play loop's steps when play is listed, "
+            "and the RenForge version. Use this to determine the project path you should pass to "
+            "project-scoped tools."
         ),
         annotations=_ann(
             readOnlyHint=True,
@@ -517,23 +518,27 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "renforge_observe": ToolDefinition(
         description=(
-            'Read one interaction snapshot: session_id, observation_id, interaction, stability, dialogue, '
-            'screens, controls, chrome, readout, lifecycle, and forward. seen is true when the current statement '
-            '(a line, menu, or hub) already finished once since launch, so the agent is repeating itself. lifecycle.phase is playing, main_menu, '
-            'ended, or unknown; ending evidence records a root script return confirmed at the engine main menu. '
-            'Initial menus and explicit menu restarts are not endings. screenshot=true attaches the PNG whose SHA-256 '
-            'is frame_id. The snapshot is compact: defaults and repeats are left out, and chrome is reduced to id '
-            'and text; renforge_explain(id=...) returns a control\'s full record. Pass observation_id to renforge_act '
-            'to reject observations from another launch or rebuilt controls. Controls use widget ids or menu indices, then drag names, '
-            'action summaries, image basenames, or synthetic ordinals. Action summaries include targets and '
-            'arguments, including for unlabeled buttons; tooltip is the game\'s own tooltip text. operations lists the supported adapters for that '
-            'widget; adjustment reports bar values or viewport axes; draggable and droppable describe drag '
-            'eligibility. Inputs outside focus_list are still inventoried. Dialogue and readout remove text '
-            'tags while retaining literal braces and paragraph breaks. Only quick_menu and injected '
-            '_renforge_ screens are chrome; custom overlay hubs remain gameplay controls. forward is '
-            'dismiss, choose, wait, or none. An unstable snapshot is not an action token. omitted reports '
-            'focus, traversal, and readout limits; input_candidates reports unsupported custom event regions on screen with unknown eligibility. Both progression modes stop on incomplete input discovery. Keyboard shortcuts are not fully '
-            'inventoried.'
+            'Look at the running game: one compact snapshot of the current interaction. Read forward first. '
+            'dismiss: a line or pause the player clicks past; renforge_act with no id continues. wait: a pause '
+            'that ends by itself; act with no id waits it out. choose: the game waits for a decision; act on one '
+            'of controls (or a key from keys). none: nothing known moves it on; check omitted, input_candidates, '
+            'and the screenshot. dialogue is the current line (who, what). controls are the gameplay buttons, '
+            'choices, inputs, bars, and drags, each with the id to pass to renforge_act, its text, action, '
+            'operations (click, text, value, drop), and source (file:line). chrome is the game\'s interface '
+            '(quick menu, and buttons whose only actions open menus, save, skip, or roll back), reduced to id and '
+            'text; it becomes controls only when nothing else moves the game on (a disclaimer\'s Continue). '
+            'Buttons on screens kept up across lines (a phone or codex HUD) stay controls, but never stop a line '
+            'from being continued. keys lists the screens\' own key bindings ("Press SPACE to continue") with '
+            'the key/<name> to send. readout is other text on screen. stable=false (with unstable_reason) means '
+            'the screen is still changing: observe again before acting on a control. seen=true means this line, '
+            'menu, or hub already finished once since launch, so the playthrough is going in circles. '
+            'lifecycle.phase is playing, main_menu, ended, or unknown; ended needs a confirmed root script '
+            'return, so a main menu alone is not an ending. game_error is set while Ren\'Py\'s exception screen '
+            'is up. Pass observation_id to renforge_act. screenshot=true attaches a PNG (frame_hash is its '
+            'SHA-256; frame describes the capture). Fields that are empty or at their default are left out; '
+            'renforge_explain(id=...) returns a control\'s full record and the code behind it. Text tags are '
+            'removed from dialogue and readout. input_candidates are custom displayables that handle input '
+            'themselves; their action is unknown.'
         ),
         annotations=_ann(
             readOnlyHint=True,
@@ -553,7 +558,9 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "Pass observation_id from the renforge_observe (or previous renforge_act) snapshot you decided on; "
             "acting on a control in a changed game refuses with error=stale and returns the current observation, "
             "while continuing (no id) proceeds from the current state. id is a control id "
-            "from that snapshot, or key/<name> for a physical key (a-z, arrows, escape, return, space, tab). "
+            "from that snapshot (an id it does not list is refused with error=missing and the current observation), "
+            "or key/<name> for a physical key (a-z, up, down, left, right, escape, return, space, tab; the "
+            "observation's keys say which ones a screen binds). "
             "value is the control's input: text for an input field (submitted with Enter), a number for a bar, "
             "{x, y} for a viewport, a control id for a drag's drop target (empty string drops on nothing), or "
             "true/false to hold/release a key; a control that takes none ignores it. Omit id to continue from "
@@ -563,7 +570,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "passed in this call (stop=loop), or the time budget; it never selects a control on its own. "
             "Buttons on screens kept up across lines (a phone or codex HUD) do not stop a clickable line. Returns ok, action_outcome (succeeded, refused, "
             "unknown, or none), the next compact observation, observation_status, and progress (stop, steps, "
-            "crossed dialogue with seen=true on repeated lines, ending). stop=end is a confirmed script return; "
+            "crossed dialogue with seen=true on repeated lines, ending), plus a hint when nothing could continue "
+            "(a line held under a modal screen, or a game waiting on one of its controls). stop=end is a confirmed script return; "
             "main_menu is a menu without ending evidence. Never repeat a successful or uncertain action only "
             "because the follow-up observation failed."
         ),

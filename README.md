@@ -182,18 +182,15 @@ JSON summary of the project (labels, scripts, assets, and related metadata).
   inspectable. Guide: [docs/LIVE_EDITOR.md](docs/LIVE_EDITOR.md).
 - **Project inspection** — summarize structure, scan scripts/labels/assets,
   parse lint output.
-- **Agent gameplay** — `renforge_observe` reads a coherent interaction;
-  runtime launches require Ren'Py 8.0 or newer and report an incompatibility for
-  older game engines before SDK download or bridge injection.
-  `renforge_act` guards the selected control and returns the next observation.
-  Pass `advance=true` for bounded native skip to the next decision or ending, with
-  temporary preferences restored afterward. `mode="dismiss"` retains single-step
-  progression; `screenshot=false` returns text-only results.
-  Choices on custom layers and in clipped viewports use engine menu actions.
-  Shared frame geometry reports uncertain custom input explicitly; bounded
-  progression stops before it. Pass an observation's `frame` descriptor to
-  `click_at` when using pixels from a resized gameplay image.
-  Use `editor=false` for play sessions. See [the gameplay workflow](docs/MCP.md#look-then-act).
+- **Agent gameplay** — the `play` toolset, one tool per task:
+  `renforge_session` launches an isolated session (its own saves, preferences,
+  and HOME) and saves, loads, and stops it; `renforge_observe` returns one
+  compact snapshot whose `forward` says whether to continue or choose;
+  `renforge_act` acts on a control, a key, or nothing, progresses with bounded
+  native skip to the next decision, and returns the next observation; and
+  `renforge_explain` shows the code behind a control, label, or screen without
+  running it. Runtime launches require Ren'Py 8.0 or newer. See
+  [Look, then act](docs/MCP.md#look-then-act).
 - **Live game control** — launch a project with an injected in-game bridge and
   Live Editor, then advance dialogue, list/select choices, evaluate
   expressions, get/set store variables, send focused text/key/scroll input,

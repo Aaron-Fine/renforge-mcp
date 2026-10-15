@@ -7,6 +7,23 @@ versioning.
 
 ### Changed
 
+- Tools that need a running game say so when none is: `code="NO_RUNNING_GAME"`
+  with a pointer to `renforge_session(action="launch")`, or `GAME_STARTING`
+  while it starts. Both were reported as "bridge metadata failed validation".
+- `renforge_act` on an id the screen does not list adds a `message` and the
+  current observation to `error="missing"`.
+- `renforge_info` lists the server's `toolsets` and, when `play` is listed,
+  the play loop's steps; it leaves out the Live Editor block when the `editor`
+  toolset is not listed. The server instructions likewise name only the
+  listed tools, and say what each `forward` value asks of the agent.
+- The `renforge_observe` description leads with `forward` and what to call
+  next. It said the PNG's SHA-256 is `frame_id` (it is `frame_hash`) and that
+  keyboard shortcuts are not inventoried (`keys` lists them). Compact
+  observations drop the top-level `frame_id`, which `frame` carries.
+- `docs/MCP.md` opens "Look, then act" with the loop and a `forward` table,
+  and describes chrome as implemented; the README's gameplay entry describes
+  the play tools instead of the earlier `act` arguments.
+
 - RenForge keeps its per-project state outside the game folder, under
   `RENFORGE_STATE_DIR` or `~/.local/state/renforge/projects/<name>-<hash>/`.
   Opening or launching a project no longer creates `<project>/.renforge`.
@@ -276,6 +293,15 @@ versioning.
 - `renforge_mod` moves to its own `mod` toolset. Writing and reloading a mod
   runs game code, so a server limited to `play` can no longer run code in the
   game; `RENFORGE_TOOLSETS=play,mod` keeps modding.
+- Observations list the key bindings of the screens shown as `keys`: the
+  binding, its action, and the `key/<name>` that `act` can send. A settings
+  screen that continues only on `key "K_SPACE" action Return()` said so only
+  in its text ("Press SPACE to continue"). Interface and do-nothing bindings
+  are left out, and bindings never count as decisions.
+- `act` with a letter key now types that letter, as a keyboard does. A
+  quick-time event bound to `key "d"` matched only the typed character, so
+  `key/d` never fired it. Such bindings, and `keydown_K_d`, now report
+  `key/d`.
 - A button whose click does nothing (`NullAction()`, or only a sound or a
   selected/sensitive state) is `inert` and never a decision, so a `pause`
   beside a tutorial's decorative icons is clicked past instead of stopping

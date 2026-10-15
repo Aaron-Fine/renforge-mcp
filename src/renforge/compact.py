@@ -54,6 +54,8 @@ def compact_observation(snapshot: Any) -> Any:
     for key, value in snapshot.items():
         if value is None:
             continue
+        if key == "keys" and not value:
+            continue
         if key == "controls" and isinstance(value, list):
             out[key] = [compact_control(item) for item in value if isinstance(item, Mapping)]
         elif key == "chrome" and isinstance(value, list):
@@ -73,6 +75,9 @@ def compact_observation(snapshot: Any) -> Any:
             continue  # the frame already gives the image size
         elif key == "frame_hash" and value == snapshot.get("frame_id"):
             continue
+        elif (key == "frame_id" and isinstance(snapshot.get("frame"), Mapping)
+              and snapshot["frame"].get("frame_id") == value):
+            continue  # frame carries it
         elif key == "screens" and isinstance(value, list):
             out[key] = [{k: v for k, v in item.items() if v is not False} if isinstance(item, Mapping) else item
                         for item in value]

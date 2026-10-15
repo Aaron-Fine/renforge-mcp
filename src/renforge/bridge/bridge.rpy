@@ -661,10 +661,11 @@ init python:
             "space": "K_SPACE",
             "tab": "K_TAB",
         }
-        for letter in "abcdefghijklmnopqrstuvwxyz":
+        for letter in _RENFORGE_ACT_KEY_LETTERS:
             attrs[letter] = "K_" + letter
         return attrs
 
+    _RENFORGE_ACT_KEY_LETTERS = "abcdefghijklmnopqrstuvwxyz"
     _RENFORGE_ACT_KEY_ATTRS = _renforge_act_key_attrs()
     _RENFORGE_ACT_KEY_LIST = "a-z, up, down, left, right, escape, return, space, tab"
 
@@ -815,11 +816,14 @@ init python:
             pass
         return filtered
 
-    def _renforge_post_key(keycode, hold=None):
+    def _renforge_post_key(keycode, hold=None, text=""):
+        # A keyboard's key-down carries the character it types, and Ren'Py
+        # matches a bare `key "d"` binding on that character.
         phases = (pygame.KEYDOWN, pygame.KEYUP) if hold is None else ((pygame.KEYDOWN,) if hold else (pygame.KEYUP,))
         for phase in phases:
             pygame.event.post(pygame.event.Event(phase, {
-                "key": keycode, "mod": getattr(pygame, "KMOD_NONE", 0), "unicode": "", "repeat": 0,
+                "key": keycode, "mod": getattr(pygame, "KMOD_NONE", 0),
+                "unicode": text if phase == pygame.KEYDOWN else "", "repeat": 0,
             }))
         return ["keydown" if phase == pygame.KEYDOWN else "keyup" for phase in phases]
 
@@ -4694,6 +4698,69 @@ init python:
         return pairs, truncated
 
 
+    # Keysym modifiers a plain key press satisfies.
+    _RENFORGE_PLAIN_KEY_MODIFIERS = ("keydown", "any", "anyrepeat", "anymod", "noshift", "nocaps", "nonum")
+
+    def _renforge_binding_act_key(binding, act_names):
+        """The renforge_act key name that fires a keysym, or None.
+
+        `K_SPACE` and `keydown_K_d` name physical keys; a bare `d` matches the
+        typed character. Bindings that need a modifier, a release or a
+        repeat cannot be sent.
+        """
+        parts = binding.split("_")
+        while len(parts) > 1 and parts[0] in _RENFORGE_PLAIN_KEY_MODIFIERS:
+            parts.pop(0)
+        key = "_".join(parts)
+        if key in act_names:
+            return act_names[key]
+        if len(key) == 1 and key in _RENFORGE_ACT_KEY_LETTERS:
+            return key
+        return None
+
+
+    def _renforge_key_bindings(inventory, limit=20):
+        """A screen's own key bindings (`key "K_SPACE" action Return()`).
+
+        Such a screen often continues only on that key, and the only hint
+        is text such as "Press SPACE to continue". Each binding names its
+        action and, when renforge_act can press the key, the `key/<name>` to
+        send. Interface actions (menus, rollback) and actions that do nothing
+        are left out, and bindings never count as decisions.
+        """
+        keymap_type = getattr(getattr(renpy.display, "behavior", None), "Keymap", None)
+        if not isinstance(keymap_type, type):
+            return []
+        act_names = builtins.dict()
+        for name, attr in _RENFORGE_ACT_KEY_ATTRS.items():
+            act_names.setdefault(attr, name)
+        found = []
+        seen = builtins.set()
+        for widget, _layer, name, screen, _parents in inventory["nodes"]:
+            if screen is None or not isinstance(widget, keymap_type):
+                continue
+            bindings = getattr(widget, "keymap", None)
+            if not isinstance(bindings, builtins.dict):
+                continue
+            for binding, action in bindings.items():
+                if not isinstance(binding, builtins.str) or action is None or binding.startswith("mouse"):
+                    continue
+                actions = _renforge_action_list(action)
+                if _renforge_engine_chrome_action(actions) or _renforge_inert_action(actions):
+                    continue
+                key = (name, binding)
+                if key in seen:
+                    continue
+                seen.add(key)
+                act = _renforge_binding_act_key(binding, act_names)
+                found.append({"screen": name, "binding": binding,
+                              "act": "key/" + act if act else None,
+                              "action": _renforge_observe_format_action(action)})
+                if len(found) >= limit:
+                    return found
+        return found
+
+
     def _renforge_scene_roots():
         try:
             scene_lists = renpy.game.context().scene_lists
@@ -5355,6 +5422,7 @@ init python:
             "elements": elements,
             "readout": readout,
             "input_candidates": candidates,
+            "keys": _renforge_key_bindings(inventory),
             "omitted": {
                 "focus_truncated": bool(focus_truncated),
                 "unclassified": bool(walk_truncated or unclassified or inventory["geometry"]["truncated"]),
@@ -6936,7 +7004,7 @@ init python:
                     return {"ok": False, "error": "unsupported", "interaction": interaction}
             else:
                 hold = None
-            event_names = _renforge_post_key(keycode, hold)
+            event_names = _renforge_post_key(keycode, hold, folded if folded in _RENFORGE_ACT_KEY_LETTERS else "")
             if bridge is not None:
                 if hold is True:
                     bridge.held_keys.add(folded)

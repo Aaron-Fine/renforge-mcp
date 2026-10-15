@@ -2032,6 +2032,8 @@ def test_act_key_is_physical_and_refused_when_the_interaction_changed(running_br
     assert tap["hold"] is None
     assert [event.type for event in running_bridge.renpy._pygame_events] == [pygame.KEYDOWN, pygame.KEYUP]
     assert [event.key for event in running_bridge.renpy._pygame_events] == [97, 97]
+    # Key-down types the letter, so a bare `key "a"` binding fires.
+    assert [event.unicode for event in running_bridge.renpy._pygame_events] == ["a", ""]
     assert running_bridge.renpy._queued_events == []
 
     running_bridge.renpy._pygame_events.clear()
@@ -2041,6 +2043,7 @@ def test_act_key_is_physical_and_refused_when_the_interaction_changed(running_br
     assert held["events"] == ["keydown"]
     assert running_bridge.renpy._pygame_events[0].key == 276
     assert running_bridge.renpy._pygame_events[0].type == pygame.KEYDOWN
+    assert running_bridge.renpy._pygame_events[0].unicode == ""
 
     running_bridge.renpy._pygame_events.clear()
     released = running_bridge.client.act(interaction=3, key="left", hold=False)
@@ -7206,3 +7209,27 @@ def test_a_button_that_does_nothing_on_click_is_inert(running_bridge):
     game = {}
     exec(compile("class NullAction(object):\n    def __call__(self):\n        return 1\n", "game/x.rpy", "exec"), game)
     assert inert([game["NullAction"]()]) is False
+
+
+def test_a_screens_key_binding_names_its_action_and_the_act_key(running_bridge):
+    """`key "K_SPACE" action Return()` is how a screen says "Press SPACE to continue"."""
+    globs = running_bridge.globs
+    Keymap = getattr(running_bridge.renpy.display.behavior, "Keymap", None)
+    if Keymap is None:
+        Keymap = type("Keymap", (), {})
+        running_bridge.renpy.display.behavior.Keymap = Keymap
+    namespace = {}
+    exec(compile("class Return(object):\n    def __call__(self):\n        return True\n"
+                 "class Rollback(object):\n    def __call__(self):\n        return None\n",
+                 "renpy/common/00action_other.rpy", "exec"), namespace)
+    keymap = Keymap()
+    keymap.keymap = {"K_SPACE": namespace["Return"](), "rollback": namespace["Rollback"](),
+                     "shift_K_c": namespace["Return"](), "mousedown_1": namespace["Return"](),
+                     "d": namespace["Return"](), "keydown_K_e": namespace["Return"](),
+                     "keyup_K_f": namespace["Return"](), "K_F5": namespace["Return"]()}
+    screen = types.SimpleNamespace()
+    found = globs["_renforge_key_bindings"]({"nodes": [(keymap, "screens", "intro_prefs", screen, ())]})
+    assert {item["binding"]: item["act"] for item in found} == {
+        "K_SPACE": "key/space", "shift_K_c": None, "d": "key/d", "keydown_K_e": "key/e",
+        "keyup_K_f": None, "K_F5": None}
+    assert all(item["screen"] == "intro_prefs" for item in found)
