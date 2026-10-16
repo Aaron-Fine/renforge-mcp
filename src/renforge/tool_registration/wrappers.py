@@ -112,7 +112,7 @@ class ToolWrapperContext:
 def build_tool_wrappers(app: Any) -> dict[str, Callable[..., Any]]:
     from ..tools import live, project_ops
     from ..tools.static import inspect_project, parse_lint_text, scan_project_index
-    from . import content_build, inspection, interaction, lifecycle, project_analysis, runtime_state, scenarios
+    from . import content_build, inspection, interaction, lifecycle, mods, project_analysis, runtime_state, scenarios
 
     context = ToolWrapperContext(
         app=app,
@@ -131,6 +131,7 @@ def build_tool_wrappers(app: Any) -> dict[str, Callable[..., Any]]:
         inspection,
         scenarios,
         content_build,
+        mods,
     ):
         domain_wrappers = domain.build_wrappers(context)
         duplicates = set(wrappers) & set(domain_wrappers)

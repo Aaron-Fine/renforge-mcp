@@ -117,8 +117,11 @@ def launch_game(
     timeout: float | None = None,
     home: str | None = None,
     preferences: str | None = None,
+    start_label: str | None = None,
 ) -> dict[str, Any] | None:
     """Launch through the matching dashboard, or return ``None`` when none is registered."""
+    from .toolsets import bridge_eval_allowed
+
     body: dict[str, Any] = {
         "version": version,
         "warp": warp,
@@ -130,9 +133,13 @@ def launch_game(
         "cleanup_on_stop": cleanup_on_stop,
         "home": home,
         "preferences": preferences,
+        # The dashboard's own toolsets may allow eval; this server's decide.
+        "bridge_eval": bridge_eval_allowed(),
     }
     if timeout is not None:
         body["timeout"] = timeout
+    if start_label:
+        body["start_label"] = start_label
     return _request(
         project_path,
         "api/live/launch",

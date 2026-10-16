@@ -59,6 +59,11 @@ def test_launch_game_delegates_to_matching_dashboard(tmp_path: Path, monkeypatch
     assert calls["payload"]["home"] is None
     assert calls["payload"]["preferences"] is None
     assert calls["payload"]["cleanup_on_stop"] is True
+    # This server's toolsets decide whether the game's bridge may run code.
+    assert calls["payload"]["bridge_eval"] is True
+    monkeypatch.setenv("RENFORGE_TOOLSETS", "play")
+    dashboard_client.launch_game(str(project))
+    assert calls["payload"]["bridge_eval"] is False
 
 
 def test_dashboard_matching_applies_normcase(tmp_path: Path, monkeypatch) -> None:

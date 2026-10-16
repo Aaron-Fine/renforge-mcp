@@ -21,6 +21,24 @@ from renforge.server import create_app
 from renforge.state import project_state_dir
 
 
+def test_classify_the_play_loop() -> None:
+    assert classify("renforge_observe", {"project_path": "/tmp/game"}) == (
+        "renforge_observe",
+        RISK_OBSERVATIONAL,
+    )
+    assert classify(
+        "renforge_act",
+        {"project_path": "/tmp/game", "observation_id": "o", "id": "choice/item/0"},
+    ) == ("renforge_act", RISK_MUTATING)
+    assert classify("renforge_session", {"action": "status"}) == (
+        "renforge_session.status", RISK_OBSERVATIONAL)
+    assert classify("renforge_session", {"action": "launch"}) == (
+        "renforge_session.launch", RISK_MUTATING)
+    assert classify("renforge_session", {"action": "load", "slot": "a"}) == (
+        "renforge_session.load", RISK_DESTRUCTIVE)
+    assert classify("renforge_session", {"action": "explode"})[1] == RISK_MALFORMED
+
+
 def test_classify_control_saves_eval_and_scenario_operations() -> None:
     assert classify("renforge_control", {"action": "advance"}) == (
         "renforge_control.advance",
@@ -110,6 +128,7 @@ def test_enforce_denies_open_world_and_destructive_without_authorize(monkeypatch
     allowed_list = evaluate("renforge_saves", {"action": "list"})
     denied_list_user = evaluate("renforge_saves", {"action": "list_user"})
     denied_import = evaluate("renforge_saves", {"action": "import", "slot": "1-1"})
+    denied_session_import = evaluate("renforge_session", {"action": "import", "slot": "1-1"})
     isolated_launch = evaluate("renforge_launch", {"savedir": "auto"})
     exposed_launch = evaluate("renforge_launch", {"savedir": "existing"})
 
@@ -122,6 +141,7 @@ def test_enforce_denies_open_world_and_destructive_without_authorize(monkeypatch
     assert allowed_list.allowed is True
     assert denied_list_user.allowed is False
     assert denied_import.allowed is False
+    assert denied_session_import.allowed is False
     assert isolated_launch.allowed is True
     assert isolated_launch.risk == RISK_MUTATING
     assert exposed_launch.allowed is False

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from .toolsets import enabled_toolsets
+
 
 @dataclass
 class _FallbackServer:
@@ -43,41 +45,50 @@ def _register_tools(app: Any) -> None:
     register_all_tools(app)
 
 
+def _instructions(toolsets: list[str]) -> str:
+    """Server instructions naming only the tools this server lists."""
+    parts = [
+        "Call renforge_info first: its active_project (see project_source — "
+        "dashboard, serve_default, or cwd) is the project_path to pass to the "
+        "other tools. If active_project is null, ask the user for the game's "
+        "path; every tool accepts project_path directly."
+    ]
+    if "play" in toolsets:
+        parts.append(
+            "To play, use the play loop, which has one tool per task: "
+            "renforge_session(action=launch) and poll action=status until ready; "
+            "renforge_observe to see the screen; renforge_act with that "
+            "observation_id and a control id, key/<name>, or no id to continue "
+            "(it then progresses to the next decision and returns the next "
+            "observation, so keep acting from it); renforge_explain to read the "
+            "code behind a control, label, or screen; "
+            "renforge_session(action=save|load|stop). An observation's forward "
+            "says what moves the game on: dismiss or wait, act with no id; "
+            "choose, act on one of its controls (or a key listed in keys); none, "
+            "check omitted, input_candidates, and the screenshot. Sessions use isolated saves and preferences."
+        )
+    if "mod" in toolsets:
+        parts.append("renforge_mod writes, lints, reloads, and removes a mod under game/mods/.")
+    others = [name for name in toolsets if name not in ("play", "mod")]
+    if others:
+        parts.append(
+            "The " + ", ".join(others) + " toolsets keep the earlier tools for "
+            "existing workflows" + (" and the Live Editor" if "editor" in others else "") + "."
+        )
+    parts.append(
+        "RENFORGE_POLICY defaults to off; when set to enforce, destructive and "
+        "open-world operations (eval, quit, load, reload_script, mod writes, and "
+        "matching scenario steps) require authorize=true or an allowlist."
+    )
+    return " ".join(parts)
+
+
 def create_app() -> Any:
     backend_cls, _ = _get_fastmcp_backend()
     if backend_cls is None:
         return _FallbackServer()
 
-    instructions = (
-        "Call renforge_info first: its active_project (see project_source — "
-        "dashboard, serve_default, or cwd) is the project_path to pass to the "
-        "other tools. If active_project is null, ask the user for the game's "
-        "path; every tool accepts project_path directly and no dashboard is "
-        "required. When the dashboard is active, renforge_launch delegates "
-        "display-bound startup to its process automatically. Prefer bounded scan queries and "
-        "renforge_game_state_compact (state_profile=interaction by default) for "
-        "large results. Prefer renforge_run_scenario to batch click/wait/assert "
-        "steps. For UI interaction, call renforge_list_ui_elements first, then "
-        "pass its frame_id to renforge_hover_element, renforge_click_element, or "
-        "renforge_click_at; use renforge_hit_test when a click is intercepted by "
-        "an overlay. version=stable follows renpy/vc_version.py when the game ships an engine, "
-        "and a cached SDK is reused only for that same major.minor with the same or a newer patch. "
-        "renforge_launch returns status=starting after 20 seconds "
-        "instead of exceeding common MCP timeouts; poll renforge_launch_status "
-        "until ready or failed. It uses display/audio=auto and isolates saves "
-        "by default (savedir=temporary) so agent sessions do not read or write "
-        "the user's normal Ren'Py saves; pass savedir=existing to use the "
-        "game's normal save location. Pass editor=false only when "
-        "a session without the visual editor is intentional. For "
-        "live iteration after external .rpy edits, use "
-        "renforge_control(action=\"reload_script\"); Live Editor Save already "
-        "reloads and attests its own changes. Use renforge_wait_until for one "
-        "bounded condition, and "
-        "renforge_get_errors after risky actions or a stopped process. "
-        "RENFORGE_POLICY defaults to off; when set to enforce, destructive and "
-        "open-world operations (eval, quit, load, reload_script, and matching "
-        "scenario steps) require authorize=true or an allowlist."
-    )
+    instructions = _instructions(enabled_toolsets())
     try:
         app = backend_cls("renforge", instructions=instructions)
     except TypeError:  # pragma: no cover - compatibility with older MCP backends

@@ -253,6 +253,59 @@ def test_session_init_payload_installs_storage_before_persistent_load() -> None:
     assert "unlink" not in text
 
 
+def test_session_storage_handles_first_initialization_and_reinitialization(monkeypatch, tmp_path):
+    import textwrap
+    from types import ModuleType, SimpleNamespace
+    from renforge.bridge.artifacts import session_init_payload
+
+    calls = []
+
+    class Locations:
+        def __init__(self):
+            self.locations = []
+
+        def add(self, location):
+            self.locations.append(location)
+
+        def scan(self):
+            calls.append("scan")
+
+    class Thread:
+        def __init__(self, target):
+            self.target = target
+
+        def start(self):
+            calls.append("start")
+
+    storage = SimpleNamespace(scan_thread=None, quit_scan_thread=False,
+                              MultiLocation=Locations,
+                              FileLocation=lambda path: SimpleNamespace(directory=path),
+                              run_scan_thread=lambda: None)
+
+    def quit():
+        assert storage.scan_thread is not None
+        calls.append("quit")
+
+    storage.quit = quit
+    engine = ModuleType("renpy")
+    engine.config = SimpleNamespace(savedir="original")
+    engine.savelocation = storage
+    engine.loadsave = SimpleNamespace(location=None)
+    # Legacy engines do not expose emscripten and have no scan thread yet.
+    monkeypatch.setitem(sys.modules, "renpy", engine)
+    monkeypatch.setenv("RENFORGE_SAVEDIR", str(tmp_path / "isolated"))
+    namespace = {}
+    exec(textwrap.dedent(session_init_payload().decode().split("\n", 1)[1]), namespace)
+    namespace["_renforge_threading"] = SimpleNamespace(Thread=Thread)
+    storage.init()
+    first_location = engine.loadsave.location.locations[0]
+    assert calls == ["scan", "start"]
+    assert first_location.directory == str(tmp_path / "isolated")
+    storage.init()
+    assert calls == ["scan", "start", "quit", "scan", "start"]
+    assert engine.loadsave.location.locations == [first_location]
+
+
 def test_low_level_defaults_match_mcp_defaults(monkeypatch) -> None:
     monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
     isolation = resolve_launch_isolation()
