@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import json
+import os
 import threading
 import time
 import types
@@ -6853,8 +6854,9 @@ def test_a_session_can_switch_off_running_code(running_bridge, monkeypatch):
 def test_session_info_says_whether_the_bridge_runs_code_and_where_it_saves(running_bridge, monkeypatch):
     """A server reusing a running game checks these before handing it out."""
     running_bridge.renpy.config.savedir = "/home/player/.renpy/demo"
+    monkeypatch.setenv("USERPROFILE" if os.name == "nt" else "HOME", "/home/player")
     assert running_bridge.client.session_info() == {
-        "eval_enabled": True, "savedir": "/home/player/.renpy/demo"}
+        "eval_enabled": True, "savedir": "/home/player/.renpy/demo", "home": "/home/player"}
     monkeypatch.setenv("RENFORGE_BRIDGE_EVAL", "off")
     assert running_bridge.client.session_info()["eval_enabled"] is False
 

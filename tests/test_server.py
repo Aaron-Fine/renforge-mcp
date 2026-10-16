@@ -1944,7 +1944,7 @@ def test_session_launch_keeps_its_own_home_even_when_isolation_defaults_to_exist
     captured: dict = {}
     monkeypatch.setattr(live, "launch_game", lambda *a, **k: captured.update(k) or {"ok": True})
 
-    def fake_start_launch(project_path, launch, editor=True):
+    def fake_start_launch(project_path, launch, editor=True, requirements=None):
         return launch(Path(project_path), threading.Event())
 
     monkeypatch.setattr(live, "start_launch", fake_start_launch)

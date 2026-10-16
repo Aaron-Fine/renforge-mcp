@@ -21,7 +21,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from ..autopilot import autopilot as _autopilot
 from ..observe import apply_screenshot
@@ -43,7 +43,9 @@ from ..save_isolation import (
     agent_session_id,
     import_host_slots,
     isolation_report,
-    launch_exposes_user_saves,
+    isolation_is_renforge_owned,
+    launch_request_is_renforge_owned,
+    location_is_renforge_owned,
     list_host_slots,
     path_exposes_user_saves,
 )
@@ -74,10 +76,13 @@ class _LaunchTask:
     ``closed``. Cancellation is ``failed`` with ``LAUNCH_CANCELLED``.
     """
 
-    def __init__(self, project_root: Path, *, requested_editor: bool = True) -> None:
+    def __init__(self, project_root: Path, *, requested_editor: bool = True,
+                 requirements: Mapping[str, bool] | None = None) -> None:
         self.project_root = Path(project_root)
         self.started = time.monotonic()
         self.requested_editor = requested_editor
+        # What the starting launch was asked for; a second request must match.
+        self.requirements = dict(requirements) if requirements is not None else None
         self.finished: float | None = None
         self.cancel_event = threading.Event()
         self.done_event = threading.Event()
@@ -328,7 +333,14 @@ def start_launch(
     *,
     wait_timeout: float = _LAUNCH_RESPONSE_WAIT_SECONDS,
     editor: bool = True,
+    requirements: Mapping[str, bool] | None = None,
 ) -> dict[str, Any]:
+    """Start ``launch`` in the background, or report the launch already starting.
+
+    ``requirements`` (from :func:`launch_requirements`) are kept on the task: a
+    request that arrives while it starts is refused, rather than told to poll,
+    when the starting launch would give it a session it may not have.
+    """
     project = RenpyProject(Path(project_path))
     key = _key(project.root)
     should_start = False
@@ -336,11 +348,20 @@ def start_launch(
         _prune_launches(time.monotonic())
         task = _LAUNCHES.get(key)
         if task is None or task.done_event.is_set():
-            task = _LaunchTask(project.root, requested_editor=editor)
+            task = _LaunchTask(project.root, requested_editor=editor, requirements=requirements)
             _LAUNCHES[key] = task
             should_start = True
 
     if not should_start:
+        if requirements is not None:
+            started = task.requirements
+            refused = _reuse_refusal(
+                isolated=bool(started and started.get("isolated")),
+                eval_running=not started or started.get("eval", True) is not False,
+                wanted=requirements,
+            )
+            if refused is not None:
+                return refused
         result = _launch_task_status(task)
         result.update(
             ok=False,
@@ -375,6 +396,7 @@ def launch_status(project_path: str) -> dict[str, Any]:
         if process_alive:
             try:
                 state = session.client.get_state()
+                facts = _owned_session_facts(session)
                 return {
                     "ok": True,
                     "ready": True,
@@ -382,12 +404,15 @@ def launch_status(project_path: str) -> dict[str, Any]:
                     "current_label": state.get("current_label"),
                     "editor": bool(getattr(session, "editor", False)),
                     **_isolation_result(session),
+                    "isolated": facts["isolated"],
+                    "eval_enabled": facts["eval_running"],
                 }
             except Exception:
                 pass
 
     try:
-        state = _client(project_path).get_state()
+        external = _client(project_path)
+        state = external.get_state()
     except Exception:
         return {
             "ok": True,
@@ -395,6 +420,8 @@ def launch_status(project_path: str) -> dict[str, Any]:
             "status": "idle",
             "message": "No launch is active for this project.",
         }
+    # Status hands out no session, but says what a caller would be driving.
+    facts = _external_session_facts(external)
     return {
         "ok": True,
         "ready": True,
@@ -402,6 +429,8 @@ def launch_status(project_path: str) -> dict[str, Any]:
         "external": True,
         "current_label": state.get("current_label"),
         "editor": False,
+        "isolated": facts["isolated"],
+        "eval_enabled": facts["eval_running"],
     }
 
 
@@ -477,14 +506,38 @@ def _session_mode_mismatch(
     }
 
 
-def _reuse_refusal(*, eval_running: bool, exposes: bool, eval_on: bool,
-                   exposes_requested: bool) -> dict[str, Any] | None:
-    """Why a running session must not be handed to this launch request, if it must not."""
-    if exposes and not exposes_requested:
-        message = ("The running game can reach the player's saves, but this launch asked for an isolated "
-                   "session. Stop it and launch again, or launch with savedir=existing to use it.")
+def launch_requirements(
+    project_path: str | Path,
+    *,
+    savedir: str | None = None,
+    home: str | None = None,
+    persistent: str | None = None,
+    preferences: str | None = None,
+    bridge_eval: bool | None = None,
+) -> dict[str, bool]:
+    """What a launch request may be given: ``isolated`` (RenForge-owned folders only) and ``eval``."""
+    defaults = apply_launch_isolation_defaults(savedir=savedir, home=home, persistent=persistent,
+                                               preferences=preferences)
+    return {
+        "isolated": launch_request_is_renforge_owned(project_path=project_path, **defaults),
+        "eval": bridge_eval_allowed() and bridge_eval is not False,
+    }
+
+
+def _reuse_refusal(*, isolated: bool, eval_running: bool, wanted: Mapping[str, bool]) -> dict[str, Any] | None:
+    """Why a running or starting session must not be handed to a request, if it must not.
+
+    A request that needs no authorization gets only a session in RenForge's
+    own folders, and a request whose toolsets run no code gets only a bridge
+    that refuses eval.
+    """
+    if wanted.get("isolated") and not isolated:
+        message = ("The running game keeps its saves or HOME outside RenForge's own folders (the player's "
+                   "saves, or a folder an earlier launch was authorized for), but this launch asked for an "
+                   "isolated session. Stop it and launch again, or repeat the earlier launch's savedir and "
+                   "home with authorize=true to use it.")
         code = "SESSION_ISOLATION_MISMATCH"
-    elif eval_running and not eval_on:
+    elif eval_running and not wanted.get("eval", True):
         message = ("The running game's bridge runs code, which this server's toolsets do not allow. "
                    "Stop it and launch again.")
         code = "SESSION_EVAL_MISMATCH"
@@ -494,16 +547,22 @@ def _reuse_refusal(*, eval_running: bool, exposes: bool, eval_on: bool,
             "message": message, "error": message}
 
 
-def _external_session_facts(client: BridgeClient, project_root: Path) -> dict[str, bool]:
+def _owned_session_facts(session: Any) -> dict[str, bool]:
+    isolation = getattr(session, "isolation", None)
+    return {"isolated": isolation is not None and isolation_is_renforge_owned(isolation),
+            "eval_running": getattr(session, "bridge_eval", True) is not False}
+
+
+def _external_session_facts(client: BridgeClient) -> dict[str, bool]:
     """What a bridge this process did not start says about itself; an older one is assumed the worst."""
     try:
         info = client.session_info()
     except Exception:
-        return {"eval_running": True, "exposes": True}
-    savedir = info.get("savedir")
-    exposes = not isinstance(savedir, str) or not savedir or path_exposes_user_saves(
-        Path(savedir), project_path=project_root)
-    return {"eval_running": info.get("eval_enabled") is not False, "exposes": bool(exposes)}
+        return {"isolated": False, "eval_running": True}
+    locations = (info.get("savedir"), info.get("home"))
+    isolated = all(isinstance(value, str) and value and location_is_renforge_owned(value)
+                   for value in locations)
+    return {"isolated": isolated, "eval_running": info.get("eval_enabled") is not False}
 
 
 def launch_game(
@@ -573,11 +632,9 @@ def launch_game(
     if isinstance(session_cfg.get("cleanup_on_stop"), bool):
         cleanup_on_stop = session_cfg["cleanup_on_stop"]
     requested_editor = bool(editor)
-    eval_on = bridge_eval_allowed() and bridge_eval is not False
-    exposes_requested = launch_exposes_user_saves(
-        savedir=savedir, home=home, persistent=persistent, preferences=preferences,
-        project_path=project.root,
-    )
+    wanted = launch_requirements(project.root, savedir=savedir, home=home, persistent=persistent,
+                                 preferences=preferences, bridge_eval=bridge_eval)
+    eval_on = wanted["eval"]
 
     key = _key(project.root)
     existing = _SESSIONS.get(key)
@@ -596,12 +653,7 @@ def launch_game(
         # answers; otherwise tear it down (a warp needs a fresh --warp launch,
         # and a dead process must be reaped so it does not linger as a zombie).
         if warp is None and existing.process.poll() is None:
-            isolation = getattr(existing, "isolation", None)
-            refused = _reuse_refusal(
-                eval_running=getattr(existing, "bridge_eval", True) is not False,
-                exposes=isolation is None or bool(isolation.exposes_user_saves),
-                eval_on=eval_on, exposes_requested=exposes_requested,
-            )
+            refused = _reuse_refusal(**_owned_session_facts(existing), wanted=wanted)
             if refused is not None:
                 return refused
             try:
@@ -658,8 +710,7 @@ def launch_game(
                         "Launch from this RenForge process with editor=true instead."
                     ),
                 )
-            refused = _reuse_refusal(**_external_session_facts(external, project.root),
-                                     eval_on=eval_on, exposes_requested=exposes_requested)
+            refused = _reuse_refusal(**_external_session_facts(external), wanted=wanted)
             if refused is not None:
                 return refused
             return {

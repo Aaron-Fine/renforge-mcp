@@ -25,14 +25,20 @@ versioning.
   the game writes its saves, persistent data, and config there. The policy
   reads the path the launch uses, stripped and expanded.
 - A launch reuses a running game only when it matches the request:
-  `SESSION_ISOLATION_MISMATCH` when the game can reach the player's saves
-  but the launch asked for an isolated session (it was handed back without
-  the authorization `savedir=existing` needs), and `SESSION_EVAL_MISMATCH`
-  when a play-only server would get a bridge that runs code. A game this
-  server did not start answers the new bridge command `session_info`; one
+  `SESSION_ISOLATION_MISMATCH` when a launch that needs no authorization
+  would get a game keeping its saves or HOME outside RenForge's own folders
+  (the player's saves or HOME, or a folder an earlier launch was authorized
+  for), and `SESSION_EVAL_MISMATCH` when a play-only server would get a
+  bridge that runs code. The policy gate and this check share one rule. A
+  launch that arrives while another starts is refused the same way instead
+  of being told to poll it, and `renforge_launch_status` reports `isolated`
+  and `eval_enabled`. A game this server did not start answers the new
+  bridge command `session_info` (its eval switch, savedir, and HOME); one
   that cannot is assumed to match neither. Launches through the dashboard
   pass the calling server's `bridge_eval`, so a play-only server's game
   refuses eval even when the dashboard's own toolsets allow it.
+- `renforge_autopilot` always launches isolated; `RENFORGE_ISOLATION=existing`
+  gave it the player's saves, and it takes no `authorize`.
 - Tools that need a running game say so when none is: `code="NO_RUNNING_GAME"`
   with a pointer to `renforge_session(action="launch")`, or `GAME_STARTING`
   while it starts. Both were reported as "bridge metadata failed validation".

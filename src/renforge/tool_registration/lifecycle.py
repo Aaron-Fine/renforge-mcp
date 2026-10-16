@@ -162,7 +162,9 @@ def build_wrappers(context):
                 **kwargs,
             )
 
-        return live.start_launch(project_path, _launch, editor=requested_editor)
+        requirements = live.launch_requirements(
+            project_path, **{field: kwargs.get(field) for field in ("savedir", "home", "persistent", "preferences")})
+        return live.start_launch(project_path, _launch, editor=requested_editor, requirements=requirements)
 
 
     def renforge_launch(

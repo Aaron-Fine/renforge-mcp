@@ -335,6 +335,64 @@ def launch_explicit_paths(
     return paths
 
 
+def location_is_renforge_owned(path: str | Path) -> bool:
+    """Under the RenForge state folder, or in a session root RenForge made in the temp dir.
+
+    Anything else (the player's saves, another app's folder, the shared temp
+    dir itself) is somewhere a launch reaches only with authorization.
+    """
+    from .state import state_root
+
+    try:
+        resolved = Path(path).expanduser().resolve()
+        root = state_root().expanduser().resolve()
+        temp = Path(tempfile.gettempdir()).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    if resolved != root and resolved.is_relative_to(root):
+        return True
+    if resolved != temp and resolved.is_relative_to(temp):
+        return resolved.relative_to(temp).parts[0].startswith(SESSION_PREFIX)
+    return False
+
+
+def isolation_is_renforge_owned(isolation: LaunchIsolation) -> bool:
+    """Whether a running session keeps its saves and HOME in RenForge's own folders."""
+    if isolation.savedir_mode == "existing" or isolation.home_mode == "existing":
+        return False
+    if isolation.savedir is None or isolation.home is None:
+        return False
+    return location_is_renforge_owned(isolation.savedir) and location_is_renforge_owned(isolation.home)
+
+
+def launch_request_is_renforge_owned(
+    *,
+    savedir: str | None = None,
+    home: str | None = None,
+    persistent: str | None = None,
+    preferences: str | None = None,
+    project_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether a launch stays in RenForge's own folders, so it needs no authorization.
+
+    The policy gate and session reuse both ask this, so a request that would
+    need authorize can never be satisfied by handing back a running session.
+    Explicit paths count only under the state folder: the temp dir is shared.
+    """
+    from .state import state_root
+
+    if launch_exposes_user_saves(savedir=savedir, home=home, persistent=persistent,
+                                 preferences=preferences, project_path=project_path, environ=environ):
+        return False
+    try:
+        paths = launch_explicit_paths(savedir=savedir, home=home, environ=environ)
+        root = state_root().expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return all(path != root and path.is_relative_to(root) for path in paths)
+
+
 def launch_exposes_user_saves(
     *,
     savedir: str | None = None,

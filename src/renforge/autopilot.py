@@ -128,7 +128,10 @@ def autopilot(
         seen_prefixes.add(tuple(prefix))
         runs += 1
 
-        session = launch_with_bridge(sdk, project, startup_timeout=startup_timeout)
+        # Always isolated: renforge_autopilot takes no authorize, so a server's
+        # RENFORGE_ISOLATION=existing must not hand it the player's saves.
+        session = launch_with_bridge(sdk, project, startup_timeout=startup_timeout,
+                                     savedir="temporary", home="temporary")
         try:
             cursor = 0
             seq: list[int] = list(prefix)

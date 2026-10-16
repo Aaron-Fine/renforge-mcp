@@ -547,10 +547,11 @@ init python:
         return None
 
     def _renforge_h_session_info(payload):
-        """What a server reusing this game must check: does it run code, where does it save."""
+        """What a server reusing this game must check: does it run code, where are its saves and HOME."""
         savedir = getattr(renpy.config, "savedir", None)
+        home = os.environ.get("USERPROFILE" if os.name == "nt" else "HOME")
         return {"ok": True, "eval_enabled": _renforge_eval_refused() is None,
-                "savedir": savedir if isinstance(savedir, str) else None}
+                "savedir": savedir if isinstance(savedir, str) else None, "home": home or None}
 
     def _renforge_h_eval(payload):
         refused = _renforge_eval_refused()

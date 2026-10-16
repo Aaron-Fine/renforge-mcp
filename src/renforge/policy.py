@@ -409,46 +409,23 @@ def _classify_scenario_step(step: Any) -> tuple[str, str]:
 
 
 def _classify_launch(name: str, payload: Mapping[str, Any]) -> tuple[str, str]:
-    from .save_isolation import launch_exposes_user_saves
+    from .save_isolation import launch_request_is_renforge_owned
 
-    if launch_exposes_user_saves(
-        savedir=payload.get("savedir") if isinstance(payload.get("savedir"), str) else None,
-        home=payload.get("home") if isinstance(payload.get("home"), str) else None,
-        persistent=(
-            payload.get("persistent")
-            if isinstance(payload.get("persistent"), str)
-            else None
-        ),
-        preferences=(
-            payload.get("preferences")
-            if isinstance(payload.get("preferences"), str)
-            else None
-        ),
-        project_path=payload.get("project_path"),
-    ):
-        return name, RISK_DESTRUCTIVE
-    # The game writes saves, persistent data, and (for home) its config and
-    # cache wherever an explicit path points; outside RenForge's own state
-    # folder that is another app's files. The temp dir is shared, so it is not
-    # RenForge's own either.
-    if not _launch_paths_are_renforge_owned(payload):
-        return name, RISK_DESTRUCTIVE
-    return name, RISK_MUTATING
+    def text(field: str) -> str | None:
+        value = payload.get(field)
+        return value if isinstance(value, str) else None
 
-
-def _launch_paths_are_renforge_owned(payload: Mapping[str, Any]) -> bool:
-    from .save_isolation import launch_explicit_paths
-    from .state import state_root
-
+    # Reaching the player's saves, or writing saves, persistent data, and (for
+    # home) config into a folder that is not RenForge's, needs authorize.
+    # Session reuse asks the same question, so neither can bypass the other.
     try:
-        paths = launch_explicit_paths(
-            savedir=payload.get("savedir") if isinstance(payload.get("savedir"), str) else None,
-            home=payload.get("home") if isinstance(payload.get("home"), str) else None,
+        owned = launch_request_is_renforge_owned(
+            savedir=text("savedir"), home=text("home"), persistent=text("persistent"),
+            preferences=text("preferences"), project_path=payload.get("project_path"),
         )
-        root = state_root().expanduser().resolve()
     except (OSError, RuntimeError, ValueError):
-        return False
-    return all(path.is_relative_to(root) and path != root for path in paths)
+        owned = False
+    return name, RISK_MUTATING if owned else RISK_DESTRUCTIVE
 
 
 def _control_payload_action(payload: Any) -> str | None:
