@@ -43,3 +43,25 @@ def test_menu_choices_returns_only_bridge_proven_menu_items() -> None:
 
 def test_menu_choices_does_not_infer_custom_choices_from_control_count() -> None:
     assert _menu_choices(_ChoiceClient([])) == []
+
+
+def test_autopilot_launches_are_isolated_whatever_the_server_default(tmp_path, monkeypatch) -> None:
+    """renforge_autopilot has no authorize; RENFORGE_ISOLATION=existing must not hand it the player's saves."""
+    import renforge.autopilot as autopilot_module
+    from renforge.project import RenpyProject
+
+    monkeypatch.setenv("RENFORGE_ISOLATION", "existing")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    seen = {}
+
+    def fake_launch(sdk, project, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop after the first launch")
+
+    monkeypatch.setattr(autopilot_module, "launch_with_bridge", fake_launch)
+    try:
+        autopilot_module.autopilot(object(), RenpyProject(_DEMO), max_runs=1)
+    except RuntimeError:
+        pass
+    assert seen.get("savedir") == "temporary"
+    assert seen.get("home") == "temporary"

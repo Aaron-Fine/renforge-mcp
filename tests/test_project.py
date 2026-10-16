@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from renforge.project import RenpyProject, discover_project_from
+from renforge.state import project_state_dir
 
 
 def test_renpy_project_with_game_dir(tmp_path: Path) -> None:
@@ -14,8 +15,9 @@ def test_renpy_project_with_game_dir(tmp_path: Path) -> None:
 
     assert project.root == project_root
     assert project.game_dir == game_dir
-    assert project.cache_dir == project_root / ".renforge"
-    assert project.cache_dir.is_dir()
+    assert project.cache_dir == project_state_dir(project_root)
+    # Opening a project writes nothing into it.
+    assert not (project_root / ".renforge").exists()
 
 
 def test_project_identity_survives_symlink_retarget(tmp_path: Path) -> None:
@@ -38,7 +40,7 @@ def test_project_identity_survives_symlink_retarget(tmp_path: Path) -> None:
     assert project.root == project_a.resolve()
     assert project.abs_root == project_a.resolve()
     assert project.game_dir == project_a.resolve() / "game"
-    assert project.cache_dir == project_a.resolve() / ".renforge"
+    assert project.cache_dir == project_state_dir(project_a.resolve())
     assert project.files(["marker"]) == [project_a.resolve() / "marker"]
     assert project.has_config("marker")
 

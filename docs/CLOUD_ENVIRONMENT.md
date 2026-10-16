@@ -173,6 +173,7 @@ Key environment variables for cloud environments:
 | `DISPLAY` | X11 display for Ren'Py | Must be set (e.g., `:99`) |
 | `PYTHONPATH` | Python module search path | Should include `src/` |
 | `RENPY_SDK_CACHE_DIR` | Ren'Py SDK cache location | `~/.cache/renforge/sdks` |
+| `RENFORGE_STARTUP_TIMEOUT` | Seconds a launch may take before it fails; `renforge_launch(timeout=...)` overrides it | `180` |
 | `RENFORGE_SDK_TESTS` | Enable the broad real-SDK integration suite | Unset (opt-in locally) |
 | `RENFORGE_SDK_VERSION` | SDK version used by that integration suite | `8.5.3` (`DEFAULT_RENPY_VERSION`) |
 | `RENFORGE_*_LIVE` | Enable specific live test suites | Unset (opt-in per suite) |

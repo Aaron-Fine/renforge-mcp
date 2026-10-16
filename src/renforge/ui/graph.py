@@ -10,13 +10,14 @@ from ..navigation import resolve_warp_target
 from ..project import RenpyProject
 from ..sdk import get_or_install_sdk
 from ..scanner import scan_project
+from ..state import project_state_dir
 
 
 _STORY_MAP_CACHE: dict[Path, tuple[tuple[Any, ...], dict[str, Any]]] = {}
 
 
 def _normalize_autopilot(project_root: Path) -> dict:
-    path = project_root / ".renforge" / "autopilot.json"
+    path = project_state_dir(project_root) / "autopilot.json"
     if not path.exists():
         return {}
 
@@ -107,7 +108,7 @@ def _story_map_signature(project_root: Path) -> tuple[tuple[Any, ...], tuple[int
                 continue
             entries.append((relative, stats.st_mtime_ns, stats.st_size))
 
-    autopilot = project_root / ".renforge" / "autopilot.json"
+    autopilot = project_state_dir(project_root) / "autopilot.json"
     try:
         autopilot_stats = autopilot.stat()
         autopilot_signature = (autopilot_stats.st_mtime_ns, autopilot_stats.st_size)

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .util import ensure_nofollow_directory, write_atomic
+from .state import project_state_dir
 
 CAPTURE_NAME_PATTERN = r"^[A-Za-z0-9_.-]{1,80}$"
 CAPTURE_NAME_FORBIDDEN = (".", "..")
@@ -29,7 +30,7 @@ def validate_capture_name(value: Any) -> str:
 
 def write_project_capture(project_path: str | Path, name: Any, data: bytes) -> tuple[Path, Path]:
     project_root = Path(project_path).expanduser().resolve()
-    capture_dir = ensure_nofollow_directory(project_root / ".renforge" / "captures")
+    capture_dir = ensure_nofollow_directory(project_state_dir(project_root) / "captures")
     target = capture_dir / (validate_capture_name(name) + ".png")
     write_atomic(target, data, follow_symlinks=False)
     return project_root, target

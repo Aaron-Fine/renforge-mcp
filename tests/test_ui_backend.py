@@ -9,6 +9,7 @@ from renforge.ui import activity as activity_module
 from renforge.ui import graph
 from renforge.ui import poller
 from renforge.tools import live as live_module
+from renforge.state import project_state_dir
 
 try:
     from starlette.testclient import TestClient
@@ -503,7 +504,7 @@ def test_list_choices_returns_empty_when_no_active_menu(monkeypatch, tmp_path) -
 @pytest.mark.skipif(TestClient is None, reason="starlette not installed")
 def test_api_activity_recent_endpoint_returns_tail_events_and_skips_invalid_lines(tmp_path: Path) -> None:
     project_root = _project_root(tmp_path)
-    activity_path = project_root / ".renforge" / "activity.jsonl"
+    activity_path = project_state_dir(project_root) / "activity.jsonl"
     activity_path.parent.mkdir(parents=True, exist_ok=True)
     activity_path.write_text(
         "\n".join(
@@ -565,7 +566,7 @@ class _RecordingHub:
 
 def test_tail_activity_broadcasts_stable_activity_envelope(tmp_path: Path, monkeypatch) -> None:
     project_root = _project_root(tmp_path)
-    path = project_root / ".renforge" / "activity.jsonl"
+    path = project_state_dir(project_root) / "activity.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     activity = {"ts": 1234567890, "name": "tool-call"}
     path.write_text(json.dumps(activity) + "\n", encoding="utf-8")
@@ -632,8 +633,8 @@ def test_story_map_signature_changes_on_script_or_autopilot_change(tmp_path: Pat
     changed_script_sig = graph._story_map_signature(project)
     assert root_sig != changed_script_sig
 
-    autopilot_dir = project / ".renforge"
-    autopilot_dir.mkdir(exist_ok=True)
+    autopilot_dir = project_state_dir(project)
+    autopilot_dir.mkdir(parents=True, exist_ok=True)
     (autopilot_dir / "autopilot.json").write_text("{}", encoding="utf-8")
     with_autopilot_sig = graph._story_map_signature(project)
     assert changed_script_sig != with_autopilot_sig

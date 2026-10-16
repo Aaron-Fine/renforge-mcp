@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .ws import WebSocketHub, build_ws_envelope
+from ..state import project_state_dir
 
 
 def _coerce_timestamp(value: Any) -> int | None:
@@ -19,7 +20,7 @@ def _coerce_timestamp(value: Any) -> int | None:
 
 
 def read_recent_activity(project_root: Path, limit: int = 20) -> list[dict[str, Any]]:
-    path = project_root / ".renforge" / "activity.jsonl"
+    path = project_state_dir(project_root) / "activity.jsonl"
     if limit <= 0 or not path.exists():
         return []
 
@@ -54,7 +55,7 @@ def read_recent_activity(project_root: Path, limit: int = 20) -> list[dict[str, 
 
 
 async def tail_activity(project_root: Path, hub: WebSocketHub, stop_event: asyncio.Event) -> None:
-    path = project_root / ".renforge" / "activity.jsonl"
+    path = project_state_dir(project_root) / "activity.jsonl"
     offset = 0
 
     while not stop_event.is_set():

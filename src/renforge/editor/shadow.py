@@ -8,6 +8,7 @@ import shutil
 import stat
 
 from ..project import RenpyProject
+from ..save_isolation import renpy_tool_environment
 from ..sdk import RenpySdk
 from ..util.files import copy_regular_file_nofollow, fsync_directory, write_exclusive_bytes
 from ..util.subprocess import run_command
@@ -183,7 +184,8 @@ def run_shadow_lint(
     timeout: float,
 ) -> ShadowLintResult:
     command = sdk.launch_command(shadow_root.resolve(strict=True), "lint")
-    result = run_command(command, timeout=timeout)
+    with renpy_tool_environment() as env:
+        result = run_command(command, timeout=timeout, env=env)
     stdout_text = result.stdout or ""
     stderr_text = result.stderr or ""
     bounded_stdout, trunc_stdout = _bounded_output(stdout_text, MAX_DIAGNOSTICS_BYTES)

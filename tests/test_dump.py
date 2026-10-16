@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from renforge import dump as dump_mod
+from renforge.save_isolation import TOOL_SAVES_ADAPTER_FILENAME
 
 
 class _FakeNode:
@@ -207,6 +208,9 @@ def test_run_native_dump_prepends_adapter_to_existing_searchpath(
         seen["first"] = first
         seen["rest"] = rest
         assert (Path(first) / dump_mod.JSON_DUMP_ADAPTER_FILENAME).is_file()
+        # Then the adapter that keeps the run out of the player's saves, then the caller's path.
+        tool_adapter, seen["existing"] = rest.split("::", 1)
+        assert (Path(tool_adapter) / TOOL_SAVES_ADAPTER_FILENAME).is_file()
         out_path = Path(command[command.index("--json-dump") + 1])
         out_path.write_text("{}", encoding="utf-8")
         return SimpleNamespace(returncode=0, timed_out=False, stdout="", stderr="")
@@ -215,7 +219,7 @@ def test_run_native_dump_prepends_adapter_to_existing_searchpath(
 
     dump_mod.run_native_dump(SimpleNamespace(), _fake_project())
 
-    assert seen["rest"] == "/already/there"
+    assert seen["existing"] == "/already/there"
     assert "renforge-dump-adapter-" in Path(seen["first"]).name
 
 

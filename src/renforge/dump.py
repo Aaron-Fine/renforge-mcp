@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from .project import RenpyProject
+from .save_isolation import renpy_tool_environment
 from .sdk import RenpySdk
 from .util.subprocess import run_command
 
@@ -90,12 +91,9 @@ if not getattr(_renforge_dump_mod.dump, "_renforge_json_dump_adapter", False):
 '''
 
 
-def _json_dump_searchpath_env(adapter_dir: Path) -> dict[str, str]:
-    adapter = str(adapter_dir)
-    existing = os.environ.get("RENPY_SEARCHPATH", "")
-    if existing:
-        return {"RENPY_SEARCHPATH": f"{adapter}::{existing}"}
-    return {"RENPY_SEARCHPATH": adapter}
+def _json_dump_searchpath_env(adapter_dir: Path, env: dict[str, str]) -> dict[str, str]:
+    """``env`` (from renpy_tool_environment) with the dump adapter searched first."""
+    return dict(env, RENPY_SEARCHPATH=f"{adapter_dir}::{env['RENPY_SEARCHPATH']}")
 
 
 def run_native_dump(sdk: RenpySdk, project: RenpyProject, *, timeout: int = 180) -> dict[str, Any]:
@@ -121,11 +119,12 @@ def run_native_dump(sdk: RenpySdk, project: RenpyProject, *, timeout: int = 180)
 
         try:
             command = project.renpy_command(sdk, ("compile", "--json-dump", str(out_path)))
-            result = run_command(
-                command,
-                timeout=timeout,
-                env=_json_dump_searchpath_env(adapter_dir),
-            )
+            with renpy_tool_environment() as env:
+                result = run_command(
+                    command,
+                    timeout=timeout,
+                    env=_json_dump_searchpath_env(adapter_dir, env),
+                )
 
             if not out_path.exists() or out_path.stat().st_size == 0:
                 raise RuntimeError(

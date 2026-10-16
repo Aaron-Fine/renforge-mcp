@@ -2470,7 +2470,7 @@ init 1100 python:
         return parsed
 
 
-    class _RenforgeEditorCoordinatorIO(object):
+    class _RenforgeEditorCoordinatorIO(builtins.object):  # not RevertableObject: never in a save
         def __init__(self):
             import queue as queue_module
 

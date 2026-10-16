@@ -6,6 +6,7 @@ import pytest
 
 from renforge.captures import write_project_capture
 from renforge.util.files import write_atomic, write_json_atomic
+from renforge.state import project_state_dir
 
 
 def test_write_atomic_nofollow_rejects_symlink_parent(tmp_path: Path) -> None:
@@ -60,7 +61,7 @@ def test_write_project_capture_does_not_follow_dir_swapped_after_validation(
         write_project_capture(project, "frame", b"png-bytes")
 
     assert list(outside.iterdir()) == []
-    assert not (project / ".renforge" / "captures" / "frame.png").is_file()
+    assert not (project_state_dir(project) / "captures" / "frame.png").is_file()
 
 
 def test_write_project_capture_does_not_follow_ancestor_swapped_after_validation(

@@ -24,6 +24,21 @@ def test_parse_lint_output_accepts_multiple_known_formats() -> None:
     assert diagnostics[2]["message"] == "Informational message"
 
 
+def test_parse_lint_output_reads_renpy_8_lines() -> None:
+    # Ren'Py 8 prints "file:line message", with no colon after the line number.
+    output = "\n".join(
+        [
+            "game/mods/demo/main.rpy:2 The jump is to nonexistent label 'nowhere'.",
+            "",
+            "The game contains 132 menus, 215 images, and 67 screens.",
+        ]
+    )
+    assert parse_lint_output(output) == [
+        {"file": "game/mods/demo/main.rpy", "line": 2, "severity": "warning",
+         "message": "The jump is to nonexistent label 'nowhere'."},
+    ]
+
+
 def test_parse_lint_output_unknown_lines_are_ignored() -> None:
     output = "\n".join(
         [

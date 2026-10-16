@@ -48,6 +48,10 @@ CONTROL_ACTIONS: dict[str, str] = {
 
 SAVES_ACTIONS: dict[str, str] = {
     "list": RISK_OBSERVATIONAL,
+    # Reading the player's own saves, even their names and extra_info, is
+    # reaching the user save tree, like a savedir=existing launch.
+    "list_user": RISK_DESTRUCTIVE,
+    "import": RISK_DESTRUCTIVE,
     "save": RISK_MUTATING,
     "load": RISK_DESTRUCTIVE,
 }
@@ -76,11 +80,16 @@ SCENARIO_STEP_RISKS: dict[str, str] = {
 
 _SENSITIVE_PARAM_KEYS = frozenset({"expr", "steps", "value", "text", "extra_info"})
 
+_LAUNCH_TOOLS: frozenset[str] = frozenset(
+    {"renforge_launch", "renforge_jump", "renforge_new_game"}
+)
+
 _REASONS = {
     RISK_OBSERVATIONAL: "This operation only observes the project or running game.",
     RISK_MUTATING: "This operation changes live game state in a recoverable way.",
     RISK_DESTRUCTIVE: (
-        "This operation can discard or replace live state (quit, load, or reload)."
+        "This operation can discard or replace live state, or read and write "
+        "the user's Ren'Py saves (quit, load, reload, or savedir=existing)."
     ),
     RISK_OPEN_WORLD: (
         "Arbitrary Python can touch the filesystem, processes, network, and game state."
@@ -215,8 +224,21 @@ def classify(name: str, params: Mapping[str, Any] | None = None) -> tuple[str, s
         if not isinstance(expr, str) or not expr.strip():
             return "renforge_eval", RISK_MALFORMED
         return "renforge_eval", RISK_OPEN_WORLD
+    if name == "renforge_wait_until":
+        # Its expr runs in the game like renforge_eval, as a scenario's
+        # wait step does; a label or screen condition only observes.
+        if "expr" in payload and payload.get("expr") is not None:
+            expr = payload.get("expr")
+            if not isinstance(expr, str) or not expr.strip():
+                return "renforge_wait_until", RISK_MALFORMED
+            return "renforge_wait_until.expr", RISK_OPEN_WORLD
+        return "renforge_wait_until", RISK_OBSERVATIONAL
+    if name == "renforge_set_var":
+        return name, RISK_MUTATING
     if name == "renforge_run_scenario":
         return _classify_scenario(payload.get("steps"))
+    if name in _LAUNCH_TOOLS:
+        return _classify_launch(name, payload)
     return name, RISK_UNMANAGED
 
 
@@ -337,6 +359,26 @@ def _classify_scenario_step(step: Any) -> tuple[str, str]:
             return "renforge_run_scenario.assert", RISK_MALFORMED
         return "renforge_run_scenario.assert", RISK_OPEN_WORLD
     return f"renforge_run_scenario.{action}", SCENARIO_STEP_RISKS[action]
+
+
+def _classify_launch(name: str, payload: Mapping[str, Any]) -> tuple[str, str]:
+    from .save_isolation import launch_request_is_renforge_owned
+
+    def text(field: str) -> str | None:
+        value = payload.get(field)
+        return value if isinstance(value, str) else None
+
+    # Reaching the player's saves, or writing saves, persistent data, and (for
+    # home) config into a folder that is not RenForge's, needs authorize.
+    # Session reuse asks the same question, so neither can bypass the other.
+    try:
+        owned = launch_request_is_renforge_owned(
+            savedir=text("savedir"), home=text("home"), persistent=text("persistent"),
+            preferences=text("preferences"), project_path=payload.get("project_path"),
+        )
+    except (OSError, RuntimeError, ValueError):
+        owned = False
+    return name, RISK_MUTATING if owned else RISK_DESTRUCTIVE
 
 
 def _control_payload_action(payload: Any) -> str | None:
