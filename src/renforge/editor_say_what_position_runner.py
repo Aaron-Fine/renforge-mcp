@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from renforge.state import project_state_dir
-from renforge.bridge.client import BridgeClient, BridgeProtocolError
+from renforge.bridge.client import BridgeClient, BridgeError, BridgeProtocolError
 
 
 FIXTURE_SCREEN = "say"
@@ -218,7 +218,8 @@ def run_editor_say_what_style_position_live_scenario(
                 '(_renforge_editor_state().pending_attestation_screen, '
                 '_renforge_editor_state().pending_attestation_screen_kwargs)'
             )
-        except BridgeProtocolError:
+        except (BridgeError, BridgeProtocolError) as exc:
+            report["bridge_failure"] = f"{type(exc).__name__}: {exc}"
             report["reload_slot"] = "bridge unavailable"
         try:
             report["say_after_reload"] = client.inspect_screen("say")
@@ -227,7 +228,8 @@ def run_editor_say_what_style_position_live_scenario(
                 for node in (client.scene_tree(types=["text"], detail="semantic").get("nodes") or [])
                 if isinstance(node, dict) and node.get("text")
             ]
-        except BridgeProtocolError:
+        except (BridgeError, BridgeProtocolError) as exc:
+            report["bridge_failure"] = f"{type(exc).__name__}: {exc}"
             report["say_after_reload"] = "bridge unavailable"
         report["last_status_code"] = last_status.get("status_code") if last_status else None
         report["save_in_progress"] = last_status.get("save_in_progress") if last_status else None
