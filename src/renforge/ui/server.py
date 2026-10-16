@@ -657,7 +657,8 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             editor=bool(launch_kwargs.get("editor", True)),
             requirements=live.launch_requirements(
                 project_path,
-                **{field: launch_kwargs.get(field) for field in ("savedir", "home", "persistent", "preferences")},
+                **{field: launch_kwargs.get(field)
+                   for field in ("savedir", "home", "persistent", "preferences", "bridge_eval")},
             ),
         )
 
@@ -732,6 +733,22 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
         preferences = payload.get("preferences")
         cleanup_on_stop = payload.get("cleanup_on_stop", True)
         timeout = payload.get("timeout")
+        start_label = payload.get("start_label")
+        bridge_eval = payload.get("bridge_eval")
+        if bridge_eval is not None and not isinstance(bridge_eval, bool):
+            return error_response(
+                code="launch_bridge_eval_invalid",
+                error="bridge_eval must be a boolean",
+                status_code=400,
+                details={"bridge_eval": bridge_eval},
+            )
+        if start_label is not None and (not isinstance(start_label, str) or not start_label.strip()):
+            return error_response(
+                code="launch_start_label_invalid",
+                error="start_label must be a non-empty string",
+                status_code=400,
+                details={"start_label": start_label},
+            )
         if not isinstance(version, str) or not version:
             return error_response(
                 code="launch_version_invalid",
@@ -822,6 +839,8 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             timeout=float(timeout) if timeout is not None else None,
             home=home,
             preferences=preferences,
+            start_label=start_label,
+            bridge_eval=bridge_eval,
         )
         return JSONResponse(result)
 

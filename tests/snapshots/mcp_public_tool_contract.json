@@ -1,4 +1,79 @@
 {
+  "renforge_act": {
+    "description": "The one play step: act on a control, a key, or nothing, then continue to the next decision. Pass observation_id from the renforge_observe (or previous renforge_act) snapshot you decided on; acting on a control in a changed game refuses with error=stale and returns the current observation, while continuing (no id) proceeds from the current state. id is a control id from that snapshot (an id it does not list is refused with error=missing and the current observation), or key/<name> for a physical key (a-z, up, down, left, right, escape, return, space, tab; the observation's keys say which ones a screen binds). value is the control's input: text for an input field (submitted with Enter), a number for a bar, {x, y} for a viewport, a control id for a drag's drop target (empty string drops on nothing), or true/false to hold/release a key; a control that takes none ignores it. Omit id to continue from the observed state: narration and pauses are skipped, and a line that only has optional buttons beside it is clicked past as a reader would. After the input the game progresses with bounded native skip (preferences restored) until a choice, input, custom screen, ending, a line already passed in this call (stop=loop), or the time budget; it never selects a control on its own. Buttons on screens kept up across lines (a phone or codex HUD) do not stop a clickable line. Returns ok, action_outcome (succeeded, refused, unknown, or none), the next compact observation, observation_status, and progress (stop, steps, crossed dialogue with seen=true on repeated lines, ending), plus a hint when nothing could continue (a line held under a modal screen, or a game waiting on one of its controls). stop=end is a confirmed script return; main_menu is a menu without ending evidence. Never repeat a successful or uncertain action only because the follow-up observation failed.",
+    "annotations": {
+      "readOnlyHint": false,
+      "idempotentHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "project_path": {
+          "description": "Project root of the running live session.",
+          "type": "string"
+        },
+        "observation_id": {
+          "description": "observation_id of the snapshot this action was chosen from.",
+          "type": "string"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Control id from that snapshot, or key/<name>. Omit to just continue."
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Input for the control: text, a number, {x, y}, a drop target id, or true/false for a key."
+        },
+        "screenshot": {
+          "default": true,
+          "description": "Attach a size-bounded PNG of the resulting observation (default true).",
+          "type": "boolean"
+        },
+        "timeout": {
+          "default": 30.0,
+          "description": "Budget in seconds for the action and progression, from 0.1 to 120 (default 30).",
+          "maximum": 120,
+          "minimum": 0.1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "project_path",
+        "observation_id"
+      ],
+      "type": "object"
+    }
+  },
   "renforge_advance": {
     "annotations": {
       "destructiveHint": true,
@@ -176,29 +251,40 @@
     }
   },
   "renforge_click_at": {
-    "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": false,
-      "openWorldHint": true,
-      "readOnlyHint": false
-    },
     "description": "Click a coordinate in screenshot or logical space. Use semantic click first (`renforge_click_element`) and fall back when text/id selectors are unavailable. Combine with coordinate space and frame/state guards.",
+    "annotations": {
+      "readOnlyHint": false,
+      "idempotentHint": false,
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
     "parameters": {
       "additionalProperties": false,
       "properties": {
-        "coordinate_space": {
-          "default": "logical",
-          "description": "`logical` (default) or `screenshot` coordinates.",
-          "enum": [
-            "logical",
-            "screenshot"
-          ],
+        "project_path": {
+          "description": "Project root with active live session.",
           "type": "string"
         },
+        "x": {
+          "description": "Horizontal coordinate in selected coordinate space.",
+          "type": "number"
+        },
+        "y": {
+          "description": "Vertical coordinate in selected coordinate space.",
+          "type": "number"
+        },
         "expected_frame_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "additionalProperties": true,
+              "type": "object"
+            }
+          ],
           "default": "",
-          "description": "Frame id that must match for safety checks.",
-          "type": "string"
+          "description": "Source frame id or complete observation frame descriptor. A descriptor maps delivered screenshot pixels and guards session/frame/dimensions."
         },
         "expected_state": {
           "anyOf": [
@@ -213,17 +299,14 @@
           "default": null,
           "description": "Optional expected runtime state dictionary before click."
         },
-        "project_path": {
-          "description": "Project root with active live session.",
+        "coordinate_space": {
+          "default": "logical",
+          "description": "`logical` (default) or `screenshot` coordinates.",
+          "enum": [
+            "logical",
+            "screenshot"
+          ],
           "type": "string"
-        },
-        "x": {
-          "description": "Horizontal coordinate in selected coordinate space.",
-          "type": "number"
-        },
-        "y": {
-          "description": "Vertical coordinate in selected coordinate space.",
-          "type": "number"
         }
       },
       "required": [
@@ -645,6 +728,84 @@
       "required": [
         "project_path",
         "expr"
+      ],
+      "type": "object"
+    }
+  },
+  "renforge_explain": {
+    "description": "Explain where game content is defined and what it does, read from the running game's loaded syntax trees without evaluating anything. Works for games that ship only .rpa/.rpyc files. With no selector it returns labels and screens with file:line, filtered by a case-insensitive `query` name substring, plus file counts showing how many sources exist on disk. `label` returns the statements of a label, flattened depth-first with file, line and text. `screen` returns the displayable tree of a screen. `id` (a control id from renforge_observe) or `source` (a file:line from a control or input candidate) returns the statement there, its keyword arguments, and the if/for/use conditions enclosing it. `search` finds text in every loaded statement (dialogue, Python source, conditions, menu choices, jump targets) and returns file:line with the enclosing label, e.g. to find what gates a message. Results for a label, screen, id, or source also carry `values`: the current values of the plain variables their conditions read. `variables` reads named store variables or dotted fields (`calendar.dayCount`, `persistent.seen_intro`) as data, so what is on screen can be checked against the state of the playthrough; game objects come back as their simple public fields, and a long list or dict lists its first entries with `size` and `truncated` (read a key by path: `ran.scene_a`). Nothing is called or evaluated. Output is bounded by `limit`.",
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true,
+      "destructiveHint": false,
+      "openWorldHint": false
+    },
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "project_path": {
+          "description": "Project root with active game session.",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "description": "Label name to explain. Pass at most one of label, screen, id, or source.",
+          "type": "string"
+        },
+        "screen": {
+          "default": "",
+          "description": "Screen name to explain. Pass at most one of label, screen, id, or source.",
+          "type": "string"
+        },
+        "id": {
+          "default": "",
+          "description": "Control id from renforge_observe to trace back to its screen-language statement.",
+          "type": "string"
+        },
+        "limit": {
+          "default": 200,
+          "description": "Maximum statements, nodes, or index entries to return (1-2000, default 200).",
+          "maximum": 2000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "source": {
+          "default": "",
+          "description": "A `file:line` reported as `source` by renforge_observe controls or input candidates.",
+          "type": "string"
+        },
+        "query": {
+          "default": "",
+          "description": "Index only: case-insensitive substring to filter label and screen names.",
+          "type": "string"
+        },
+        "search": {
+          "default": "",
+          "description": "Case-insensitive text to find in all loaded statements, including Python source.",
+          "type": "string"
+        },
+        "variables": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Store variable names or dotted fields to read as data, e.g. [\"day\", \"calendar.dayCount\"].",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "project_path"
       ],
       "type": "object"
     }
@@ -1187,7 +1348,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Call this first. It returns the active project target (dashboard, \"serve_default\" or cwd), plus local runtime hints and RenForge version. Use this to determine the project path you should pass to project-scoped tools.",
+    "description": "Call this first. It returns the active project target (dashboard, \"serve_default\" or cwd), the toolsets this server lists, the play loop's steps when play is listed, and the RenForge version. Use this to determine the project path you should pass to project-scoped tools.",
     "parameters": {
       "additionalProperties": false,
       "properties": {},
@@ -1386,35 +1547,33 @@
     }
   },
   "renforge_launch": {
+    "description": "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; Runtime control requires Ren'Py 8.0 or newer. Pre-8 bundled games or selected SDKs return UNSUPPORTED_RENPY_VERSION before SDK download, bridge injection, or process launch; an explicit newer SDK does not bypass a legacy game's incompatibility. poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. Saves, preferences, and HOME default to isolated temporary locations so the session does not read or write the user's normal Ren'Py state; the ready payload includes `session_id` and an `isolation` object. It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and publish authenticated ownership/bridge metadata under `<state>/control/`, where `<state>` is this project's RenForge folder outside the game (`RENFORGE_STATE_DIR` or `~/.local/state/renforge`, then `projects/<name>-<hash>`). `renforge_stop` removes only owned session artifacts. Exposing the user save tree (`savedir=existing`) requires `authorize=true` when `RENFORGE_POLICY=enforce`. Copy selected host slots with `renforge_saves(action=\"import\")` instead of bind-mounting the user tree.",
     "annotations": {
-      "destructiveHint": true,
+      "readOnlyHint": false,
       "idempotentHint": false,
-      "openWorldHint": true,
-      "readOnlyHint": false
+      "destructiveHint": true,
+      "openWorldHint": true
     },
-    "description": "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. Saves, preferences, and HOME default to isolated temporary locations so the session does not read or write the user's normal Ren'Py state; the ready payload includes `session_id` and an `isolation` object. It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and publish authenticated ownership/bridge metadata under `<state>/control/`, where `<state>` is this project's RenForge folder outside the game (`RENFORGE_STATE_DIR` or `~/.local/state/renforge`, then `projects/<name>-<hash>`). `renforge_stop` removes only owned session artifacts. Exposing the user save tree (`savedir=existing`) requires `authorize=true` when `RENFORGE_POLICY=enforce`. Copy selected host slots with `renforge_saves(action=\"import\")` instead of bind-mounting the user tree.",
     "parameters": {
       "additionalProperties": false,
       "properties": {
-        "audio": {
-          "default": "auto",
-          "description": "Audio strategy: `auto`, `native`, `dummy`, or `none`; both `dummy` and `none` use SDL dummy audio.",
-          "enum": [
-            "auto",
-            "native",
-            "dummy",
-            "none"
-          ],
+        "project_path": {
+          "description": "Project root passed to the launcher and runtime bridge.",
           "type": "string"
         },
-        "authorize": {
-          "default": false,
-          "description": "Explicitly authorize launching against the user's Ren'Py saves with `authorize=true` (`savedir=existing`, a host save path, `home=existing`, or `RENFORGE_ISOLATION=existing`) when `RENFORGE_POLICY=enforce`. Isolated launches do not need this.",
-          "type": "boolean"
+        "warp": {
+          "default": "",
+          "description": "Optional Ren'Py `file.rpy:line` startup target; this launch tool does not resolve label names.",
+          "type": "string"
         },
-        "cleanup_on_stop": {
+        "version": {
+          "default": "stable",
+          "description": "Launcher version selector. `stable` uses the engine recorded in the project's `renpy/vc_version.py` when that file exists, otherwise the configured stable SDK (`8.5.3`). An explicit version such as `8.1.2` is downloaded when no cached SDK is available. Runtime launch rejects bundled game engines or selected SDKs below 8.0. A cached SDK is reused only when the major and minor match and its patch is the same or newer.",
+          "type": "string"
+        },
+        "editor": {
           "default": true,
-          "description": "When true, stop removes only the disposable session directory created for isolated `savedir`/`home` (saves plus private HOME). Arbitrary save directories, explicit HOME paths, and existing user files are not deleted.",
+          "description": "Enable/disable live editor injection; default True for interactive work.",
           "type": "boolean"
         },
         "display": {
@@ -1429,14 +1588,20 @@
           ],
           "type": "string"
         },
-        "editor": {
-          "default": true,
-          "description": "Enable/disable live editor injection; default True for interactive work.",
-          "type": "boolean"
-        },
-        "home": {
+        "audio": {
           "default": "auto",
-          "description": "Process HOME for the launched game. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default a private directory) so preferences and `~/.renpy` writes miss the user's files. Pass `existing` to keep the host HOME. `savedir=existing` also selects `home=existing` unless this is set. Any other non-empty value is an explicit HOME path.",
+          "description": "Audio strategy: `auto`, `native`, `dummy`, or `none`; both `dummy` and `none` use SDL dummy audio.",
+          "enum": [
+            "auto",
+            "native",
+            "dummy",
+            "none"
+          ],
+          "type": "string"
+        },
+        "savedir": {
+          "default": "auto",
+          "description": "Save location. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default isolated `temporary`) so this session cannot read or write the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory; that is destructive and requires `authorize=true` when `RENFORGE_POLICY=enforce`. Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop. Prefer `renforge_saves(action=\"import\")` to copy selected host slots into an isolated session.",
           "type": "string"
         },
         "persistent": {
@@ -1449,6 +1614,22 @@
           ],
           "type": "string"
         },
+        "cleanup_on_stop": {
+          "default": true,
+          "description": "When true, stop removes only the disposable session directory created for isolated `savedir`/`home` (saves plus private HOME). Arbitrary save directories, explicit HOME paths, and existing user files are not deleted.",
+          "type": "boolean"
+        },
+        "timeout": {
+          "default": 0,
+          "description": "Ren'Py background startup deadline in seconds (0 uses the launcher default). This does not control the MCP response wait; poll `renforge_launch_status` after a `starting` result.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "home": {
+          "default": "auto",
+          "description": "Process HOME for the launched game. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default a private directory) so preferences and `~/.renpy` writes miss the user's files. Pass `existing` to keep the host HOME. `savedir=existing` also selects `home=existing` unless this is set. Any other non-empty value is an explicit HOME path.",
+          "type": "string"
+        },
         "preferences": {
           "default": "auto",
           "description": "Preferences share Ren'Py's persistent storage. Omitted, empty, or `auto` selects `empty` for a fresh temporary save directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; preferences are isolated by storage selection, without resetting host state.",
@@ -1459,30 +1640,10 @@
           ],
           "type": "string"
         },
-        "project_path": {
-          "description": "Project root passed to the launcher and runtime bridge.",
-          "type": "string"
-        },
-        "savedir": {
-          "default": "auto",
-          "description": "Save location. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default isolated `temporary`) so this session cannot read or write the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory; that is destructive and requires `authorize=true` when `RENFORGE_POLICY=enforce`. Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop. Prefer `renforge_saves(action=\"import\")` to copy selected host slots into an isolated session.",
-          "type": "string"
-        },
-        "timeout": {
-          "default": 0,
-          "description": "Ren'Py background startup deadline in seconds (0 uses the launcher default). This does not control the MCP response wait; poll `renforge_launch_status` after a `starting` result.",
-          "minimum": 0,
-          "type": "number"
-        },
-        "version": {
-          "default": "stable",
-          "description": "Launcher version selector. `stable` uses the engine recorded in the project's `renpy/vc_version.py` when that file exists, otherwise the configured stable SDK (`8.5.3`). An explicit version such as `8.1.2` is downloaded when no cached SDK shares that major.minor. A cached SDK is reused only when the major and minor match and its patch is the same or newer.",
-          "type": "string"
-        },
-        "warp": {
-          "default": "",
-          "description": "Optional Ren'Py `file.rpy:line` startup target; this launch tool does not resolve label names.",
-          "type": "string"
+        "authorize": {
+          "default": false,
+          "description": "Explicitly authorize launching against the user's Ren'Py saves with `authorize=true` (`savedir=existing`, a host save path, `home=existing`, or `RENFORGE_ISOLATION=existing`) when `RENFORGE_POLICY=enforce`. Isolated launches do not need this.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -1514,13 +1675,13 @@
     }
   },
   "renforge_list_choices": {
+    "description": "List current engine menu entries across runtime layers, including clipped choices. Use the returned indices with renforge_select_choice; they retain legacy textual-control ordering and need not be contiguous. Duplicate captions remain distinct; sensitivity is checked when selecting.",
     "annotations": {
-      "destructiveHint": false,
+      "readOnlyHint": true,
       "idempotentHint": true,
-      "openWorldHint": false,
-      "readOnlyHint": true
+      "destructiveHint": false,
+      "openWorldHint": false
     },
-    "description": "List on-screen menu choices with index and text ordering. Call before `renforge_select_choice` to pick valid entries for the current menu state.",
     "parameters": {
       "additionalProperties": false,
       "properties": {
@@ -1550,21 +1711,16 @@
     }
   },
   "renforge_list_ui_elements": {
+    "description": "List supported controls and engine menu actions with canonical IDs, operations, and logical bounds when available. Clipped menu actions can remain semantically selectable. Use this first for semantic interaction planning; it is narrower than a full scene readout and aligned to click/hover workflows.",
     "annotations": {
-      "destructiveHint": false,
+      "readOnlyHint": true,
       "idempotentHint": true,
-      "openWorldHint": false,
-      "readOnlyHint": true
+      "destructiveHint": false,
+      "openWorldHint": false
     },
-    "description": "List focusable UI elements with bounds and element metadata. Use this first for semantic interaction planning; it is narrower than a full scene readout and aligned to click/hover workflows.",
     "parameters": {
       "additionalProperties": false,
       "properties": {
-        "element_type": {
-          "default": "",
-          "description": "Optional element type/class filter (for example button, label).",
-          "type": "string"
-        },
         "project_path": {
           "description": "Project root with active live session.",
           "type": "string"
@@ -1577,6 +1733,11 @@
         "text": {
           "default": "",
           "description": "Optional text filter to narrow focusable candidates.",
+          "type": "string"
+        },
+        "element_type": {
+          "default": "",
+          "description": "Optional element type/class filter (for example button, label).",
           "type": "string"
         }
       },
@@ -1645,6 +1806,87 @@
       "type": "object"
     }
   },
+  "renforge_mod": {
+    "description": "Write, test, and remove mods under `game/mods/<name>/` with a `renforge-mod.json` manifest. Never modifies game files outside that directory. `write` takes `path` and `content` (`.rpy`, `.txt`, `.json`, or `.md`). `list` reports listed, missing, and unlisted files. `lint` returns project lint diagnostics that point into the mod. `remove` deletes only manifest-listed files, their compiled `.rpyc` siblings, and empty directories; unlisted files are kept and reported. `package` zips the mod into `<state>/mods/`. `reload` (no name: it reloads every script, wherever the mod lives) hot-reloads the running game and returns errors and a fresh observation. `guide` returns modding idioms. Mod actions are classified per action by the runtime policy.",
+    "annotations": {
+      "readOnlyHint": false,
+      "idempotentHint": false,
+      "destructiveHint": false,
+      "openWorldHint": false
+    },
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "project_path": {
+          "description": "Project root of the game that owns the mod.",
+          "type": "string"
+        },
+        "action": {
+          "description": "One of `write`, `list`, `lint`, `reload`, `remove`, `package`, or `guide`.",
+          "enum": [
+            "write",
+            "list",
+            "lint",
+            "reload",
+            "remove",
+            "package",
+            "guide"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Mod name matching `^[a-z0-9][a-z0-9_-]{0,63}$`. Required for every action except `list`, `reload`, and `guide`.",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Path relative to the mod directory, for example `script.rpy`. Required for `write`."
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "UTF-8 file content, at most 1,000,000 bytes. Required for `write`."
+        },
+        "authorize": {
+          "default": false,
+          "description": "Mod files are code the game runs, so `write` is open-world: pass true when RENFORGE_POLICY=enforce.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "project_path",
+        "action"
+      ],
+      "type": "object"
+    }
+  },
   "renforge_new_game": {
     "description": "Restart at `start` and begin a new story progression. This may download and cache the required SDK before the fresh launch. Isolation matches `renforge_launch`: saves, preferences, and HOME default to temporary locations. Exposing the user save tree requires `authorize=true` when `RENFORGE_POLICY=enforce`. Prefer this for clean scenario entry rather than reusing unstable runtime state.",
     "annotations": {
@@ -1698,6 +1940,33 @@
         "authorize": {
           "default": false,
           "description": "Explicitly authorize launching against the user's Ren'Py saves with `authorize=true` (`savedir=existing`, a host save path, `home=existing`, or `RENFORGE_ISOLATION=existing`) when `RENFORGE_POLICY=enforce`. Isolated launches do not need this.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "project_path"
+      ],
+      "type": "object"
+    }
+  },
+  "renforge_observe": {
+    "description": "Look at the running game: one compact snapshot of the current interaction. Read forward first. dismiss: a line or pause the player clicks past; renforge_act with no id continues. wait: a pause that ends by itself; act with no id waits it out. choose: the game waits for a decision; act on one of controls (or a key from keys). none: nothing known moves it on; check omitted, input_candidates, and the screenshot. dialogue is the current line (who, what). controls are the gameplay buttons, choices, inputs, bars, and drags, each with the id to pass to renforge_act, its text, action, operations (click, text, value, drop), and source (file:line). chrome is the game's interface (quick menu, and buttons whose only actions open menus, save, skip, or roll back), reduced to id and text; it becomes controls only when nothing else moves the game on (a disclaimer's Continue). Buttons on screens kept up across lines (a phone or codex HUD) stay controls, but never stop a line from being continued. keys lists the screens' own key bindings (\"Press SPACE to continue\") with the key/<name> to send. readout is other text on screen. stable=false (with unstable_reason) means the screen is still changing: observe again before acting on a control. seen=true means this line, menu, or hub already finished once since launch, so the playthrough is going in circles. lifecycle.phase is playing, main_menu, ended, or unknown; ended needs a confirmed root script return, so a main menu alone is not an ending. game_error is set while Ren'Py's exception screen is up. Pass observation_id to renforge_act. screenshot=true attaches a PNG (frame_hash is its SHA-256; frame describes the capture). Fields that are empty or at their default are left out; renforge_explain(id=...) returns a control's full record and the code behind it. Text tags are removed from dialogue and readout. input_candidates are custom displayables that handle input themselves; their action is unknown.",
+    "annotations": {
+      "readOnlyHint": true,
+      "idempotentHint": true,
+      "destructiveHint": false,
+      "openWorldHint": false
+    },
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "project_path": {
+          "description": "Project root of the running live session.",
+          "type": "string"
+        },
+        "screenshot": {
+          "default": true,
+          "description": "Attach the current PNG when true. The snapshot is still returned when false.",
           "type": "boolean"
         }
       },
@@ -3234,16 +3503,20 @@
     }
   },
   "renforge_scene_tree": {
+    "description": "Inspect a bounded scene inventory with completed-frame logical geometry where established. Beyond renforge_list_ui_elements it includes non-focusable nodes and uncertain custom input. Natural text overflow is explicitly unavailable. Use this when semantic selectors are ambiguous. `save_as` or `diff_against` may create `<state>/scenes/`; `save_as` writes and overwrites the named JSON snapshot. Omit both options for read-only inspection.",
     "annotations": {
-      "destructiveHint": true,
+      "readOnlyHint": false,
       "idempotentHint": false,
-      "openWorldHint": false,
-      "readOnlyHint": false
+      "destructiveHint": true,
+      "openWorldHint": false
     },
-    "description": "Read the full scene graph (logical scene data). Unlike `renforge_list_ui_elements` this is broad and includes non-focusable nodes, so use it for full-tree inspection when semantic selectors are ambiguous. `save_as` or `diff_against` may create `<state>/scenes/`; `save_as` writes and overwrites the named JSON snapshot. Omit both options for read-only inspection.",
     "parameters": {
       "additionalProperties": false,
       "properties": {
+        "project_path": {
+          "description": "Project root with active live session.",
+          "type": "string"
+        },
         "detail": {
           "default": "semantic",
           "description": "Detail granularity (`semantic`, `layout`, or `raw`) for scene nodes.",
@@ -3254,19 +3527,39 @@
           ],
           "type": "string"
         },
-        "diff_against": {
-          "default": "",
-          "description": "Optional snapshot name for diff context; compare against existing `<state>/scenes/<name>.json` entry.",
-          "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
-          "type": "string"
-        },
-        "format": {
-          "default": "json",
-          "description": "Return format (`json` or `wireframe`).",
-          "enum": [
-            "json",
-            "wireframe"
+        "layers": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
           ],
+          "default": null,
+          "description": "Optional layer filters."
+        },
+        "types": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional node type filters."
+        },
+        "screen": {
+          "default": "",
+          "description": "Optional active screen filter.",
           "type": "string"
         },
         "ids": {
@@ -3312,20 +3605,33 @@
             "type": "string"
           }
         },
-        "layers": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
+        "format": {
+          "default": "json",
+          "description": "Return format (`json` or `wireframe`).",
+          "enum": [
+            "json",
+            "wireframe"
           ],
-          "default": null,
-          "description": "Optional layer filters."
+          "type": "string"
+        },
+        "save_as": {
+          "default": "",
+          "description": "Optional snapshot name saved under `<state>/scenes/<name>.json`; reusing a name overwrites it.",
+          "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        "diff_against": {
+          "default": "",
+          "description": "Optional snapshot name for diff context; compare against existing `<state>/scenes/<name>.json` entry.",
+          "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+          "type": "string"
+        },
+        "max_output_depth": {
+          "default": 6,
+          "description": "Maximum traversal depth before truncation, from 0 through 20.",
+          "maximum": 20,
+          "minimum": 0,
+          "type": "integer"
         },
         "max_items": {
           "default": 50,
@@ -3340,43 +3646,6 @@
           "maximum": 2000000,
           "minimum": 64,
           "type": "integer"
-        },
-        "max_output_depth": {
-          "default": 6,
-          "description": "Maximum traversal depth before truncation, from 0 through 20.",
-          "maximum": 20,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "project_path": {
-          "description": "Project root with active live session.",
-          "type": "string"
-        },
-        "save_as": {
-          "default": "",
-          "description": "Optional snapshot name saved under `<state>/scenes/<name>.json`; reusing a name overwrites it.",
-          "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
-          "type": "string"
-        },
-        "screen": {
-          "default": "",
-          "description": "Optional active screen filter.",
-          "type": "string"
-        },
-        "types": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Optional node type filters."
         }
       },
       "required": [
@@ -3496,72 +3765,16 @@
     }
   },
   "renforge_select_choice": {
+    "description": "Select a menu choice by case-insensitive text or zero-based index. Text matching prefers an exact match, then uses a case-insensitive substring match. Ambiguous text is refused; use the listed index. Optional observation guards reject stale selections.",
     "annotations": {
-      "destructiveHint": true,
+      "readOnlyHint": false,
       "idempotentHint": false,
-      "openWorldHint": true,
-      "readOnlyHint": false
+      "destructiveHint": true,
+      "openWorldHint": true
     },
-    "description": "Select a menu choice by case-insensitive text or zero-based index. Text matching prefers an exact match, then uses the shortest case-insensitive substring match. Use list output first to avoid ambiguous partial text.",
     "parameters": {
       "additionalProperties": false,
-      "oneOf": [
-        {
-          "properties": {
-            "index": {
-              "anyOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "const": -1
-                }
-              ]
-            },
-            "text": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "text"
-          ]
-        },
-        {
-          "properties": {
-            "index": {
-              "minimum": 0,
-              "type": "integer"
-            },
-            "text": {
-              "anyOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "const": ""
-                }
-              ]
-            }
-          },
-          "required": [
-            "index"
-          ]
-        }
-      ],
       "properties": {
-        "index": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Zero-based choice index fallback when text is omitted."
-        },
         "project_path": {
           "description": "Project root of the running live session.",
           "type": "string"
@@ -3577,12 +3790,104 @@
           ],
           "default": null,
           "description": "Visible text to match; preferred over index."
+        },
+        "index": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Zero-based choice index from list output when text is omitted."
+        },
+        "interaction": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional interaction generation from observe; rejects a stale selection."
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional session identity from observe."
+        },
+        "observation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional observation identity from observe."
         }
       },
       "required": [
         "project_path"
       ],
-      "type": "object"
+      "type": "object",
+      "oneOf": [
+        {
+          "required": [
+            "text"
+          ],
+          "properties": {
+            "text": {
+              "type": "string",
+              "minLength": 1
+            },
+            "index": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "const": -1
+                }
+              ]
+            }
+          }
+        },
+        {
+          "required": [
+            "index"
+          ],
+          "properties": {
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "text": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "const": ""
+                }
+              ]
+            }
+          }
+        }
+      ]
     }
   },
   "renforge_send_input": {
@@ -3751,6 +4056,71 @@
       },
       "required": [
         "project_path"
+      ],
+      "type": "object"
+    }
+  },
+  "renforge_session": {
+    "description": "The canonical play-session lifecycle. action=launch starts the game with agent-mode defaults (saves and preferences in the project's RenForge state folder, apart from the player's and kept across launches; isolated HOME; no Live Editor; transitions and vsync off) and returns status=starting or ready; poll action=status until ready or failed. save and load take a slot name; load returns the restored game's observation, ready for renforge_act; list shows the session's slots and the player's own (player_slots); import copies one player slot into the session's saves (the player's file is only read), so the agent can load and play or test a mod from the player's real progress; stop ends the game and cleans up. launch with label starts the story at that label (for testing and modding): the game leaves its splash screen or main menu for it, and every observation then carries started_at_label, because nothing the story did before the label has happened (a label normally reached with call ends the run when it returns); play from saves instead when the earlier state matters. An unknown label is reported as start_label_error. Server environment variables cover the rare launch settings (RENFORGE_STARTUP_TIMEOUT, RENFORGE_ISOLATION, ...). load and import require authorize=true when RENFORGE_POLICY=enforce, and list shows player_slots only with it.",
+    "annotations": {
+      "readOnlyHint": false,
+      "idempotentHint": false,
+      "destructiveHint": true,
+      "openWorldHint": false
+    },
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "project_path": {
+          "description": "Project root of the game.",
+          "type": "string"
+        },
+        "action": {
+          "description": "launch, status, save, load, list, import, or stop.",
+          "enum": [
+            "launch",
+            "status",
+            "save",
+            "load",
+            "list",
+            "import",
+            "stop"
+          ],
+          "type": "string"
+        },
+        "slot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Slot name for save, load, and import (import takes a name from player_slots)."
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "With launch: start the story at this label (testing and modding)."
+        },
+        "authorize": {
+          "default": false,
+          "description": "Explicitly approve load and import, and reading the player's slots for list, when RENFORGE_POLICY=enforce.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "project_path",
+        "action"
       ],
       "type": "object"
     }

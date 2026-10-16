@@ -7,7 +7,8 @@ Opt-in: these download/use a real Ren'Py SDK and invoke it. Enable with::
         tests/test_integration_sdk_live_demo_acceptance.py
 
 Optionally pin the version with ``RENFORGE_SDK_VERSION`` (default: the
-``DEFAULT_RENPY_VERSION`` RenForge ships with).
+``DEFAULT_RENPY_VERSION`` RenForge ships with). Tests built on the demo game
+use the engine it declares in ``renforge.json`` instead.
 Each test runs against a temp copy of the demo so the committed one is never
 polluted with compiled ``.rpyc``/cache artifacts.
 """
@@ -30,10 +31,15 @@ pytestmark = pytest.mark.skipif(
 _DEMO = Path(__file__).resolve().parents[1] / "examples" / "demo_game"
 
 
-@pytest.fixture(scope="module")
-def sdk():
+@pytest.fixture
+def sdk(request):
     from renforge.sdk import DEFAULT_RENPY_VERSION, get_or_install_sdk
 
+    # The demo pins its engine in renforge.json, so demo-based tests
+    # use that SDK; RENFORGE_SDK_VERSION selects the engine for the minimal
+    # fixture games that exercise the bridge across Ren'Py versions.
+    if "demo_copy" in request.fixturenames:
+        return get_or_install_sdk("stable", project_root=_DEMO)
     return get_or_install_sdk(os.environ.get("RENFORGE_SDK_VERSION", DEFAULT_RENPY_VERSION))
 
 
@@ -455,13 +461,11 @@ def test_live_demo_control_supports_editor_save(sdk, demo_copy: Path) -> None:
             time.sleep(0.1)
         assert status.get("save_enabled") is True, status
 
-        saved = client.click_element(id="rf_save", screen="_renforge_editor_overlay")
-        assert saved.get("ok") is True, saved
-        for _ in range(600):
-            status = client.request("editor_task0_status")
-            if not status.get("save_in_progress"):
-                break
-            time.sleep(0.25)
+        # Script reload can briefly replace the listener. Reuse the acceptance
+        # runner's bounded handshake rather than assuming every poll connects.
+        from renforge.editor_demo_runner import _ed_do_save
+
+        status = _ed_do_save(client, timeout=150)
         assert status.get("status_code") == "reload_committed", status
 
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
@@ -501,6 +505,7 @@ def test_live_send_input_traverses_real_renpy_input(sdk, demo_copy: Path) -> Non
             "mode": "text",
             "characters": 4,
             "submitted": True,
+            "replaced": True,
         }
 
         for _ in range(40):
@@ -764,7 +769,7 @@ def test_live_imagebutton_hover_bounds_and_capture(sdk, demo_copy: Path) -> None
         bounds = client.get_ui_element_bounds(id=button["id"])
         assert bounds["ok"] is True, bounds
         assert bounds["painted_bounds_available"] is True, bounds
-        assert bounds["painted_bounds_source"] == "rendered-alpha"
+        assert bounds["painted_bounds_source"] == "completed-render-alpha"
         assert bounds["state"] == "idle"
         focus = bounds["focus_bounds"]
         painted = bounds["painted_bounds"]
@@ -785,6 +790,85 @@ def test_live_imagebutton_hover_bounds_and_capture(sdk, demo_copy: Path) -> None
         errors = live.get_errors(str(demo_copy))
         assert errors.get("ok") is True, errors
         assert not errors.get("events"), errors
+
+
+def _add_modal_hide_fixture(demo_copy: Path) -> None:
+    _add_hover_fixtures(demo_copy)
+    fixture = demo_copy / "game" / "renforge_sdk_fixtures.rpy"
+    existing = fixture.read_text(encoding="utf-8")
+    if "renforge_sdk_modal_hide" in existing:
+        return
+    fixture.write_text(
+        existing
+        + """
+default renforge_sdk_under_clicks = 0
+
+screen renforge_sdk_underlay():
+    button:
+        xpos 0
+        ypos 0
+        xsize 1920
+        ysize 1080
+        action SetVariable("renforge_sdk_under_clicks", renforge_sdk_under_clicks + 1)
+        text "Under"
+
+screen renforge_sdk_modal_hide():
+    modal True
+    zorder 300
+    imagebutton:
+        xalign 0.5
+        yalign 0.5
+        idle "renforge_sdk_idle"
+        hover "renforge_sdk_hover"
+        action Hide()
+""",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
+def test_live_modal_hide_is_clickable_and_dismisses_its_screen(sdk, demo_copy: Path) -> None:
+    """A modal image button stays clickable over a full-screen control, and Hide() runs in its screen."""
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.observe import classify
+    from renforge.project import RenpyProject
+
+    _add_modal_hide_fixture(demo_copy)
+
+    with launch_with_bridge(sdk, RenpyProject(demo_copy), startup_timeout=90, editor=False) as session:
+        client = session.client
+        from renforge.tools.live import advance_until
+        progress = advance_until(str(demo_copy), max_steps=8, timeout=30)
+        assert progress["stop"] == "choose", progress
+        client.eval_expr('renpy.show_screen("renforge_sdk_underlay")')
+        client.eval_expr('renpy.show_screen("renforge_sdk_modal_hide")')
+        client.eval_expr("renpy.restart_interaction()")
+
+        snapshot = None
+        for _ in range(40):
+            snapshot = classify(client.observe(screenshot=False))
+            if snapshot.get("stable") is True and any(control.get("screen") == "renforge_sdk_modal_hide" for control in snapshot.get("controls", [])):
+                break
+            time.sleep(0.25)
+        assert snapshot is not None and snapshot.get("stable") is True, snapshot
+        assert snapshot.get("controls"), snapshot
+        hide = [
+            control
+            for control in snapshot["controls"]
+            if control.get("screen") == "renforge_sdk_modal_hide"
+            or (control.get("action") or "") == "Hide"
+        ]
+        assert hide, snapshot["controls"]
+        assert hide[0]["covered"] is False, hide[0]
+        assert hide[0]["clickable"] is True
+        for control in snapshot["controls"]:
+            action = control.get("action") or ""
+            if "renforge_sdk_under_clicks" in action or control.get("text") == "Under":
+                assert control["covered"] is True, control
+        reply = client.act(interaction=snapshot["interaction"], control_id=hide[0]["id"])
+        assert reply.get("ok") is True, reply
+        assert client.eval_expr('renpy.get_screen("renforge_sdk_modal_hide") is None') is True
+        assert client.get_var("renforge_sdk_under_clicks") == 0
 
 
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
@@ -936,7 +1020,7 @@ def test_live_scene_tree_perceives_layers_text_and_measures(sdk, demo_copy: Path
         assert what, "no dialogue text appeared"
 
         scene = client.scene_tree(include=["style"])
-        assert scene["ok"] is True
+        assert scene["ok"] is True, scene
         assert scene["window"]["width"] > 0
         assert scene["coordinate_space"] == "logical"
         assert "omitted" in scene
@@ -1232,3 +1316,579 @@ python early:
         assert [_state_snapshot(path) for path in protected] == before
     assert not root.exists()
     assert [_state_snapshot(path) for path in protected] == before
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display")
+def test_live_act_edits_input_then_advances_to_a_decision(sdk, tmp_path: Path) -> None:
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.tools.live import act, observe
+
+    game_project = tmp_path / "play_fixture"
+    (game_project / "game").mkdir(parents=True)
+    (game_project / "game" / "script.rpy").write_text('''
+# Use engine-independent fixture screens, rather than a newer SDK's GUI template.
+screen say(who, what):
+    vbox:
+        if who:
+            text who id "who"
+        text what id "what"
+screen input(prompt):
+    vbox:
+        text prompt
+        input id "input"
+screen choice(items):
+    vbox:
+        for item in items:
+            textbutton item.caption action item.action
+
+default rf_name = ""
+label main_menu:
+    return
+label start:
+    $ rf_name = renpy.input("Name?", default="Prefilled")
+    "Hello [rf_name]."
+    "Yes."
+    "Yes."
+    menu:
+        "Finish":
+            return
+''', encoding="utf-8")
+    with launch_with_bridge(sdk, RenpyProject(game_project), startup_timeout=90, editor=False) as session:
+        snapshot = None
+        for _ in range(80):
+            snapshot = observe(str(game_project), screenshot=False)
+            inputs = [item for item in snapshot.get("controls", []) if item["role"] == "input"]
+            if snapshot.get("stable") and inputs:
+                break
+            time.sleep(0.1)
+        assert snapshot is not None and inputs, snapshot
+
+        edited = act(str(game_project), snapshot["interaction"], inputs[0]["id"], text="Alex",
+                     session_id=snapshot["session_id"], observation_id=snapshot["observation_id"],
+                     submit=False, screenshot=False, timeout=10)
+        assert edited["ok"] and edited["observation_status"] == "ready", edited
+        assert edited["submitted"] is False
+        typed = next(c for c in edited["observation"]["controls"] if c["id"] == inputs[0]["id"])
+        assert typed["value"] == "Alex", typed  # the input reports what is typed so far
+        current = edited["observation"]
+        assert current["forward"] == "choose"
+        assert any(item["role"] == "input" for item in current["controls"])
+        assert session.client.get_var("rf_name") == ""
+
+        progressed = act(str(game_project), current["interaction"], inputs[0]["id"], text="Alex",
+                         session_id=current["session_id"], observation_id=current["observation_id"],
+                         advance=True, timeout=20)
+        assert progressed["ok"] and progressed["observation_status"] == "ready", progressed
+        assert progressed["progress"]["stop"] == "choose", progressed
+        assert session.client.get_var("rf_name") == "Alex"
+        says = [line["what"] for line in progressed["progress"]["crossed"] if line["type"] == "say"]
+        assert "Hello Alex." in says, says
+        assert says.count("Yes.") == 2, says
+        import hashlib
+        assert hashlib.sha256(progressed["_png"]).hexdigest() == progressed["observation"]["frame_hash"]
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display")
+@pytest.mark.parametrize("mode", ["skip", "dismiss"])
+def test_live_bounded_progression_restores_preferences_and_stops_at_custom_hub(sdk, tmp_path, mode):
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.tools.live import advance_until
+
+    project = tmp_path / "bounded_progression"
+    (project / "game").mkdir(parents=True)
+    (project / "game" / "script.rpy").write_text('''
+screen say(who, what):
+    vbox:
+        if who:
+            text who id "who"
+        text what id "what"
+screen navigation_hub():
+    textbutton "Enter" action SetVariable("rf_clicked", True)
+default rf_clicked = False
+define hero = Character("[rf_name] (thinking)")
+default rf_name = "Nathan"
+label main_menu:
+    return
+label start:
+    $ _preferences.skip_unseen = False
+    $ _preferences.skip_after_choices = True
+    $ _preferences.text_cps = 40
+    $ _preferences.transitions = 2
+    hero "Hello [rf_name]."
+    "Yes."
+    "Yes."
+    $ renpy.pause(0.2, hard=True)
+    "Still here."
+    show screen navigation_hub
+    "Pick a destination."
+    return
+''', encoding="utf-8")
+    with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
+        result = advance_until(str(project), mode=mode, max_steps=20, timeout=20, screenshot=False)
+        assert result["stop"] == "choose", result
+        assert result["mode"] == mode
+        assert result["observation_status"] == "ready", result
+        assert result["observation"]["dialogue"]["what"] == "Pick a destination."
+        assert any(item["screen"] == "navigation_hub" for item in result["observation"]["controls"])
+        assert session.client.get_var("rf_clicked") is False
+        assert session.client.eval_expr("_preferences.skip_unseen") is False
+        assert session.client.eval_expr("_preferences.skip_after_choices") is True
+        assert session.client.eval_expr("_preferences.text_cps") == 40
+        assert session.client.eval_expr("_preferences.transitions") == 2
+        assert session.client.eval_expr("__import__('renpy').config.skipping") is None
+        assert "_png" not in result
+        says = [line for line in result["crossed"] if line["type"] == "say"]
+        assert any(line["who"] == "Nathan (thinking)" and line["what"] == "Hello Nathan." for line in says)
+        assert sum(line["what"] == "Yes." for line in says) == 2
+        assert result["crossed_truncated"] is False
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display")
+def test_live_native_skip_obeys_step_budget_and_returns_next_stable_line(sdk, tmp_path):
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.tools.live import advance_until
+    project = tmp_path / "step_budget"
+    (project / "game").mkdir(parents=True)
+    (project / "game" / "script.rpy").write_text('''
+screen say(who, what):
+    text what id "what"
+screen choice(items):
+    vbox:
+        for item in items:
+            textbutton item.caption action item.action
+default rf_line = 0
+default rf_finished = False
+label main_menu:
+    return
+label start:
+    while rf_line < 10:
+        $ rf_line += 1
+        "Line [rf_line]."
+    menu:
+        "Finish":
+            $ rf_finished = True
+            return
+''', encoding="utf-8")
+    with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
+        first = advance_until(str(project), max_steps=2, timeout=10, screenshot=False)
+        assert first["stop"] == "max_steps" and first["steps"] == 2, first
+        assert first["observation_status"] == "ready", first
+        assert first["observation"]["dialogue"]["what"] == "Line 3."
+        assert session.client.get_var("rf_line") == 3
+        assert session.client.eval_expr("__import__('renpy').config.skipping") is None
+        second = advance_until(str(project), max_steps=20, timeout=15, screenshot=False)
+        assert second["stop"] == "choose", second
+        assert second["crossed_truncated"] is False
+        assert session.client.get_var("rf_finished") is False
+        assert session.client.get_var("rf_line") == 10
+        assert session.client.eval_expr("__import__('renpy').config.skipping") is None
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display")
+@pytest.mark.parametrize("mode", ["skip", "dismiss"])
+@pytest.mark.parametrize("terminal", ["return", "$ renpy.full_restart()"])
+def test_live_ending_detection_distinguishes_script_end_from_menu_restart(sdk, tmp_path, mode, terminal):
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.tools.live import act, advance_until, observe
+    project = tmp_path / "ending_detection"
+    (project / "game").mkdir(parents=True)
+    (project / "game" / "script.rpy").write_text('''
+screen main_menu():
+    textbutton "Begin" action Start("chapter")
+screen say(who, what):
+    text what id "what"
+label main_menu:
+    call screen main_menu
+    return
+label start:
+    jump chapter
+label chapter:
+    call helper
+    "Final line."
+    %s
+label helper:
+    "A called scene."
+    return
+''' % terminal, encoding="utf-8")
+    with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
+        initial = advance_until(str(project), max_steps=10, timeout=15, screenshot=False, mode=mode)
+        assert initial["stop"] == "main_menu", initial
+        assert initial["ending"] is None
+        assert initial["observation"]["lifecycle"]["phase"] == "main_menu"
+        start = next(control for control in initial["observation"]["controls"] if control["text"] == "Begin")
+        result = act(str(project), control_id=start["id"], interaction=initial["observation"]["interaction"],
+                     advance=True, mode=mode, max_steps=10, timeout=15, screenshot=False)
+        assert result["action_outcome"] == "succeeded", result
+        progress = result["progress"]
+        expected = "end" if terminal == "return" else "main_menu"
+        assert progress["stop"] == expected, result
+        assert progress["observation_status"] == "ready", result
+        assert progress["crossed_truncated"] is False
+        assert session.client.eval_expr("__import__('renpy').config.skipping") is None
+        if terminal == "return":
+            assert progress["ending"]["reason"] == "script_return", result
+            assert progress["ending"]["statement"]["file"].endswith("script.rpy")
+            assert progress["ending"]["statement"]["line"] == 14
+            # A subsequent observation/call must retain the end evidence.
+            assert observe(str(project), screenshot=False)["lifecycle"]["ending"] == progress["ending"]
+            assert advance_until(str(project), timeout=10, screenshot=False, mode=mode)["stop"] == "end"
+        else:
+            assert progress["ending"] is None, result
+        # Beginning another run clears the previous ending before progressing.
+        menu = observe(str(project), screenshot=False)
+        start = next(control for control in menu["controls"] if control["text"] == "Begin")
+        restarted = act(str(project), control_id=start["id"], interaction=menu["interaction"], screenshot=False)
+        assert restarted["observation"]["lifecycle"] == {"phase": "playing", "ending": None}
+
+
+@pytest.mark.skipif(not os.environ.get('DISPLAY'), reason='live bridge needs a display')
+def test_live_coordinate_click_supports_render_hover_custom_displayable(sdk, tmp_path, monkeypatch):
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+
+    project = tmp_path / 'render_hover_input'
+    (project / 'game').mkdir(parents=True)
+    (project / 'game' / 'script.rpy').write_text('''
+init python:
+    import pygame_sdl2
+    class RenderHoverTarget(renpy.Displayable):
+        def __init__(self):
+            super(RenderHoverTarget, self).__init__()
+            self.pointer = (-1, -1)
+            self.hover = False
+        def render(self, width, height, st, at):
+            result = renpy.render(Solid("#4488ff", xsize=120, ysize=80), width, height, st, at)
+            self.hover = result.is_pixel_opaque(*self.pointer)
+            return result
+        def event(self, ev, x, y, st):
+            self.pointer = (x, y)
+            renpy.redraw(self, 0)
+            if ev.type == pygame_sdl2.MOUSEBUTTONUP and ev.button == 1 and self.hover:
+                renpy.store.rf_clicked = True
+                return True
+screen target():
+    add RenderHoverTarget() xpos 240 ypos 180
+default rf_clicked = False
+label main_menu:
+    jump start
+label start:
+    call screen target
+    "Clicked."
+    return
+''', encoding='utf-8')
+    with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if any(item['name'] == 'target' for item in session.client.get_state().get('screens', [])):
+                break
+            time.sleep(0.1)
+        from renforge.observe import apply_screenshot, classify
+        import renforge.util.images as images
+        monkeypatch.setattr(images, 'MCP_PNG_MAX_BYTES', 512)
+        raw, png = apply_screenshot(session.client.observe(screenshot=True))
+        snapshot = classify(raw)
+        candidate = next(item for item in snapshot['input_candidates'] if item['screen'] == 'target')
+        assert candidate['bounds'] == {'x': 240, 'y': 180, 'width': 120, 'height': 80}, candidate
+        assert snapshot['omitted']['unclassified'] is True
+        assert png and len(png) <= 512
+        frame = snapshot['frame']
+        assert frame['scaled']
+        x = 270 * frame['width'] / frame['logical_width']
+        y = 200 * frame['height'] / frame['logical_height']
+        reply = session.client.click_at(x, y, coordinate_space='screenshot', expected_frame_id=frame)
+        assert reply['ok'], reply
+        assert session.client.get_var('rf_clicked') is True
+        assert session.client.eval_expr('__import__("renpy").test.testmouse.mouse_pos') is None
+
+
+@pytest.mark.skipif(not os.environ.get('DISPLAY'), reason='live bridge needs a display')
+def test_live_custom_layer_scaled_scrolling_menu(sdk, tmp_path):
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.observe import classify
+
+    project = tmp_path / 'menu_geometry'
+    (project / 'game').mkdir(parents=True)
+    (project / 'game' / 'script.rpy').write_text('''
+define config.layers = ["master", "transient", "screens", "overlay", "branch_layer"]
+define config.choice_layer = "branch_layer"
+default rf_selected = 0
+screen branch_picker(items):
+    viewport id "scroller":
+        xpos 100 ypos 80 xsize 600 ysize 100
+        draggable True mousewheel True
+        at Transform(zoom=0.5)
+        vbox:
+            for item in items:
+                textbutton item.caption action item.action ysize 90
+label main_menu:
+    jump start
+label start:
+    menu (screen="branch_picker"):
+        "Choose an entry."
+        "Repeat":
+            $ rf_selected = 1
+        "Repeat":
+            $ rf_selected = 2
+        "Last":
+            $ rf_selected = 3
+    "Selected."
+    return
+''', encoding='utf-8')
+    with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            snapshot = classify(session.client.observe(screenshot=False))
+            choices = session.client.list_menu_choices()
+            if snapshot['stable'] and len(choices) == 3:
+                break
+            time.sleep(0.1)
+        assert [choice['text'] for choice in choices] == ['Repeat', 'Repeat', 'Last']
+        menu = [item for item in snapshot['controls']
+                if item['screen'] == 'branch_picker' and item['role'] == 'button' and item['semantic']]
+        assert len(menu) == 3, snapshot
+        assert all(item['enabled'] and item['clickable'] for item in menu)
+        assert {item['id'] for item in menu} == {'branch_picker/item/0', 'branch_picker/item/1', 'branch_picker/item/2'}
+        # Clipped entries have no focus rectangle but still name their source line.
+        assert all(item['source'] and item['source'].startswith('game/') for item in menu), menu
+        viewport = next(item for item in snapshot['controls'] if item['role'] == 'viewport')
+        assert viewport['bounds'] == {'x': 100, 'y': 80, 'width': 300, 'height': 50}, viewport
+        listed = session.client.list_ui_elements()
+        # Upstream ids stay on list_ui_elements; control_id links each to observe.
+        assert {item['control_id'] for item in listed} == {item['id'] for item in snapshot['controls']}
+        assert session.client.select_choice(text='Repeat')['ok'] is False
+        refused = session.client.select_choice(index=choices[-1]['index'], interaction=snapshot['interaction'], observation_id='stale')
+        assert refused['ok'] is False
+        assert session.client.get_var('rf_selected') == 0
+        selected = session.client.act(control_id='branch_picker/item/2', interaction=snapshot['interaction'],
+            session_id=snapshot['session_id'], observation_id=snapshot['observation_id'])
+        assert selected['ok'], selected
+        assert selected['via'] == 'action'
+        assert session.client.get_var('rf_selected') == 3
+
+
+@pytest.mark.skipif(not os.environ.get('DISPLAY'), reason='live bridge needs a display')
+@pytest.mark.parametrize('terminal', ['custom_screen', 'clean_exit', 'nonzero_exit'])
+def test_live_terminal_boundaries_do_not_invent_story_endings(sdk, tmp_path, monkeypatch, terminal):
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.tools import live
+
+    project = tmp_path / 'terminal_boundary'
+    (project / 'game').mkdir(parents=True)
+    ending = {'custom_screen': 'call screen terminal',
+              'clean_exit': '$ renpy.quit(status=0)',
+              'nonzero_exit': '$ renpy.quit(status=1)'}[terminal]
+    (project / 'game' / 'script.rpy').write_text('''
+screen main_menu():
+    textbutton "Begin" action Start("chapter")
+screen say(who, what):
+    text what id "what"
+screen terminal():
+    text "The End"
+label main_menu:
+    call screen main_menu
+    return
+label start:
+    jump chapter
+label chapter:
+    "Final line."
+    %s
+''' % ending, encoding='utf-8')
+    with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
+        monkeypatch.setitem(live._SESSIONS, live._key(project), session)
+        initial = live.advance_until(str(project), timeout=10, screenshot=False)
+        start = next(control for control in initial['observation']['controls'] if control['text'] == 'Begin')
+        result = live.act(str(project), control_id=start['id'], interaction=initial['observation']['interaction'],
+            advance=True, timeout=10, screenshot=False)
+        progress = result['progress']
+        assert progress['stop'] != 'end', result
+        assert progress['ending'] is None, result
+        if terminal == 'custom_screen':
+            assert progress['stop'] == 'none', result
+            assert result['observation']['lifecycle'] == {'phase': 'playing', 'ending': None}
+        else:
+            session.process.wait(timeout=10)
+            # A fresh query has verified termination, even if the first lost
+            # reply preceded the OS exit notification.
+            status = live.advance_until(str(project), timeout=2, screenshot=False)
+            assert status['stop'] == ('exited' if terminal == 'clean_exit' else 'crash'), status
+            assert status['ending'] is None
+            assert status['process']['exit_code'] == (0 if terminal == 'clean_exit' else 1)
+
+
+_RPYC_OPTIONS = """define config.name = "RenForge Explain"
+define config.version = "0.0.1"
+"""
+
+_RPYC_SCRIPT = """default rf_gate = True
+
+label main_menu:
+    return
+
+screen rf_hub():
+    modal True
+    if rf_gate:
+        textbutton "Door" action Jump("rf_room")
+    textbutton "Look" action NullAction()
+
+label start:
+    menu:
+        "Open" if rf_gate:
+            jump rf_room
+        "Leave":
+            pass
+    call screen rf_hub
+    return
+
+label rf_room:
+    "Room."
+    return
+"""
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
+def test_live_explain_reads_rpyc_only_game(sdk, tmp_path: Path) -> None:
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.observe import classify
+    from renforge.project import RenpyProject
+
+    project = tmp_path / "rpyc_only"
+    game = project / "game"
+    game.mkdir(parents=True)
+    (game / "script.rpy").write_text(_RPYC_SCRIPT, encoding="utf-8")
+    (game / "options.rpy").write_text(_RPYC_OPTIONS, encoding="utf-8")
+
+    # The first launch compiles the scripts to .rpyc; then the sources go away.
+    with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False):
+        pass
+    for source in game.glob("*.rpy"):
+        source.unlink()
+    assert list(game.glob("*.rpyc")), "expected compiled scripts"
+
+    with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
+        index = session.client.explain()
+        assert index["ok"] is True, index
+        labels = {item["name"]: item for item in index["labels"]}
+        assert {"start", "rf_room"} <= set(labels), index
+        assert labels["start"]["file"] == "game/script.rpy", labels["start"]
+        assert index["files"]["on_disk"] == 0, index["files"]
+        assert any(item["name"] == "rf_hub" for item in index["screens"]), index["screens"]
+
+        # Wait for the start menu to appear, then explain the label.
+        for _ in range(40):
+            if any(control.get("text") == "Leave" for control in session.client.list_ui_elements()):
+                break
+            time.sleep(0.25)
+        start = session.client.explain(label="start")
+        assert start["ok"] is True, start
+        assert any(row["kind"] == "choice" and row["text"] == "Open if rf_gate" for row in start["statements"]), start
+
+        selected = session.client.select_choice(text="Leave")
+        assert selected["ok"] is True, selected
+
+        # The hub is reached through "call screen rf_hub".
+        door = None
+        for _ in range(40):
+            snapshot = classify(session.client.observe(screenshot=False))
+            door = next((c for c in snapshot.get("controls") or [] if c.get("text") == "Door"), None)
+            if door is not None:
+                break
+            time.sleep(0.25)
+        assert door is not None, snapshot.get("controls")
+
+        traced = session.client.explain(id=door["id"])
+        assert traced["ok"] is True, traced
+        assert traced["statement"]["keywords"]["action"] == 'Jump("rf_room")', traced
+        assert traced["conditions"] == ["if rf_gate"], traced
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
+def test_live_play_loop_reaches_the_gate_refuses_stale_marks_repeats_and_chooses(sdk, demo_copy: Path) -> None:
+    """The canonical loop on the demo, in one launch.
+
+    observe; act with no id crosses the narration and stops on the modal gate;
+    an old observation is refused; replaying from a save marks lines seen; a
+    choice takes its branch. editor stays off so its screens are not choices.
+    """
+    import hashlib
+
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.tools.live import observe, play
+
+    def first_line():
+        for _ in range(100):
+            snapshot = observe(str(demo_copy), screenshot=False)
+            if snapshot.get("stable") and snapshot.get("dialogue"):
+                return snapshot
+            time.sleep(0.1)
+        raise AssertionError(snapshot)
+
+    with launch_with_bridge(sdk, RenpyProject(demo_copy), startup_timeout=90, editor=False) as session:
+        first = first_line()
+        assert first["seen"] is False, first
+        assert session.client.save_slot("start")["ok"]
+
+        gate = play(str(demo_copy), first["observation_id"])
+        assert gate["ok"] and gate["action_outcome"] == "none", gate
+        progress, observation = gate["progress"], gate["observation"]
+        assert progress["stop"] == "choose" and progress["steps"] >= 1, progress
+        assert observation["label"] == "village_gate", observation
+        # The observed first line is not repeated; the transcript starts after it.
+        assert first["dialogue"]["what"] == "The village of Emberfall sleeps under a bruised dawn sky."
+        crossed = progress["crossed"]
+        wisp = next(i for i, item in enumerate(crossed) if item.get("who") == "Wisp")
+        village = next(i for i, item in enumerate(crossed) if item.get("label") == "village_gate")
+        assert wisp < village, crossed
+        assert not any(str(item.get("label", "")).startswith("_") for item in crossed), crossed
+        assert not any(item.get("seen") for item in crossed), crossed
+        control_ids = {item["id"] for item in observation["controls"]}
+        assert {"village_gate_choices/demo_lantern_take", "village_gate_choices/demo_lantern_decline",
+                "village_gate_choices/demo_locked_expr"} <= control_ids, observation
+        assert all(item.get("screen") != "quick_menu" for item in observation["controls"])
+        png = gate.get("_png")
+        assert isinstance(png, bytes) and png.startswith(b"\x89PNG"), gate.keys()
+        assert hashlib.sha256(png).hexdigest() == observation["frame_hash"]
+
+        label_before = session.client.get_state().get("current_label")
+        stale = play(str(demo_copy), first["observation_id"], "village_gate_choices/demo_lantern_take",
+                     screenshot=False)
+        assert stale["ok"] is False and stale["error"] == "stale", stale
+        assert session.client.get_state().get("current_label") == label_before
+        assert session.client.get_var("courage") == 0
+
+        session.client.load_slot("start")
+        again = play(str(demo_copy), first_line()["observation_id"], screenshot=False)
+        assert again["progress"]["stop"] == "choose", again
+        repeats = [item for item in again["progress"]["crossed"] if item["type"] == "say"]
+        assert repeats and all(item.get("seen") is True for item in repeats), again["progress"]["crossed"]
+
+        chose = play(str(demo_copy), again["observation"]["observation_id"],
+                     "village_gate_choices/demo_lantern_take", screenshot=False)
+        assert chose["ok"] and chose["action_outcome"] == "succeeded", chose
+        assert session.client.get_var("courage") == 1
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
+def test_live_session_starts_the_story_at_a_label(sdk, demo_copy: Path) -> None:
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.tools.live import observe, play
+
+    env = {"RENFORGE_BRIDGE_START_LABEL": "village_gate"}
+    with launch_with_bridge(sdk, RenpyProject(demo_copy), startup_timeout=90, editor=False, extra_env=env):
+        for _ in range(100):
+            snapshot = observe(str(demo_copy), screenshot=False)
+            if snapshot.get("stable") and snapshot.get("label") == "village_gate":
+                break
+            time.sleep(0.1)
+        assert snapshot["label"] == "village_gate", snapshot
+        assert snapshot["started_at_label"] == "village_gate"
+        gate = play(str(demo_copy), snapshot["observation_id"], screenshot=False)
+        assert gate["progress"]["stop"] == "choose", gate
+        assert gate["observation"]["started_at_label"] == "village_gate"

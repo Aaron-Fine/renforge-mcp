@@ -7,6 +7,7 @@ from typing import Any
 
 from .. import __version__, session_registry
 from ..project import discover_project_from
+from ..toolsets import enabled_toolsets
 
 TOOL_NAMES = (
     "renforge_info",
@@ -41,13 +42,29 @@ def build_wrappers(context):
             if detected is not None:
                 active_project = str(detected)
                 project_source = "cwd"
+        toolsets = enabled_toolsets()
         payload: dict[str, Any] = {
             "ok": True,
             "version": __version__,
             "active_project": active_project,
             "project_source": project_source,
             "dashboard": dashboard,
-            "live_editor": {
+            "toolsets": toolsets,
+        }
+        if "play" in toolsets:
+            payload["play"] = {
+                "loop": [
+                    'renforge_session(action="launch"), then action="status" until ready',
+                    "renforge_observe: the screen, its controls, and forward (what moves the game on)",
+                    "renforge_act(observation_id, id=<control id> | key/<name> | nothing to continue): "
+                    "returns the next observation, so act again from it",
+                    "renforge_explain(id=...) or (search=...): the code behind a control or text",
+                    'renforge_session(action="save" | "load" | "stop")',
+                ],
+                "guide": "docs/MCP.md#look-then-act",
+            }
+        if "editor" in toolsets:
+            payload["live_editor"] = {
                 "enabled_by_default": True,
                 "launch_tool": "renforge_launch",
                 "guide": "docs/LIVE_EDITOR.md",
@@ -67,8 +84,7 @@ def build_wrappers(context):
                     "renforge_editor",
                     "renforge_stop",
                 ],
-            },
-        }
+            }
         if active_project is None:
             payload["hint"] = (
                 "No dashboard, serve default, or Ren'Py project near the "

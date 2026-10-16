@@ -420,9 +420,10 @@ def test_bridge_info_rejects_require_ready_on_starting(tmp_path: Path) -> None:
     root = _control_project(tmp_path)
     write_starting_bridge_info(root, session_id=_session_id(), token=_token())
 
-    with pytest.raises(BridgeProtocolError, match="^bridge metadata failed validation$") as excinfo:
+    with pytest.raises(BridgeProtocolError, match="^the game is still starting") as excinfo:
         read_bridge_info(root, require_ready=True)
     assert "token" not in str(excinfo.value)
+    assert excinfo.value.code == "GAME_STARTING"
 
 
 def test_bridge_info_rejects_expected_session_mismatch(tmp_path: Path) -> None:
@@ -544,9 +545,10 @@ def test_from_project_rejects_starting_bridge_info(tmp_path: Path) -> None:
     root = _control_project(tmp_path)
     write_starting_bridge_info(root, session_id=_session_id(), token=_token())
 
-    with pytest.raises(BridgeProtocolError, match="^bridge metadata failed validation$") as excinfo:
+    with pytest.raises(BridgeProtocolError, match="^the game is still starting") as excinfo:
         BridgeClient.from_project(root)
     assert "token" not in str(excinfo.value)
+    assert excinfo.value.code == "GAME_STARTING"
 
 
 def test_from_project_ignores_legacy_bridge_json(tmp_path: Path) -> None:
@@ -567,7 +569,7 @@ def test_from_project_ignores_legacy_bridge_json(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(BridgeProtocolError, match="^bridge metadata failed validation$") as excinfo:
+    with pytest.raises(BridgeProtocolError, match="^no game is running for this project") as excinfo:
         BridgeClient.from_project(root)
     assert "legacy-token" not in str(excinfo.value)
     assert "12345" not in str(excinfo.value)
@@ -596,3 +598,19 @@ def test_from_project_rejects_non_int_version_types(tmp_path: Path) -> None:
         _write_ready_bridge_info(root, protocol_version=bad_version)
         with pytest.raises(BridgeProtocolError, match="^bridge metadata failed validation$"):
             BridgeClient.from_project(root)
+
+
+def test_from_project_without_a_launch_says_to_launch(tmp_path: Path) -> None:
+    """A project never launched (no control directory) or stopped (no bridge.json)."""
+    from renforge.bridge.client import BridgeNotRunningError
+    from renforge.bridge.control import ensure_control_dir
+
+    root = _control_project(tmp_path)
+    with pytest.raises(BridgeNotRunningError, match='renforge_session\\(action="launch"\\)') as excinfo:
+        BridgeClient.from_project(root)
+    assert excinfo.value.code == "NO_RUNNING_GAME"
+
+    ensure_control_dir(root)
+    with pytest.raises(BridgeNotRunningError) as excinfo:
+        BridgeClient.from_project(root)
+    assert excinfo.value.code == "NO_RUNNING_GAME"

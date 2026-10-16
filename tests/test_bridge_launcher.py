@@ -204,6 +204,10 @@ def test_launch_with_bridge_builds_run_command(monkeypatch, tmp_path: Path, warp
     assert all(ch in "0123456789abcdef" for ch in env["RENFORGE_BRIDGE_TOKEN"])
     assert env["RENFORGE_BRIDGE_PROJECT_ROOT"] == str(project_root.resolve())
     assert env["RENFORGE_BRIDGE_CONTROL_DIR"] == str(control_dir(project_root))
+    # Isolated preferences: transitions are turned off for the agent.
+    assert env["RENFORGE_BRIDGE_TRANSITIONS"] == "off"
+    # Frames never wait for the display unless the user asks for vsync.
+    assert env["RENPY_GL_VSYNC"] == "0"
     # A crash never opens traceback.txt in the user's editor.
     editor_scope: dict = {}
     exec(Path(env["RENPY_EDIT_PY"]).read_text(encoding="utf-8"), editor_scope)

@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..compact import compact_observation
+
 TOOL_NAMES = (
     "renforge_advance",
+    "renforge_observe",
+    "renforge_act",
     "renforge_control",
     "renforge_send_input",
     "renforge_saves",
@@ -26,6 +30,21 @@ TOOL_NAMES = (
 def build_wrappers(context):
     live = context.live
     _log_tool_call = context.log_tool_call
+    _png_content = context.png_content
+
+    def _image_result(result):
+        if not isinstance(result, dict):
+            return result
+        png = result.pop("_png", None)
+        return [result, _png_content(png)] if isinstance(png, bytes) and png else result
+
+    def _compact(result):
+        """Observations from the play tools are always compact."""
+        if not isinstance(result, dict):
+            return result
+        if isinstance(result.get("observation"), dict):
+            return dict(result, observation=compact_observation(result["observation"]))
+        return compact_observation(result)
 
     def renforge_advance(project_path: str) -> dict:
         """Advance the current dialogue."""
@@ -36,6 +55,42 @@ def build_wrappers(context):
             fn=live.advance,
             args=(project_path,),
             kwargs={},
+        )
+
+    def renforge_observe(project_path: str, screenshot: bool = True):
+        """Read the current interaction snapshot, optionally with its PNG."""
+
+        def _tool() -> Any:
+            return _image_result(_compact(live.observe(project_path, screenshot=screenshot)))
+
+        return _log_tool_call(
+            name="renforge_observe",
+            params={"project_path": project_path, "screenshot": screenshot},
+            project_root=project_path,
+            fn=_tool,
+            args=(),
+            kwargs={},
+        )
+
+    def renforge_act(
+        project_path: str,
+        observation_id: str,
+        id: str | None = None,
+        value: str | float | bool | dict[str, float] | None = None,
+        screenshot: bool = True,
+        timeout: float = 30.0,
+    ):
+        """Act on one control, a key, or nothing, then continue to the next decision."""
+        params = {"project_path": project_path, "observation_id": observation_id, "id": id,
+                  "value": value, "screenshot": screenshot, "timeout": timeout}
+
+        def _tool():
+            return _image_result(_compact(live.play(
+                project_path, observation_id, id, value, screenshot=screenshot, timeout=timeout)))
+
+        return _log_tool_call(
+            name="renforge_act", params=params, project_root=project_path,
+            fn=_tool, args=(), kwargs={},
         )
 
 
@@ -85,8 +140,9 @@ def build_wrappers(context):
     ) -> dict:
         """Send exactly one input mode: text, named key, or scroll object.
 
-        ``text`` posts character-by-character TEXTINPUT events to a focused
-        Ren'Py Input; ``submit`` optionally presses Enter after the text.
+        ``text`` replaces the contents of a focused Ren'Py Input, then
+        optionally presses Enter. A widget with no input value still receives
+        one TEXTINPUT event per character. ``submit`` is only valid with text.
         ``key`` accepts readable names such as enter, esc, arrows, pageup,
         pagedown, backspace, delete, home, end, space, tab, and function keys.
         ``scroll`` is ``{"x": ..., "y": ..., "direction": "up"|"down"}``
@@ -169,17 +225,23 @@ def build_wrappers(context):
         project_path: str,
         text: str | None = None,
         index: int | None = None,
+        interaction: int | None = None,
+        session_id: str | None = None,
+        observation_id: str | None = None,
     ) -> dict:
         """Select a menu choice by visible text (preferred) or by index."""
         return _log_tool_call(
             name="renforge_select_choice",
-            params={"project_path": project_path, "text": text, "index": index},
+            params={"project_path": project_path, "text": text, "index": index, "interaction": interaction, "session_id": session_id, "observation_id": observation_id},
             project_root=project_path,
             fn=live.select_choice,
             args=(project_path,),
             kwargs={
                 "text": text or None,
-                "index": index if isinstance(index, int) and index >= 0 else None,
+                "index": index,
+                "interaction": interaction,
+                "session_id": session_id,
+                "observation_id": observation_id,
             },
         )
 
@@ -355,7 +417,7 @@ def build_wrappers(context):
         project_path: str,
         x: float,
         y: float,
-        expected_frame_id: str = "",
+        expected_frame_id: str | dict[str, Any] = "",
         expected_state: dict[str, Any] | None = None,
         coordinate_space: str = "logical",
     ) -> dict:

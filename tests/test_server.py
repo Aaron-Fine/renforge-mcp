@@ -70,9 +70,13 @@ EXPECTED_TOOLS = {
     "renforge_inspect_screen",
     "renforge_game_state_compact",
     "renforge_advance",
+    "renforge_observe",
+    "renforge_act",
+    "renforge_session",
     "renforge_control",
     "renforge_send_input",
     "renforge_saves",
+    "renforge_mod",
     "renforge_list_choices",
     "renforge_select_choice",
     "renforge_list_ui_elements",
@@ -95,6 +99,7 @@ EXPECTED_TOOLS = {
     "renforge_position_element",
     "renforge_diff_screenshots",
     "renforge_scene_tree",
+    "renforge_explain",
     "renforge_measure",
     "renforge_hit_test",
     "renforge_run_scenario",
@@ -248,12 +253,82 @@ def test_create_app_registers_expected_tools() -> None:
 
     tools = asyncio.run(app.list_tools())
     names = {tool.name for tool in tools if tool.name.startswith("renforge_")}
-    assert len(EXPECTED_TOOLS) == 55
+    assert len(EXPECTED_TOOLS) == 60
     assert EXPECTED_TOOLS == set(TOOL_DEFINITIONS) == names
     instructions = getattr(app, "instructions", "") or ""
     assert "renforge_info" in instructions or not hasattr(app, "instructions")
-    for tool in ("renforge_control", "renforge_wait_until", "renforge_get_errors"):
+    # The instructions teach the play loop: one tool per task.
+    for tool in ("renforge_session", "renforge_observe", "renforge_act", "renforge_explain", "renforge_mod"):
         assert tool in instructions or not hasattr(app, "instructions")
+
+
+def test_session_load_returns_the_restored_observation(tmp_path, monkeypatch) -> None:
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    from fastmcp import Client
+
+    from renforge.tools import live
+
+    # The bridge answers before the engine restarts into the save, naming the
+    # old label; the session waits for the restored game instead.
+    monkeypatch.setattr(live, "saves", lambda *a, **k: {
+        "ok": True, "slot": "a", "restored_label": "before_load", "restarting": True})
+    snapshots = iter([{"stable": False}, {"stable": True, "observation_id": "obs_2", "label": "loaded",
+                                          "controls": [], "dialogue": None}])
+    monkeypatch.setattr(live, "observe", lambda *a, **k: next(snapshots))
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    async def _call():
+        async with Client(create_app()) as client:
+            return await client.call_tool("renforge_session",
+                                          {"project_path": str(tmp_path), "action": "load", "slot": "a"})
+
+    payload = json.loads(next(block.text for block in asyncio.run(_call()).content if block.type == "text"))
+    assert payload == {"ok": True, "slot": "a",
+                       "observation": {"stable": True, "observation_id": "obs_2", "label": "loaded", "controls": []}}
+
+
+def test_session_lists_and_imports_the_players_slots(tmp_path, monkeypatch) -> None:
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    from fastmcp import Client
+
+    from renforge.state import project_state_dir
+    from renforge.tools import live
+
+    from renforge.save_isolation import host_renpy_root
+
+    home = tmp_path / "home"
+    # Ren'Py's save root is ~/.renpy, ~/Library/RenPy, or %APPDATA%/RenPy.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    player = host_renpy_root(home=home) / "archived-game"
+    player.mkdir(parents=True)
+    (player / "1-1-LT1.save").write_bytes(b"PLAYER")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    # Only the running game knows its save folder when it ships no loose .rpy.
+    monkeypatch.setattr(live, "saves", lambda *a, **k: {"ok": True, "slots": [], "save_directory": "archived-game"})
+
+    async def _call(**args):
+        async with Client(create_app()) as client:
+            result = await client.call_tool("renforge_session", {"project_path": str(project), **args})
+        return json.loads(next(block.text for block in result.content if block.type == "text"))
+
+    assert asyncio.run(_call(action="list")) == {"ok": True, "slots": [], "player_slots": [{"name": "1-1"}]}
+    assert asyncio.run(_call(action="import", slot="1-1"))["replaced"] is False
+    assert (project_state_dir(project) / "saves" / "1-1-LT1.save").read_bytes() == b"PLAYER"
+    assert asyncio.run(_call(action="import", slot="1-1"))["replaced"] is True
+    assert asyncio.run(_call(action="import", slot="9-9"))["ok"] is False
+    assert (player / "1-1-LT1.save").read_bytes() == b"PLAYER"
+
+    # Under enforce, reading the player's saves needs authorize, as for list_user.
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    hidden = asyncio.run(_call(action="list"))
+    assert "player_slots" not in hidden and "authorize=true" in hidden["player_slots_hidden"]
+    assert asyncio.run(_call(action="list", authorize=True))["player_slots"] == [{"name": "1-1"}]
+    assert asyncio.run(_call(action="import", slot="1-1"))["code"] == "POLICY_DENIED"
+    assert asyncio.run(_call(action="import", slot="1-1", authorize=True))["ok"] is True
 
 
 def test_live_tools_error_cleanly_without_a_running_game(tmp_path) -> None:
@@ -1850,3 +1925,34 @@ def test_measure_tool_dispatches_action_and_targets(tmp_path, monkeypatch) -> No
     assert calls["action"] == "align"
     assert calls["targets"] == ["a", "b"]
     assert calls["tolerance"] == 2
+
+
+def test_session_launch_keeps_its_own_home_even_when_isolation_defaults_to_existing(tmp_path, monkeypatch) -> None:
+    """The policy calls a session launch isolated, so RENFORGE_ISOLATION=existing must not hand it the player's HOME."""
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    import threading
+    from pathlib import Path
+
+    from fastmcp import Client
+
+    from renforge import dashboard_client
+    from renforge.tools import live
+
+    monkeypatch.setenv("RENFORGE_ISOLATION", "existing")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(dashboard_client, "launch_game", lambda *a, **k: None)
+    captured: dict = {}
+    monkeypatch.setattr(live, "launch_game", lambda *a, **k: captured.update(k) or {"ok": True})
+
+    def fake_start_launch(project_path, launch, editor=True, requirements=None):
+        return launch(Path(project_path), threading.Event())
+
+    monkeypatch.setattr(live, "start_launch", fake_start_launch)
+
+    async def _call():
+        async with Client(create_app()) as client:
+            return await client.call_tool("renforge_session", {"project_path": str(tmp_path), "action": "launch"})
+
+    asyncio.run(_call())
+    assert captured["home"] == "temporary"
+    assert captured["editor"] is False

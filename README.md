@@ -182,15 +182,24 @@ JSON summary of the project (labels, scripts, assets, and related metadata).
   inspectable. Guide: [docs/LIVE_EDITOR.md](docs/LIVE_EDITOR.md).
 - **Project inspection** — summarize structure, scan scripts/labels/assets,
   parse lint output.
+- **Agent gameplay** — the `play` toolset, one tool per task:
+  `renforge_session` launches an isolated session (its own saves, preferences,
+  and HOME) and saves, loads, and stops it; `renforge_observe` returns one
+  compact snapshot whose `forward` says whether to continue or choose;
+  `renforge_act` acts on a control, a key, or nothing, progresses with bounded
+  native skip to the next decision, and returns the next observation; and
+  `renforge_explain` shows the code behind a control, label, or screen without
+  running it. Runtime launches require Ren'Py 8.0 or newer. See
+  [Look, then act](docs/MCP.md#look-then-act).
 - **Live game control** — launch a project with an injected in-game bridge and
   Live Editor, then advance dialogue, list/select choices, evaluate
   expressions, get/set store variables, send focused text/key/scroll input,
   poll pushed events, and capture frames the model can literally see.
-- **Scene perception (pixel-perfect, no vision needed)** — read the whole frame
-  as structured logical-coordinate nodes (`renforge_scene_tree`): every sprite,
-  control, and text block with bounds, z-order, colour, and style, plus an ASCII
-  wireframe and structural scene diffs. Then `renforge_measure` reports alignment,
-  spacing, overlap, fit, and WCAG contrast as numbers an agent can act on.
+- **Scene perception** — inspect a bounded scene inventory
+  (`renforge_scene_tree`) with completed-frame logical bounds where available,
+  z-order, colour, style, an ASCII wireframe, and structural scene diffs.
+  Unknown geometry and custom input remain explicit. `renforge_measure` reports
+  alignment, spacing, overlap, fit, and WCAG contrast as numbers an agent can act on.
 - **Autopilot** — auto-play choices backed by Ren'Py menu `items` across
   fresh replays, including custom-named and one-item menus, while reporting
   label coverage and crashes. Custom `call_screen` interactions that do not

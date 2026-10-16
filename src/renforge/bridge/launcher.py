@@ -56,6 +56,8 @@ _EDITOR_CJK_LANGUAGES: frozenset[str] = frozenset({"zh-CN"})
 
 _BRIDGE_STARTUP_ERROR_PREFIX: str = "RENFORGE_BRIDGE_STARTUP_ERROR="
 STARTUP_TIMEOUT_ENV: str = "RENFORGE_STARTUP_TIMEOUT"
+TRANSITIONS_ENV: str = "RENFORGE_TRANSITIONS"
+VSYNC_ENV: str = "RENFORGE_VSYNC"
 # Launch runs in the background and a process that exits fails at once, so
 # this only bounds a game that hangs. The first run of a large game can spend
 # well over a minute building caches.
@@ -378,8 +380,13 @@ class ProjectBridgeLock:
 _DEFERRED_LOCKS: set[ProjectBridgeLock] = set()
 
 def bridge_payload() -> bytes:
-    """The injected bridge, with builtin reads and imports a game cannot shadow."""
-    return guard_block(_BRIDGE_RESOURCE.read_text(encoding="utf-8")).encode("utf-8")
+    """Build one owned bridge artifact with the canonical gameplay contract."""
+    source = (Path(__file__).parent.parent / "interaction.py").read_text(encoding="utf-8")
+    template = _BRIDGE_RESOURCE.read_text(encoding="utf-8")
+    marker = '"__RENFORGE_INTERACTION_SOURCE__"'
+    if template.count(marker) != 1:
+        raise ValueError("bridge must contain exactly one gameplay contract marker")
+    return guard_block(template.replace(marker, repr(source))).encode("utf-8")
 
 
 def _editor_screen_sources() -> list[Path]:
@@ -1060,6 +1067,19 @@ def _launch_after_project_lock(
     env["RENFORGE_BRIDGE_PROJECT_ROOT"] = str(project.root)
     env["RENFORGE_BRIDGE_CONTROL_DIR"] = str(control_dir(project.root))
     env["RENFORGE_BRIDGE_PORT"] = str(port)
+    # Transitions only slow an agent down and leave half-drawn frames to wait
+    # out. Turn them off when the session's preferences are its own (empty,
+    # or in a save folder that is not the player's), so the change never
+    # reaches the player's real preferences.
+    own_preferences = isolation.preferences_mode == "empty" or not isolation.exposes_user_saves
+    if own_preferences and env.get(TRANSITIONS_ENV, "").strip().lower() != "on":
+        env["RENFORGE_BRIDGE_TRANSITIONS"] = "off"
+    # Vsync makes every frame wait for the display. A hidden or locked-screen
+    # window is throttled (about 70 ms a frame here), and skipping draws at
+    # least one frame per line, so it capped skipping at ~7 lines a second.
+    # Idle CPU is the same without it. RENPY_GL_VSYNC, if set, is respected.
+    if "RENPY_GL_VSYNC" not in env and env.get(VSYNC_ENV, "").strip().lower() != "on":
+        env["RENPY_GL_VSYNC"] = "0"
     # A crash would open traceback.txt in the user's editor; the launch and
     # the session report it instead. A RENPY_EDIT_PY already set is kept.
     env.setdefault("RENPY_EDIT_PY", str(Path(__file__).with_name("no_editor.py")))

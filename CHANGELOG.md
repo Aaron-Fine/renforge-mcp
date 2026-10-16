@@ -36,9 +36,57 @@ versioning.
 - Linux sandbox contract tests (Bubblewrap and fuse-overlayfs, shell guests
   only) with their own CI job. They are test infrastructure, not a security
   boundary and not on the launch path; see `docs/SANDBOX_TESTS.md`.
+- An agent play loop with one tool per task, in a `play` toolset:
+  `renforge_info`, `renforge_session` (launch, status, list, import, save,
+  load, stop; always isolated), `renforge_observe` (one compact snapshot with
+  an `observation_id`: dialogue, controls, readout, `forward`, an optional
+  screenshot), `renforge_act` (act on a control id, a `key/<name>`, or nothing
+  to continue, then progress to the next decision and return the next
+  observation), and `renforge_explain`. See "Look, then act" in
+  `docs/MCP.md`. `renforge_mod` is in its own `mod` toolset, because writing
+  and reloading a mod runs game code. `renforge_session` `import` and the
+  player's slots in `list` (`player_slots`) read the player's own saves, so
+  under `RENFORGE_POLICY=enforce` they need `authorize=true`, as
+  `renforge_saves` `list_user` and `import` do.
+- `RENFORGE_TOOLSETS` (default `all`) chooses which tool groups the server
+  lists: `play`, `mod`, `live`, `debug`, `editor`, `project`, `translation`,
+  `build`, `docs`. A server limited to `play` cannot run code in the game: its
+  launches, including those it asks a dashboard to make, get a bridge that
+  refuses eval, and it never reuses or joins a game whose bridge runs code
+  (`SESSION_EVAL_MISMATCH`). Unknown names stop the server at startup.
+- `renforge_explain` reads the loaded syntax trees without evaluating them: a
+  control's screen-language statement, its keyword arguments and enclosing
+  `if`/`for`/`use` conditions, a label's statements (following fall-through),
+  a screen, a `file:line`, or a search over every loaded statement. It also
+  reads the current values of plain variables those conditions use, and named
+  store variables.
+- `renforge_mod` writes mods under `game/mods/<name>/` with a manifest, lints
+  only the mod, hot-reloads, removes exactly what it wrote, and packages a
+  zip. Writing a mod is open-world under `RENFORGE_POLICY=enforce`.
+- `renforge_session(action="launch", label=...)` starts the story at a label
+  for testing and modding; observations carry `started_at_label`.
+- Observations report `game_error` while Ren'Py's exception or parse-error
+  screen is up, and progression stops with `stop="error"`.
+- Observations report `seen` when the current statement already finished once
+  since launch, and `act` stops with `stop="loop"` when an advance comes back
+  to a line it already passed from the same call site.
+- Observations list the key bindings of the screens shown as `keys`: the
+  binding, its action, and the `key/<name>` that `act` can send. A screen
+  that continues only on `key "K_SPACE" action Return()` says so only in its
+  text. Interface and do-nothing bindings are left out, and bindings never
+  count as decisions. `act` with a letter key types that letter, so a bare
+  `key "d"` binding fires.
 
 ### Changed
 
+- Tools that need a running game report `code="NO_RUNNING_GAME"`, pointing
+  to `renforge_session(action="launch")`, when none is running, and
+  `GAME_STARTING` while one starts, instead of "bridge metadata failed
+  validation".
+- `renforge_info` lists the server's `toolsets` and, when `play` is listed,
+  the play loop's steps. It leaves out the Live Editor block when the
+  `editor` toolset is not listed, and the server instructions name only the
+  listed tools.
 - RenForge keeps its per-project state outside the game folder, under
   `RENFORGE_STATE_DIR` or `$XDG_STATE_HOME/renforge/projects/<name>-<hash>/`
   (`~/.local/state/renforge`, `%LOCALAPPDATA%\renforge` on Windows). Opening
@@ -54,6 +102,19 @@ versioning.
 - Launches in a Wayland session use `SDL_VIDEODRIVER=wayland,x11` so games
   start while the screen is locked. The startup deadline defaults to 180 s and
   reads `RENFORGE_STARTUP_TIMEOUT`.
+- Sessions with isolated preferences start with transitions off
+  (`RENFORGE_TRANSITIONS=on` keeps them), and vsync off unless
+  `RENFORGE_VSYNC=on` or `RENPY_GL_VSYNC` is set. Bounded skipping is about 7x
+  faster.
+- `observe`, `act`, and `advance_until` return a compact observation by
+  default (`detail=full` for every field); `act` accepts `observation_id`
+  alone as its guard. `renforge_list_ui_elements` reports each element's
+  `control_id`.
+- A server whose toolsets include neither `debug` nor `editor` launches games
+  whose bridge refuses `eval` and `set_var` (`eval_disabled`).
+- Screenshots are bounded about 5x faster.
+- A session launch always uses its own HOME, even when
+  `RENFORGE_ISOLATION=existing`.
 
 ### Fixed
 
@@ -83,6 +144,29 @@ versioning.
   `renforge_set_var` is classified mutating.
 - A launch that times out, or whose game exits before the bridge starts,
   reports the last lines of the log.txt it wrote as `details.log_tail`.
+- Interface chrome is told apart from story decisions: screens kept up across
+  lines (a phone or codex HUD), the quick menu, a skip button's indicator
+  screen, and a click sound beside an interface action never stop a line;
+  when nothing else moves the game, an interaction's own interface buttons
+  are its choices.
+- Choices are read as drawn: wrapped choice items and callbacks that receive
+  the menu item, choices drawn without an action (disabled), focus-masked
+  buttons (also on their own modal screen), click bindings
+  (`key "mousedown_1"`), and buttons whose click does nothing (`inert`).
+- Readout and labels: dynamic images name the image they resolved to,
+  tooltips are carried, hidden text and text tags are dropped, viewports and
+  value-only bars are readout, and action summaries unmangle Ren'Py's private
+  class names.
+- Progression: short and timed pauses, `{w}` lines, a clickable pause that
+  outlasts any short pause, screens that keep changing within one
+  interaction, a budget that ends inside a pause, games that turn skipping
+  off, and a line held by a modal screen (named in `hint`).
+- A reply that times out while the game's main thread is busy (entering a
+  scene that decodes large images) is asked again while budget remains,
+  instead of ending `act` with `stop="timeout"`.
+- Loads: screens kept up stay kept up after a load, also when a game replaces
+  its `after_load` callbacks, and `renforge_session(action="load")` returns
+  the restored game's observation.
 
 ## [0.7.3] - 2026-10-07
 
