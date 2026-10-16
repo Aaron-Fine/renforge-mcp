@@ -315,6 +315,26 @@ def isolation_report(
     }
 
 
+def launch_explicit_paths(
+    *,
+    savedir: str | None = None,
+    home: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> list[Path]:
+    """The folders a launch writes to that the caller named, resolved as the launch resolves them.
+
+    The policy checks these, so it must read the same stripped, expanded
+    value that :func:`resolve_launch_isolation` passes to the game.
+    """
+    resolved = apply_launch_isolation_defaults(savedir=savedir, home=home, environ=environ)
+    paths = []
+    if classify_savedir(resolved["savedir"]) == "path":
+        paths.append(Path(resolved["savedir"]).expanduser().resolve())
+    if classify_token(resolved["home"], omitted="temporary") == "path":
+        paths.append(Path(resolved["home"]).expanduser().resolve())
+    return paths
+
+
 def launch_exposes_user_saves(
     *,
     savedir: str | None = None,

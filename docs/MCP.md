@@ -619,6 +619,8 @@ observation carries `started_at_label`; an unknown label is reported as
 start from the player's real progress, `action="list"` shows their slots as
 `player_slots`, and `action="import", slot="..."` copies one into the
 session's saves (the player's file is only read); then `action="load"` it.
+Under `RENFORGE_POLICY=enforce` both need `authorize=true`, since they read
+the player's own saves.
 Ren'Py asks whether to trust a save made on another device: choose Yes for the
 save, then No for the device.
 

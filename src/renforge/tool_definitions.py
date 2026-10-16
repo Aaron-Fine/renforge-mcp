@@ -380,7 +380,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "play from saves instead when the earlier state matters. An "
             "unknown label is reported as start_label_error. Server environment "
             "variables cover the rare launch settings (RENFORGE_STARTUP_TIMEOUT, RENFORGE_ISOLATION, ...). "
-            "load requires authorize=true when RENFORGE_POLICY=enforce."
+            "load and import require authorize=true when RENFORGE_POLICY=enforce, and list shows player_slots "
+            "only with it."
         ),
         annotations=_ann(
             readOnlyHint=False,
@@ -393,7 +394,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "action": "launch, status, save, load, list, import, or stop.",
             "slot": "Slot name for save, load, and import (import takes a name from player_slots).",
             "label": "With launch: start the story at this label (testing and modding).",
-            "authorize": "Explicitly approve load when RENFORGE_POLICY=enforce.",
+            "authorize": ("Explicitly approve load and import, and reading the player's slots for list, "
+                          "when RENFORGE_POLICY=enforce."),
         },
         parameter_schemas={"action": _enum("launch", "status", "save", "load", "list", "import", "stop")},
     ),
@@ -655,7 +657,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "session; `list_user` observes host slots under `~/.renpy` / `game/saves` without a running game and never writes. "
             "`import` copies selected host slots into the isolated session savedir (never bind-mounts the user tree) and is "
             "refused unless the session was launched with `savedir=temporary` (the default). `load` replaces live state and `save` can overwrite the chosen slot. "
-            "Verify slot names before mutating gameplay progress. `load` requires `authorize=true` when `RENFORGE_POLICY=enforce`."
+            "Verify slot names before mutating gameplay progress. `load`, `list_user`, and `import` require `authorize=true` "
+            "when `RENFORGE_POLICY=enforce`: the last two read the player's own saves."
         ),
         annotations=_ann(
             readOnlyHint=False,
@@ -671,7 +674,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "extra_info": "Optional save metadata for save actions.",
             "regexp": "Optional regex filter for `list`, `list_user`, or `import`.",
             "authorize": (
-                "Explicitly authorize `load` when `RENFORGE_POLICY=enforce`; ignored for list, list_user, import, and save."
+                "Explicitly authorize `load`, `list_user`, and `import` when `RENFORGE_POLICY=enforce`; ignored for list "
+                "and save."
             ),
         },
         parameter_schemas={

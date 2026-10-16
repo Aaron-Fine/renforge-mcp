@@ -48,8 +48,10 @@ CONTROL_ACTIONS: dict[str, str] = {
 
 SAVES_ACTIONS: dict[str, str] = {
     "list": RISK_OBSERVATIONAL,
-    "list_user": RISK_OBSERVATIONAL,
-    "import": RISK_MUTATING,
+    # Reading the player's own saves, even their names and extra_info, is
+    # reaching the user save tree, like a savedir=existing launch.
+    "list_user": RISK_DESTRUCTIVE,
+    "import": RISK_DESTRUCTIVE,
     "save": RISK_MUTATING,
     "load": RISK_DESTRUCTIVE,
 }
@@ -70,8 +72,10 @@ SESSION_ACTIONS: dict[str, str] = {
     # Launch is always isolated here, unlike renforge_launch(savedir=existing).
     "launch": RISK_MUTATING,
     "status": RISK_OBSERVATIONAL,
+    # list leaves out the player's slots unless the call is authorized.
     "list": RISK_OBSERVATIONAL,
-    "import": RISK_MUTATING,
+    # Copies one of the player's own saves in, as renforge_saves import does.
+    "import": RISK_DESTRUCTIVE,
     "save": RISK_MUTATING,
     "load": RISK_DESTRUCTIVE,
     "stop": RISK_MUTATING,
@@ -423,7 +427,28 @@ def _classify_launch(name: str, payload: Mapping[str, Any]) -> tuple[str, str]:
         project_path=payload.get("project_path"),
     ):
         return name, RISK_DESTRUCTIVE
+    # The game writes saves, persistent data, and (for home) its config and
+    # cache wherever an explicit path points; outside RenForge's own state
+    # folder that is another app's files. The temp dir is shared, so it is not
+    # RenForge's own either.
+    if not _launch_paths_are_renforge_owned(payload):
+        return name, RISK_DESTRUCTIVE
     return name, RISK_MUTATING
+
+
+def _launch_paths_are_renforge_owned(payload: Mapping[str, Any]) -> bool:
+    from .save_isolation import launch_explicit_paths
+    from .state import state_root
+
+    try:
+        paths = launch_explicit_paths(
+            savedir=payload.get("savedir") if isinstance(payload.get("savedir"), str) else None,
+            home=payload.get("home") if isinstance(payload.get("home"), str) else None,
+        )
+        root = state_root().expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return all(path.is_relative_to(root) and path != root for path in paths)
 
 
 def _control_payload_action(payload: Any) -> str | None:

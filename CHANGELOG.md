@@ -16,6 +16,14 @@ versioning.
   the Ren'Py save root named by the game's `config.save_directory`; a name
   like `../OtherGame` is ignored, as is a `game/saves` that links out of the
   project.
+- Under `RENFORGE_POLICY=enforce`, reading the player's own saves needs
+  `authorize=true`: `renforge_saves` `list_user` and `import` and
+  `renforge_session` `import` are destructive, and `renforge_session list`
+  leaves out `player_slots` (with `player_slots_hidden`) unless authorized.
+  A launch whose `savedir` or `home` is a path outside the RenForge state
+  folder is destructive too (the shared temp dir is not RenForge's), since
+  the game writes its saves, persistent data, and config there. The policy
+  reads the path the launch uses, stripped and expanded.
 - Tools that need a running game say so when none is: `code="NO_RUNNING_GAME"`
   with a pointer to `renforge_session(action="launch")`, or `GAME_STARTING`
   while it starts. Both were reported as "bridge metadata failed validation".
