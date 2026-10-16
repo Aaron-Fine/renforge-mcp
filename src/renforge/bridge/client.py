@@ -226,6 +226,11 @@ class BridgeClient:
             payload["variables"] = list(variables)
         return self.request("explain", payload)
 
+    def session_info(self) -> dict:
+        """``eval_enabled`` and ``savedir`` of the running game's bridge."""
+        reply = self._checked("session_info")
+        return {"eval_enabled": reply.get("eval_enabled") is True, "savedir": reply.get("savedir")}
+
     def eval_expr(self, expr: str) -> Any:
         return self._checked("eval", {"expr": expr})["value"]
 

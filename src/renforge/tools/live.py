@@ -43,6 +43,7 @@ from ..save_isolation import (
     agent_session_id,
     import_host_slots,
     isolation_report,
+    launch_exposes_user_saves,
     list_host_slots,
     path_exposes_user_saves,
 )
@@ -476,6 +477,35 @@ def _session_mode_mismatch(
     }
 
 
+def _reuse_refusal(*, eval_running: bool, exposes: bool, eval_on: bool,
+                   exposes_requested: bool) -> dict[str, Any] | None:
+    """Why a running session must not be handed to this launch request, if it must not."""
+    if exposes and not exposes_requested:
+        message = ("The running game can reach the player's saves, but this launch asked for an isolated "
+                   "session. Stop it and launch again, or launch with savedir=existing to use it.")
+        code = "SESSION_ISOLATION_MISMATCH"
+    elif eval_running and not eval_on:
+        message = ("The running game's bridge runs code, which this server's toolsets do not allow. "
+                   "Stop it and launch again.")
+        code = "SESSION_EVAL_MISMATCH"
+    else:
+        return None
+    return {"ok": False, "ready": False, "code": code, "phase": "validating_session_mode",
+            "message": message, "error": message}
+
+
+def _external_session_facts(client: BridgeClient, project_root: Path) -> dict[str, bool]:
+    """What a bridge this process did not start says about itself; an older one is assumed the worst."""
+    try:
+        info = client.session_info()
+    except Exception:
+        return {"eval_running": True, "exposes": True}
+    savedir = info.get("savedir")
+    exposes = not isinstance(savedir, str) or not savedir or path_exposes_user_saves(
+        Path(savedir), project_path=project_root)
+    return {"eval_running": info.get("eval_enabled") is not False, "exposes": bool(exposes)}
+
+
 def launch_game(
     project_path: str,
     version: str = "stable",
@@ -493,6 +523,7 @@ def launch_game(
     home: str | None = None,
     preferences: str | None = None,
     start_label: str | None = None,
+    bridge_eval: bool | None = None,
 ) -> dict:
     """Launch the project with the bridge injected, or reuse a live session.
 
@@ -502,6 +533,12 @@ def launch_game(
     Ren'Py state. Pass ``savedir='existing'`` (and optionally
     ``home='existing'``) to use the game's normal save location, or set
     ``RENFORGE_ISOLATION=existing`` to change the server-wide default.
+
+    ``bridge_eval=False`` (a play-only server asking a dashboard to launch)
+    switches the bridge's eval off even when this process's toolsets allow it.
+    A running session is reused only when it matches: it may not run code a
+    play-only request refuses, nor expose the player's saves to a request that
+    did not ask for them.
     """
     try:
         project = RenpyProject(Path(project_path))
@@ -536,6 +573,11 @@ def launch_game(
     if isinstance(session_cfg.get("cleanup_on_stop"), bool):
         cleanup_on_stop = session_cfg["cleanup_on_stop"]
     requested_editor = bool(editor)
+    eval_on = bridge_eval_allowed() and bridge_eval is not False
+    exposes_requested = launch_exposes_user_saves(
+        savedir=savedir, home=home, persistent=persistent, preferences=preferences,
+        project_path=project.root,
+    )
 
     key = _key(project.root)
     existing = _SESSIONS.get(key)
@@ -554,6 +596,14 @@ def launch_game(
         # answers; otherwise tear it down (a warp needs a fresh --warp launch,
         # and a dead process must be reaped so it does not linger as a zombie).
         if warp is None and existing.process.poll() is None:
+            isolation = getattr(existing, "isolation", None)
+            refused = _reuse_refusal(
+                eval_running=getattr(existing, "bridge_eval", True) is not False,
+                exposes=isolation is None or bool(isolation.exposes_user_saves),
+                eval_on=eval_on, exposes_requested=exposes_requested,
+            )
+            if refused is not None:
+                return refused
             try:
                 state = existing.client.get_state()
                 return {
@@ -608,6 +658,10 @@ def launch_game(
                         "Launch from this RenForge process with editor=true instead."
                     ),
                 )
+            refused = _reuse_refusal(**_external_session_facts(external, project.root),
+                                     eval_on=eval_on, exposes_requested=exposes_requested)
+            if refused is not None:
+                return refused
             return {
                 "ok": True,
                 "already_running": True,
@@ -657,7 +711,7 @@ def launch_game(
         if start_label:
             # The bridge leaves for this label at the first safe interaction.
             extra_env["RENFORGE_BRIDGE_START_LABEL"] = start_label
-        if not bridge_eval_allowed():
+        if not eval_on:
             # No enabled tool runs code in the game, so its bridge refuses to.
             extra_env["RENFORGE_BRIDGE_EVAL"] = "off"
         if extra_env:
@@ -684,6 +738,8 @@ def launch_game(
         }
 
     session_obj.editor = bool(getattr(session_obj, "editor", requested_editor))
+    # Reuse checks this: a play-only request must not get a bridge that runs code.
+    session_obj.bridge_eval = eval_on
     _SESSIONS[key] = session_obj
     label = None
     try:

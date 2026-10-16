@@ -24,6 +24,15 @@ versioning.
   folder is destructive too (the shared temp dir is not RenForge's), since
   the game writes its saves, persistent data, and config there. The policy
   reads the path the launch uses, stripped and expanded.
+- A launch reuses a running game only when it matches the request:
+  `SESSION_ISOLATION_MISMATCH` when the game can reach the player's saves
+  but the launch asked for an isolated session (it was handed back without
+  the authorization `savedir=existing` needs), and `SESSION_EVAL_MISMATCH`
+  when a play-only server would get a bridge that runs code. A game this
+  server did not start answers the new bridge command `session_info`; one
+  that cannot is assumed to match neither. Launches through the dashboard
+  pass the calling server's `bridge_eval`, so a play-only server's game
+  refuses eval even when the dashboard's own toolsets allow it.
 - Tools that need a running game say so when none is: `code="NO_RUNNING_GAME"`
   with a pointer to `renforge_session(action="launch")`, or `GAME_STARTING`
   while it starts. Both were reported as "bridge metadata failed validation".
