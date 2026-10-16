@@ -15,6 +15,35 @@ from typing import Any, Callable
 
 from renforge.editor_task0_runner import _require_ok, _wait_for_status
 
+
+def summarize_commit_report(report: dict[str, Any]) -> str:
+    """Short, one-field-per-line view of a live commit failure.
+
+    The full report is large enough that pytest and the Actions log both cut
+    it off before ``error`` and ``last_status``. These fields are the ones
+    that distinguish a stuck handshake from a dead bridge.
+    """
+    status = report.get("last_status")
+    if not isinstance(status, dict):
+        status = {}
+    click = report.get("save_click")
+    if not isinstance(click, dict):
+        click = {}
+    save_in_progress = report.get("save_in_progress", status.get("save_in_progress"))
+    fields = (
+        ("error", report.get("error")),
+        ("verdict", report.get("verdict")),
+        ("last_status_code", report.get("last_status_code", status.get("status_code"))),
+        ("save_in_progress", save_in_progress),
+        ("save_error", report.get("save_error", status.get("save_error"))),
+        ("status_text", status.get("status_text")),
+        ("bridge_failure", report.get("bridge_failure")),
+        ("save_click_ok", click.get("ok")),
+        ("save_click_error", click.get("error")),
+        ("reload_slot", report.get("reload_slot")),
+    )
+    return "\n".join(f"{name}={value!r}" for name, value in fields)
+
 EDITOR_RESOURCE = Path(__file__).resolve().parent / "bridge" / "editor.rpy"
 LIVE_FIXTURES_DIR = Path(__file__).resolve().parents[2] / "tests" / "live_fixtures"
 

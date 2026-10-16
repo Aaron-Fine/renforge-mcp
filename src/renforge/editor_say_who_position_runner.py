@@ -39,9 +39,10 @@ def _wait_for_transaction(
     expected_bytes: bytes,
     *,
     timeout: float = 60.0,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, str | None]:
     deadline = time.monotonic() + timeout
     last_status = None
+    bridge_failure: str | None = None
     while time.monotonic() < deadline:
         try:
             status = client.request("editor_task0_status", {})
@@ -51,11 +52,11 @@ def _wait_for_transaction(
                 and status.get("save_in_progress") is False
                 and source_path.read_bytes() == expected_bytes
             ):
-                return status
-        except (BridgeError, BridgeProtocolError, OSError):
-            pass
+                return status, None
+        except (BridgeError, BridgeProtocolError, OSError) as exc:
+            bridge_failure = f"{type(exc).__name__}: {exc}"
         time.sleep(0.25)
-    return last_status
+    return last_status, bridge_failure
 
 
 def _within_one_pixel(bounds: dict[str, int] | None, expected: list[int]) -> bool:
@@ -184,11 +185,15 @@ def run_editor_say_who_style_position_live_scenario(
         b"define gui.name_ypos = gui.scale(0)",
         b"define gui.name_ypos = gui.scale(30)",
     )
-    last_status = _wait_for_transaction(client, gui_path, expected_committed)
+    last_status, bridge_failure = _wait_for_transaction(client, gui_path, expected_committed)
     if not last_status or last_status.get("status_code") != "reload_committed":
         report["verdict"] = "fail"
         report["error"] = "commit timeout"
         report["last_status"] = last_status
+        report["bridge_failure"] = bridge_failure
+        report["last_status_code"] = last_status.get("status_code") if last_status else None
+        report["save_in_progress"] = last_status.get("save_in_progress") if last_status else None
+        report["save_error"] = last_status.get("save_error") if last_status else None
         return report
 
     gui_source_after_commit = gui_path.read_bytes()
@@ -236,8 +241,10 @@ def run_editor_say_who_style_position_live_scenario(
 
     undo_click = client.click_element(id="rf_undo", screen="_renforge_editor_overlay")
     report["undo_click"] = undo_click
-    undo_status = _wait_for_transaction(client, gui_path, gui_source_initial)
+    undo_status, undo_bridge_failure = _wait_for_transaction(client, gui_path, gui_source_initial)
     report["undo_status_code"] = undo_status.get("status_code") if undo_status else None
+    if undo_bridge_failure:
+        report["undo_bridge_failure"] = undo_bridge_failure
     gui_source_after_undo = gui_path.read_bytes()
     report["undo_byte_identical"] = gui_source_after_undo == gui_source_initial
     client.eval_expr(
@@ -251,8 +258,10 @@ def run_editor_say_who_style_position_live_scenario(
 
     redo_click = client.click_element(id="rf_redo", screen="_renforge_editor_overlay")
     report["redo_click"] = redo_click
-    redo_status = _wait_for_transaction(client, gui_path, gui_source_after_commit)
+    redo_status, redo_bridge_failure = _wait_for_transaction(client, gui_path, gui_source_after_commit)
     report["redo_status_code"] = redo_status.get("status_code") if redo_status else None
+    if redo_bridge_failure:
+        report["redo_bridge_failure"] = redo_bridge_failure
     report["redo_byte_identical"] = gui_path.read_bytes() == gui_source_after_commit
     client.eval_expr(
         f'renpy.show_screen("say", who="{SPEAKER}", what="Redo line", _layer="screens")'

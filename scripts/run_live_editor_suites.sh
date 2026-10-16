@@ -8,10 +8,11 @@
 # suite fails this script before the first pytest invocation.
 #
 # A suite that fails is retried once: only a suite that fails twice is
-# reported as a failure. Each attempt is captured in its own mktemp file and
-# that file is printed on failure. Flaky suites are listed separately,
-# because a job that goes red on noise gets ignored, and an ignored job is
-# the problem this exists to solve.
+# reported as a failure. Each attempt is captured in its own mktemp file.
+# A failed attempt is printed in full and copied to live-editor-logs/ so the
+# caller frame and the commit summary survive the job. Flaky suites are
+# listed separately, because a job that goes red on noise gets ignored, and
+# an ignored job is the problem this exists to solve.
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
@@ -116,7 +117,17 @@ passed=()
 
 run_suite() {
     # $1 file, $2 gate, $3 log file
-    env "$2=1" PYTHONPATH=src uv run pytest -q "tests/$1" >"$3" 2>&1
+    env "$2=1" PYTHONPATH=src uv run pytest -q --tb=long "tests/$1" >"$3" 2>&1
+}
+
+# Keep the whole pytest log. A 20-line tail drops the frame that closed the
+# bridge and the commit summary the assertion prints above a truncated dict.
+show_failure_log() {
+    # $1 source log, $2 archived name
+    mkdir -p live-editor-logs
+    cp "$1" "live-editor-logs/$2"
+    echo "----- $2 -----"
+    cat "$1"
 }
 
 i=0
@@ -132,7 +143,7 @@ while [ "$i" -lt "$count" ]; do
         rm -f "$first_log"
         passed+=("$name")
     else
-        tail -20 "$first_log"
+        show_failure_log "$first_log" "${name}-attempt-1.log"
         echo "--- retrying once ---"
         retry_log="$(mktemp)" || gate_fail "mktemp failed for $name attempt 2"
         if run_suite "$file" "$gate" "$retry_log"; then
@@ -140,8 +151,8 @@ while [ "$i" -lt "$count" ]; do
             rm -f "$first_log" "$retry_log"
             flaky+=("$name")
         else
-            tail -20 "$retry_log"
-            echo "$name failed twice; attempt logs: $first_log $retry_log"
+            show_failure_log "$retry_log" "${name}-attempt-2.log"
+            echo "$name failed twice; archived logs: live-editor-logs/${name}-attempt-1.log live-editor-logs/${name}-attempt-2.log"
             failed+=("$name")
         fi
     fi

@@ -105,3 +105,11 @@ jobs:
 
       - name: Run every live editor suite
         run: bash scripts/run_live_editor_suites.sh
+
+      - name: Upload live suite failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-editor-failure-logs
+          path: live-editor-logs/
+          if-no-files-found: ignore
