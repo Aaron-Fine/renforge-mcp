@@ -16,6 +16,7 @@ from renforge.save_isolation import (
     configured_isolation_mode,
     default_launch_savedir,
     host_renpy_root,
+    host_save_directories,
     import_host_slots,
     isolation_report,
     launch_exposes_user_saves,
@@ -604,3 +605,37 @@ def test_another_games_save_folder_exposes_player_saves(tmp_path: Path, monkeypa
     scratch = tmp_path / "scratch" / "saves"
     scratch.mkdir(parents=True)
     assert launch_exposes_user_saves(savedir=str(scratch), home="temporary") is False
+
+
+@pytest.mark.parametrize("save_directory", ["../OtherGame", "nested/../../escape", "/abs/elsewhere", "..", "."])
+def test_host_saves_stay_in_the_renpy_root_whatever_the_game_declares(
+    tmp_path: Path, host_save_root: Path, save_directory: str
+) -> None:
+    """config.save_directory comes from the game; it must not steer reads elsewhere."""
+    project = tmp_path / "game-root"
+    (project / "game").mkdir(parents=True)
+    (project / "game" / "options.rpy").write_text(
+        f'define config.save_directory = "{save_directory}"\n', encoding="utf-8")
+    other = host_save_root.parent / "OtherGame"
+    other.mkdir(parents=True)
+    (other / "1-1-LT1.save").write_bytes(b"OTHER")
+    (host_save_root / "OtherGame").mkdir(parents=True)
+    (host_save_root / "OtherGame" / "1-1-LT1.save").write_bytes(b"OTHER")
+
+    assert host_save_directories(project) == []
+    assert host_save_directories(project, save_name=save_directory) == []
+    assert list_host_slots(project)["slots"] == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_a_game_saves_symlink_out_of_the_project_is_not_a_host_save_folder(
+    tmp_path: Path, host_save_root: Path
+) -> None:
+    project = tmp_path / "game-root"
+    (project / "game").mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "1-1-LT1.save").write_bytes(b"OTHER")
+    (project / "game" / "saves").symlink_to(elsewhere, target_is_directory=True)
+
+    assert host_save_directories(project) == []

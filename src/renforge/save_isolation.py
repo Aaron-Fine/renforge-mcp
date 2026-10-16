@@ -24,7 +24,7 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any, Iterable, Mapping
 
 EXISTING_TOKENS: frozenset[str] = frozenset({"existing", "default"})
@@ -495,12 +495,17 @@ def host_save_directories(
     """
     directories: list[Path] = []
     save_name = save_name or parse_save_directory(project_root)
-    if save_name:
-        host_dir = host_renpy_root(home=home) / save_name
-        if host_dir.is_dir():
+    # The name comes from the game, so it must stay one folder of the Ren'Py
+    # root: "../OtherGame" would read another game's (or any) saves.
+    if save_name and save_name not in (".", "..") and PurePath(save_name).name == save_name \
+            and PureWindowsPath(save_name).name == save_name:
+        root = host_renpy_root(home=home)
+        host_dir = root / save_name
+        if host_dir.is_dir() and host_dir.resolve().parent == root.resolve():
             directories.append(host_dir)
     project_saves = Path(project_root) / "game" / "saves"
-    if project_saves.is_dir() and project_saves not in directories:
+    if (project_saves.is_dir() and project_saves not in directories
+            and project_saves.resolve().is_relative_to(Path(project_root).resolve())):
         directories.append(project_saves)
     return directories
 

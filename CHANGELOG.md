@@ -12,6 +12,10 @@ versioning.
   `SAVE_IMPORT_NOT_ISOLATED`: launching there and importing are each
   mutating, so under `RENFORGE_POLICY=enforce` the two together copied the
   player's saves into any folder without `authorize=true`.
+- `list_user` and `import` read the player's saves only from one folder of
+  the Ren'Py save root named by the game's `config.save_directory`; a name
+  like `../OtherGame` is ignored, as is a `game/saves` that links out of the
+  project.
 - Tools that need a running game say so when none is: `code="NO_RUNNING_GAME"`
   with a pointer to `renforge_session(action="launch")`, or `GAME_STARTING`
   while it starts. Both were reported as "bridge metadata failed validation".
