@@ -87,3 +87,26 @@ def test_only_reads_are_rewritten():
     exec(compile(textwrap.dedent(guarded.split("\n", 1)[1]), "block", "exec"), store)
     assert store["size"](types.SimpleNamespace(id=[1, 2]), key=3) == (2, '{"id": 3}', False)
     assert store["json"] == "game data" and store["len"]() == "game"
+
+
+def test_guarded_builtins_survive_a_store_wipe():
+    """renpy.reload_script() clears the store under the bridge's listener thread.
+
+    The aliases must resolve without the store, or the thread's own
+    ``except Exception`` raises NameError and the bridge closes its socket.
+    """
+    block = (
+        "init python:\n"
+        "    # header\n"
+        "    def smallest(values):\n"
+        "        try:\n"
+        "            return min(values)\n"
+        "        except Exception:\n"
+        "            return None\n"
+    )
+    store = {}
+    exec(compile(textwrap.dedent(guard_block(block).split("\n", 1)[1]), "block", "exec"), store)
+    smallest = store["smallest"]
+    store.clear()
+    assert smallest([3, 1, 2]) == 1
+    assert smallest([]) is None

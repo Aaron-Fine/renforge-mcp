@@ -6,6 +6,8 @@ before the builtin (a game that defines ``id`` as a Character), and a game's ``d
 the ``types`` module the bridge imported. Rewriting the bridge source at
 injection time binds each builtin and each top-level import to a private
 ``_rfb_`` name, which no game defines, while the source stays plain Python.
+The builtin aliases are set on the ``builtins`` module, so they still resolve
+while ``renpy.reload_script()`` has the store wiped.
 
 Ren'Py itself rebinds some builtins in the store (``renpy.minstore``, the
 same from 8.0 to 8.6): revertable ``list``, ``dict``, ``set``, ``object``,
@@ -75,8 +77,11 @@ def guard_block(source: str, *, imports: bool = True) -> str:
 
     builtin_names = sorted(used - modules)
     if builtin_names:
+        # The aliases live on the builtins module, not in the store: a global
+        # the store lacks falls back to builtins, and renpy.reload_script()
+        # wipes the store under threads that outlive it (the bridge listener).
         binding = "import builtins as _rfb_b; " + "; ".join(
-            f"{PREFIX}{name} = _rfb_b.{name}" for name in builtin_names)
+            f"_rfb_b.{PREFIX}{name} = _rfb_b.{name}" for name in builtin_names)
         for index in range(1, len(lines)):
             stripped = lines[index].strip()
             if stripped.startswith("#"):

@@ -167,7 +167,11 @@ versioning.
   (`renforge/bridge/guard.py`) without changing line numbers. Names Ren'Py
   itself rebinds in the store (`eval`, `str`, `open`, `print`, `input`, and
   the revertable containers) keep their store meaning, and the Live Editor's
-  imports stay store names because its screens use them.
+  imports stay store names because its screens use them. The builtin aliases
+  are set on the `builtins` module rather than in the store:
+  `renpy.reload_script()` wipes the store under the bridge's listener thread,
+  so a Live Editor save that reloads the script killed the listener with
+  `NameError: _rfb_min` and the bridge refused every later connection.
 - A click sound does not make an interface button a story decision. Astreon's
   main-menu buttons run `Play("sound", ...)` with `ShowMenu("load")`, `Quit`,
   or `OpenURL`, so they were gameplay controls beside the real Start button;
