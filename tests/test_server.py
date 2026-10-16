@@ -322,6 +322,14 @@ def test_session_lists_and_imports_the_players_slots(tmp_path, monkeypatch) -> N
     assert asyncio.run(_call(action="import", slot="9-9"))["ok"] is False
     assert (player / "1-1-LT1.save").read_bytes() == b"PLAYER"
 
+    # Under enforce, reading the player's saves needs authorize, as for list_user.
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    hidden = asyncio.run(_call(action="list"))
+    assert "player_slots" not in hidden and "authorize=true" in hidden["player_slots_hidden"]
+    assert asyncio.run(_call(action="list", authorize=True))["player_slots"] == [{"name": "1-1"}]
+    assert asyncio.run(_call(action="import", slot="1-1"))["code"] == "POLICY_DENIED"
+    assert asyncio.run(_call(action="import", slot="1-1", authorize=True))["ok"] is True
+
 
 def test_live_tools_error_cleanly_without_a_running_game(tmp_path) -> None:
     from renforge.tools import live
@@ -1936,7 +1944,7 @@ def test_session_launch_keeps_its_own_home_even_when_isolation_defaults_to_exist
     captured: dict = {}
     monkeypatch.setattr(live, "launch_game", lambda *a, **k: captured.update(k) or {"ok": True})
 
-    def fake_start_launch(project_path, launch, editor=True):
+    def fake_start_launch(project_path, launch, editor=True, requirements=None):
         return launch(Path(project_path), threading.Event())
 
     monkeypatch.setattr(live, "start_launch", fake_start_launch)

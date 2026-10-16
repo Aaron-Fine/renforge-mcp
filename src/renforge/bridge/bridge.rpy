@@ -546,6 +546,13 @@ init python:
                     "message": "This session's bridge does not run code (no debug or editor toolset)."}
         return None
 
+    def _renforge_h_session_info(payload):
+        """What a server reusing this game must check: does it run code, where are its saves and HOME."""
+        savedir = getattr(renpy.config, "savedir", None)
+        home = os.environ.get("USERPROFILE" if os.name == "nt" else "HOME")
+        return {"ok": True, "eval_enabled": _renforge_eval_refused() is None,
+                "savedir": savedir if isinstance(savedir, str) else None, "home": home or None}
+
     def _renforge_h_eval(payload):
         refused = _renforge_eval_refused()
         if refused:
@@ -7128,6 +7135,7 @@ init python:
     _RENFORGE_HANDLERS = {
         "ping": _renforge_h_ping,
         "get_state": _renforge_h_get_state,
+        "session_info": _renforge_h_session_info,
         "get_metrics": _renforge_h_get_metrics_handler,
         "get_audio_state": _renforge_h_get_audio_state_handler,
         "inspect_screen": _renforge_h_inspect_screen,

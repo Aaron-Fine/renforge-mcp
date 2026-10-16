@@ -48,8 +48,10 @@ CONTROL_ACTIONS: dict[str, str] = {
 
 SAVES_ACTIONS: dict[str, str] = {
     "list": RISK_OBSERVATIONAL,
-    "list_user": RISK_OBSERVATIONAL,
-    "import": RISK_MUTATING,
+    # Reading the player's own saves, even their names and extra_info, is
+    # reaching the user save tree, like a savedir=existing launch.
+    "list_user": RISK_DESTRUCTIVE,
+    "import": RISK_DESTRUCTIVE,
     "save": RISK_MUTATING,
     "load": RISK_DESTRUCTIVE,
 }
@@ -70,8 +72,10 @@ SESSION_ACTIONS: dict[str, str] = {
     # Launch is always isolated here, unlike renforge_launch(savedir=existing).
     "launch": RISK_MUTATING,
     "status": RISK_OBSERVATIONAL,
+    # list leaves out the player's slots unless the call is authorized.
     "list": RISK_OBSERVATIONAL,
-    "import": RISK_MUTATING,
+    # Copies one of the player's own saves in, as renforge_saves import does.
+    "import": RISK_DESTRUCTIVE,
     "save": RISK_MUTATING,
     "load": RISK_DESTRUCTIVE,
     "stop": RISK_MUTATING,
@@ -405,25 +409,23 @@ def _classify_scenario_step(step: Any) -> tuple[str, str]:
 
 
 def _classify_launch(name: str, payload: Mapping[str, Any]) -> tuple[str, str]:
-    from .save_isolation import launch_exposes_user_saves
+    from .save_isolation import launch_request_is_renforge_owned
 
-    if launch_exposes_user_saves(
-        savedir=payload.get("savedir") if isinstance(payload.get("savedir"), str) else None,
-        home=payload.get("home") if isinstance(payload.get("home"), str) else None,
-        persistent=(
-            payload.get("persistent")
-            if isinstance(payload.get("persistent"), str)
-            else None
-        ),
-        preferences=(
-            payload.get("preferences")
-            if isinstance(payload.get("preferences"), str)
-            else None
-        ),
-        project_path=payload.get("project_path"),
-    ):
-        return name, RISK_DESTRUCTIVE
-    return name, RISK_MUTATING
+    def text(field: str) -> str | None:
+        value = payload.get(field)
+        return value if isinstance(value, str) else None
+
+    # Reaching the player's saves, or writing saves, persistent data, and (for
+    # home) config into a folder that is not RenForge's, needs authorize.
+    # Session reuse asks the same question, so neither can bypass the other.
+    try:
+        owned = launch_request_is_renforge_owned(
+            savedir=text("savedir"), home=text("home"), persistent=text("persistent"),
+            preferences=text("preferences"), project_path=payload.get("project_path"),
+        )
+    except (OSError, RuntimeError, ValueError):
+        owned = False
+    return name, RISK_MUTATING if owned else RISK_DESTRUCTIVE
 
 
 def _control_payload_action(payload: Any) -> str | None:

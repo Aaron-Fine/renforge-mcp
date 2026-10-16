@@ -162,7 +162,9 @@ def build_wrappers(context):
                 **kwargs,
             )
 
-        return live.start_launch(project_path, _launch, editor=requested_editor)
+        requirements = live.launch_requirements(
+            project_path, **{field: kwargs.get(field) for field in ("savedir", "home", "persistent", "preferences")})
+        return live.start_launch(project_path, _launch, editor=requested_editor, requirements=requirements)
 
 
     def renforge_launch(
@@ -403,8 +405,21 @@ def build_wrappers(context):
             if action == "load" and isinstance(result, dict) and result.get("ok"):
                 result = _after_load(result)
             if action == "list" and isinstance(result, dict):
-                result["player_slots"] = _player_slots(result.pop("save_directory", None))
+                save_name = result.pop("save_directory", None)
+                if _may_read_player_saves():
+                    result["player_slots"] = _player_slots(save_name)
+                else:
+                    result["player_slots_hidden"] = (
+                        "the player's own slots are listed only with authorize=true "
+                        "under RENFORGE_POLICY=enforce")
             return result
+
+        def _may_read_player_saves() -> bool:
+            """Whether this call may read the player's saves, as renforge_saves list_user may."""
+            from .. import policy
+
+            return policy.evaluate("renforge_saves", {"action": "list_user", "project_path": project_path,
+                                                      "authorize": authorize}).allowed
 
         def _save_name() -> str | None:
             """The game's config.save_directory, from the running game when there is one."""

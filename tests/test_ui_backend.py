@@ -273,6 +273,29 @@ def test_api_live_launch_honors_editor_false(tmp_path: Path, monkeypatch) -> Non
 
 
 @pytest.mark.skipif(TestClient is None, reason="starlette not installed")
+def test_api_live_launch_passes_the_callers_bridge_eval(tmp_path: Path, monkeypatch) -> None:
+    """A play-only MCP server asks for a bridge that runs no code; the dashboard must honour it."""
+    import renforge.ui.server as server
+
+    project = _project_root(tmp_path)
+    calls = []
+
+    def fake_launch(project_path: str, **kwargs):
+        calls.append(kwargs.get("bridge_eval"))
+        return {"ok": True, "ready": True, "already_running": False, "current_label": "start", "editor": True}
+
+    monkeypatch.setattr(server.live, "launch_game", fake_launch)
+    client = TestClient(create_ui_app(project, ui_token="token"))
+    for body in ({"bridge_eval": False}, {}):
+        server.live._LAUNCHES.clear()
+        assert client.post("/api/live/launch?token=token", json=body).status_code == 200
+    assert calls == [False, None]
+    response = client.post("/api/live/launch?token=token", json={"bridge_eval": "off"})
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "launch_bridge_eval_invalid"
+
+
+@pytest.mark.skipif(TestClient is None, reason="starlette not installed")
 def test_api_live_launch_defaults_editor_true(tmp_path: Path, monkeypatch) -> None:
     import renforge.ui.server as server
 

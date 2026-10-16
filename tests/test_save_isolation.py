@@ -16,6 +16,7 @@ from renforge.save_isolation import (
     configured_isolation_mode,
     default_launch_savedir,
     host_renpy_root,
+    host_save_directories,
     import_host_slots,
     isolation_report,
     launch_exposes_user_saves,
@@ -477,7 +478,8 @@ def test_live_saves_list_user_and_import(
     assert refused["ok"] is False
     assert refused["code"] == "NO_ISOLATED_SESSION"
 
-    isolation = SimpleNamespace(savedir_mode="temporary", home_mode="temporary")
+    isolation = SimpleNamespace(savedir_mode="temporary", home_mode="temporary",
+                                session_root=dest.parent)
     session = SimpleNamespace(temporary_savedir=dest, isolation=isolation)
     live._SESSIONS[live._key(project)] = session  # type: ignore[assignment]
     try:
@@ -494,6 +496,46 @@ def test_live_saves_list_user_and_import(
         assert blocked["code"] == "SAVE_IMPORT_NOT_ISOLATED"
     finally:
         live._SESSIONS.pop(live._key(project), None)
+
+
+def test_live_saves_import_refuses_a_savedir_the_caller_chose(
+    tmp_path: Path, monkeypatch, host_save_root: Path
+) -> None:
+    """launch(savedir=<dir>) and import are both mutating, so under enforce
+    they must not together copy the player's saves into a folder of the
+    caller's choosing. Only a temporary session's own savedir takes imports."""
+    from types import SimpleNamespace
+
+    from renforge.tools import live
+
+    project = tmp_path / "game-root"
+    game = project / "game"
+    game.mkdir(parents=True)
+    (game / "options.rpy").write_text(
+        'define config.save_directory = "renforge-demo"\n', encoding="utf-8"
+    )
+    host_saves = host_save_root / "renforge-demo"
+    host_saves.mkdir(parents=True)
+    (host_saves / "1-1-LT1.save").write_bytes(b"SLOT-1-1")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    chosen = tmp_path / "shared" / "saves"
+    chosen.mkdir(parents=True)
+    root = tmp_path / "session"
+
+    for isolation, savedir in (
+        (SimpleNamespace(savedir_mode="path", session_root=None), chosen),
+        # A temporary mode whose savedir sits outside its own session root.
+        (SimpleNamespace(savedir_mode="temporary", session_root=root), chosen),
+    ):
+        live._SESSIONS[live._key(project)] = SimpleNamespace(  # type: ignore[assignment]
+            temporary_savedir=savedir, isolation=isolation)
+        try:
+            refused = live.saves(str(project), "import", regexp=".*")
+        finally:
+            live._SESSIONS.pop(live._key(project), None)
+        assert refused["ok"] is False
+        assert refused["code"] == "SAVE_IMPORT_NOT_ISOLATED"
+        assert not list(chosen.iterdir())
 
 
 def test_renpy_tool_environment_keeps_one_shot_commands_out_of_player_saves(monkeypatch) -> None:
@@ -563,3 +605,37 @@ def test_another_games_save_folder_exposes_player_saves(tmp_path: Path, monkeypa
     scratch = tmp_path / "scratch" / "saves"
     scratch.mkdir(parents=True)
     assert launch_exposes_user_saves(savedir=str(scratch), home="temporary") is False
+
+
+@pytest.mark.parametrize("save_directory", ["../OtherGame", "nested/../../escape", "/abs/elsewhere", "..", "."])
+def test_host_saves_stay_in_the_renpy_root_whatever_the_game_declares(
+    tmp_path: Path, host_save_root: Path, save_directory: str
+) -> None:
+    """config.save_directory comes from the game; it must not steer reads elsewhere."""
+    project = tmp_path / "game-root"
+    (project / "game").mkdir(parents=True)
+    (project / "game" / "options.rpy").write_text(
+        f'define config.save_directory = "{save_directory}"\n', encoding="utf-8")
+    other = host_save_root.parent / "OtherGame"
+    other.mkdir(parents=True)
+    (other / "1-1-LT1.save").write_bytes(b"OTHER")
+    (host_save_root / "OtherGame").mkdir(parents=True)
+    (host_save_root / "OtherGame" / "1-1-LT1.save").write_bytes(b"OTHER")
+
+    assert host_save_directories(project) == []
+    assert host_save_directories(project, save_name=save_directory) == []
+    assert list_host_slots(project)["slots"] == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_a_game_saves_symlink_out_of_the_project_is_not_a_host_save_folder(
+    tmp_path: Path, host_save_root: Path
+) -> None:
+    project = tmp_path / "game-root"
+    (project / "game").mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "1-1-LT1.save").write_bytes(b"OTHER")
+    (project / "game" / "saves").symlink_to(elsewhere, target_is_directory=True)
+
+    assert host_save_directories(project) == []

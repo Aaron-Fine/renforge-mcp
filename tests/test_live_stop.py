@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -130,11 +132,37 @@ class _RunningProcess:
         return None
 
 
+# A session root as RenForge makes one; it need not exist to be classified.
+_SESSION_ROOT = Path(tempfile.gettempdir()) / "renforge-session-test"
+
+
+def _isolation(savedir_mode: str = "temporary", *, savedir: Path | None = None, home: Path | None = None):
+    from renforge.save_isolation import LaunchIsolation
+
+    if savedir_mode == "existing":
+        return LaunchIsolation(savedir_mode="existing", home_mode="existing", persistent_mode="existing",
+                               preferences_mode="existing", savedir=None, home=None, session_root=None,
+                               cleanup=False)
+    return LaunchIsolation(savedir_mode=savedir_mode, home_mode="temporary" if home is None else "path",
+                           persistent_mode="existing", preferences_mode="existing",
+                           savedir=savedir or _SESSION_ROOT / "saves", home=home or _SESSION_ROOT / "home",
+                           session_root=_SESSION_ROOT, cleanup=False)
+
+
+@pytest.fixture(autouse=True)
+def _never_launch_a_real_game(monkeypatch):
+    """A reuse that falls through would start the real SDK; tests that launch patch this themselves."""
+    monkeypatch.setattr(live, "get_or_install_sdk",
+                        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not launch a game")))
+
+
 class _OwnedRunningSession:
-    def __init__(self, *, editor: bool = False) -> None:
+    def __init__(self, *, editor: bool = False, isolation=None, bridge_eval: bool = True) -> None:
         self.editor = editor
         self.client = _StateClient()
         self.process = _RunningProcess()
+        self.isolation = isolation
+        self.bridge_eval = bridge_eval
         self.close_calls = 0
         self.closed = False
 
@@ -326,7 +354,7 @@ def test_launch_reuses_a_game_started_by_the_dashboard(tmp_path: Path, monkeypat
 def test_launch_reuses_owned_session_only_when_editor_mode_matches(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     key = live._key(project)
-    session = _OwnedRunningSession(editor=True)
+    session = _OwnedRunningSession(editor=True, isolation=_isolation())
     live._SESSIONS[key] = session
 
     mismatch = live.launch_game(str(project), editor=False)
@@ -339,16 +367,136 @@ def test_launch_reuses_owned_session_only_when_editor_mode_matches(tmp_path: Pat
     assert session.close_calls == 0
 
     matched = live.launch_game(str(project), editor=True)
-    assert matched == {
+    assert {key: matched[key] for key in ("ok", "already_running", "ready", "current_label", "editor")} == {
         "ok": True,
         "already_running": True,
         "ready": True,
         "current_label": "dashboard_scene",
         "editor": True,
     }
+    assert matched["isolation"]["exposes_user_saves"] is False
     assert live._SESSIONS[key] is session
     assert session.close_calls == 0
     live._SESSIONS.pop(key, None)
+
+
+def test_an_isolated_launch_never_reuses_a_session_on_the_players_saves(tmp_path: Path) -> None:
+    """A default launch is mutating; handing back a savedir=existing session would skip authorize."""
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    session = _OwnedRunningSession(editor=True, isolation=_isolation("existing"))
+    live._SESSIONS[key] = session
+    try:
+        refused = live.launch_game(str(project))
+        assert refused["ok"] is False
+        assert refused["code"] == "SESSION_ISOLATION_MISMATCH"
+        assert session.close_calls == 0
+        assert live.launch_game(str(project), savedir="existing")["already_running"] is True
+    finally:
+        live._SESSIONS.pop(key, None)
+
+
+def test_a_play_only_server_never_reuses_a_bridge_that_runs_code(tmp_path: Path, monkeypatch) -> None:
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    monkeypatch.setenv("RENFORGE_TOOLSETS", "play")
+    live._SESSIONS[key] = _OwnedRunningSession(editor=True, isolation=_isolation(), bridge_eval=True)
+    try:
+        refused = live.launch_game(str(project))
+        assert refused["code"] == "SESSION_EVAL_MISMATCH"
+        live._SESSIONS[key] = _OwnedRunningSession(editor=True, isolation=_isolation(), bridge_eval=False)
+        assert live.launch_game(str(project))["already_running"] is True
+    finally:
+        live._SESSIONS.pop(key, None)
+
+
+def test_an_isolated_launch_never_reuses_a_session_authorized_onto_a_foreign_folder(tmp_path: Path) -> None:
+    """savedir=<another app's folder> needed authorize; a default launch must not inherit it."""
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    foreign = tmp_path / "Documents" / "game-saves"
+    live._SESSIONS[key] = _OwnedRunningSession(editor=True, isolation=_isolation("path", savedir=foreign))
+    try:
+        assert live.launch_game(str(project))["code"] == "SESSION_ISOLATION_MISMATCH"
+        assert live.launch_game(str(project), savedir=str(foreign))["already_running"] is True
+    finally:
+        live._SESSIONS.pop(key, None)
+
+
+def test_a_launch_that_arrives_while_another_starts_must_match_it(tmp_path: Path, monkeypatch) -> None:
+    """LAUNCH_IN_PROGRESS would point the caller at a session it may not be given."""
+    project = _make_project(tmp_path)
+    release = threading.Event()
+
+    def slow_launch(_root, _cancel):
+        release.wait(5)
+        return {"ok": False, "ready": False, "error": "stopped by the test"}
+
+    exposed = {"isolated": False, "eval": True}
+    try:
+        live.start_launch(str(project), slow_launch, wait_timeout=0, requirements=exposed)
+        refused = live.start_launch(str(project), slow_launch, wait_timeout=0,
+                                    requirements={"isolated": True, "eval": True})
+        assert refused["code"] == "SESSION_ISOLATION_MISMATCH"
+        refused = live.start_launch(str(project), slow_launch, wait_timeout=0,
+                                    requirements={"isolated": False, "eval": False})
+        assert refused["code"] == "SESSION_EVAL_MISMATCH"
+        same = live.start_launch(str(project), slow_launch, wait_timeout=0, requirements=exposed)
+        assert same["code"] == "LAUNCH_IN_PROGRESS"
+    finally:
+        release.set()
+        for _ in range(50):
+            if not live._LAUNCHES or all(task.done_event.is_set() for task in live._LAUNCHES.values()):
+                break
+            time.sleep(0.05)
+        live._LAUNCHES.pop(live._key(project), None)
+
+
+class _InfoClient(_StateClient):
+    def __init__(self, info: dict | None) -> None:
+        self.info = info
+
+    def session_info(self) -> dict:
+        if self.info is None:
+            raise live.BridgeError("bridge error on 'session_info': unknown command")
+        return self.info
+
+
+@pytest.mark.parametrize("info, toolsets, code", [
+    # An older bridge cannot say: assume the worst.
+    (None, "", "SESSION_ISOLATION_MISMATCH"),
+    ({"eval_enabled": False, "savedir": None, "home": "SESSION"}, "", "SESSION_ISOLATION_MISMATCH"),
+    ({"eval_enabled": True, "savedir": "HOST", "home": "SESSION"}, "", "SESSION_ISOLATION_MISMATCH"),
+    # Saves isolated but HOME the player's own (home=existing): not isolated.
+    ({"eval_enabled": True, "savedir": "SESSION", "home": "PLAYER"}, "", "SESSION_ISOLATION_MISMATCH"),
+    ({"eval_enabled": True, "savedir": "SESSION", "home": None}, "", "SESSION_ISOLATION_MISMATCH"),
+    ({"eval_enabled": True, "savedir": "SESSION", "home": "SESSION"}, "play", "SESSION_EVAL_MISMATCH"),
+    ({"eval_enabled": False, "savedir": "SESSION", "home": "SESSION"}, "play", None),
+    ({"eval_enabled": True, "savedir": "SESSION", "home": "SESSION"}, "", None),
+])
+def test_an_external_session_is_reused_only_when_it_matches(
+    tmp_path: Path, monkeypatch, info, toolsets, code
+) -> None:
+    from renforge.save_isolation import host_renpy_root
+
+    project = _make_project(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "home" / "AppData" / "Roaming"))
+    monkeypatch.setenv("RENFORGE_TOOLSETS", toolsets)
+    if info is not None:
+        def where(name, leaf):
+            return {"HOST": str(host_renpy_root() / "demo"), "PLAYER": str(tmp_path / "home"),
+                    "SESSION": str(_SESSION_ROOT / leaf), None: None}[name]
+
+        info = dict(info, savedir=where(info["savedir"], "saves"), home=where(info["home"], "home"))
+    monkeypatch.setattr(live.BridgeClient, "from_project",
+                        classmethod(lambda cls, root, **_kwargs: _InfoClient(info)))
+    result = live.launch_game(str(project), editor=False)
+
+    if code is None:
+        assert result["already_running"] is True and result["external"] is True
+    else:
+        assert result["ok"] is False and result["code"] == code
 
 
 def test_launch_rejects_editor_mode_for_unproven_external_bridge(tmp_path: Path, monkeypatch) -> None:
@@ -420,6 +568,9 @@ def test_launch_status_preserves_editor_for_owned_session(tmp_path: Path) -> Non
         "status": "ready",
         "current_label": "dashboard_scene",
         "editor": True,
+        # No isolation recorded: status says the caller cannot count on one.
+        "isolated": False,
+        "eval_enabled": True,
     }
     live._SESSIONS.pop(key, None)
 

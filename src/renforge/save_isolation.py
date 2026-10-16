@@ -24,7 +24,7 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any, Iterable, Mapping
 
 EXISTING_TOKENS: frozenset[str] = frozenset({"existing", "default"})
@@ -315,6 +315,84 @@ def isolation_report(
     }
 
 
+def launch_explicit_paths(
+    *,
+    savedir: str | None = None,
+    home: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> list[Path]:
+    """The folders a launch writes to that the caller named, resolved as the launch resolves them.
+
+    The policy checks these, so it must read the same stripped, expanded
+    value that :func:`resolve_launch_isolation` passes to the game.
+    """
+    resolved = apply_launch_isolation_defaults(savedir=savedir, home=home, environ=environ)
+    paths = []
+    if classify_savedir(resolved["savedir"]) == "path":
+        paths.append(Path(resolved["savedir"]).expanduser().resolve())
+    if classify_token(resolved["home"], omitted="temporary") == "path":
+        paths.append(Path(resolved["home"]).expanduser().resolve())
+    return paths
+
+
+def location_is_renforge_owned(path: str | Path) -> bool:
+    """Under the RenForge state folder, or in a session root RenForge made in the temp dir.
+
+    Anything else (the player's saves, another app's folder, the shared temp
+    dir itself) is somewhere a launch reaches only with authorization.
+    """
+    from .state import state_root
+
+    try:
+        resolved = Path(path).expanduser().resolve()
+        root = state_root().expanduser().resolve()
+        temp = Path(tempfile.gettempdir()).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    if resolved != root and resolved.is_relative_to(root):
+        return True
+    if resolved != temp and resolved.is_relative_to(temp):
+        return resolved.relative_to(temp).parts[0].startswith(SESSION_PREFIX)
+    return False
+
+
+def isolation_is_renforge_owned(isolation: LaunchIsolation) -> bool:
+    """Whether a running session keeps its saves and HOME in RenForge's own folders."""
+    if isolation.savedir_mode == "existing" or isolation.home_mode == "existing":
+        return False
+    if isolation.savedir is None or isolation.home is None:
+        return False
+    return location_is_renforge_owned(isolation.savedir) and location_is_renforge_owned(isolation.home)
+
+
+def launch_request_is_renforge_owned(
+    *,
+    savedir: str | None = None,
+    home: str | None = None,
+    persistent: str | None = None,
+    preferences: str | None = None,
+    project_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether a launch stays in RenForge's own folders, so it needs no authorization.
+
+    The policy gate and session reuse both ask this, so a request that would
+    need authorize can never be satisfied by handing back a running session.
+    Explicit paths count only under the state folder: the temp dir is shared.
+    """
+    from .state import state_root
+
+    if launch_exposes_user_saves(savedir=savedir, home=home, persistent=persistent,
+                                 preferences=preferences, project_path=project_path, environ=environ):
+        return False
+    try:
+        paths = launch_explicit_paths(savedir=savedir, home=home, environ=environ)
+        root = state_root().expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return all(path != root and path.is_relative_to(root) for path in paths)
+
+
 def launch_exposes_user_saves(
     *,
     savedir: str | None = None,
@@ -495,12 +573,17 @@ def host_save_directories(
     """
     directories: list[Path] = []
     save_name = save_name or parse_save_directory(project_root)
-    if save_name:
-        host_dir = host_renpy_root(home=home) / save_name
-        if host_dir.is_dir():
+    # The name comes from the game, so it must stay one folder of the Ren'Py
+    # root: "../OtherGame" would read another game's (or any) saves.
+    if save_name and save_name not in (".", "..") and PurePath(save_name).name == save_name \
+            and PureWindowsPath(save_name).name == save_name:
+        root = host_renpy_root(home=home)
+        host_dir = root / save_name
+        if host_dir.is_dir() and host_dir.resolve().parent == root.resolve():
             directories.append(host_dir)
     project_saves = Path(project_root) / "game" / "saves"
-    if project_saves.is_dir() and project_saves not in directories:
+    if (project_saves.is_dir() and project_saves not in directories
+            and project_saves.resolve().is_relative_to(Path(project_root).resolve())):
         directories.append(project_saves)
     return directories
 
