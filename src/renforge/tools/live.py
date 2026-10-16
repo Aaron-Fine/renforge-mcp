@@ -1656,13 +1656,21 @@ def saves(
             "code": "NO_ISOLATED_SESSION",
             "error": "import requires an isolated launch; call renforge_launch first",
         }
-    if savedir_mode == "existing" or path_exposes_user_saves(
-        destination, project_path=project.root
+    # Only a temporary session's own savedir takes imports. A savedir=<path>
+    # launch and an import are each mutating, so allowing the path would let
+    # the two together copy the player's saves anywhere without authorize.
+    session_root = getattr(isolation, "session_root", None)
+    if (
+        savedir_mode != "temporary"
+        or session_root is None
+        or not Path(destination).resolve().is_relative_to(Path(session_root).resolve())
+        or path_exposes_user_saves(destination, project_path=project.root)
     ):
         return {
             "ok": False,
             "code": "SAVE_IMPORT_NOT_ISOLATED",
-            "error": "import refuses to copy into the user's save tree; use an isolated session",
+            "error": ("import copies only into a temporary session's own savedir; "
+                      "launch with savedir=temporary (the default)"),
         }
     return import_host_slots(
         project.root,

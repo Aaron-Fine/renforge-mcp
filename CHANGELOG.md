@@ -7,6 +7,11 @@ versioning.
 
 ### Changed
 
+- `renforge_saves(action="import")` copies only into a temporary session's own
+  savedir. A session launched with `savedir=<path>` is refused with
+  `SAVE_IMPORT_NOT_ISOLATED`: launching there and importing are each
+  mutating, so under `RENFORGE_POLICY=enforce` the two together copied the
+  player's saves into any folder without `authorize=true`.
 - Tools that need a running game say so when none is: `code="NO_RUNNING_GAME"`
   with a pointer to `renforge_session(action="launch")`, or `GAME_STARTING`
   while it starts. Both were reported as "bridge metadata failed validation".

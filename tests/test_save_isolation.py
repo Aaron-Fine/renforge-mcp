@@ -477,7 +477,8 @@ def test_live_saves_list_user_and_import(
     assert refused["ok"] is False
     assert refused["code"] == "NO_ISOLATED_SESSION"
 
-    isolation = SimpleNamespace(savedir_mode="temporary", home_mode="temporary")
+    isolation = SimpleNamespace(savedir_mode="temporary", home_mode="temporary",
+                                session_root=dest.parent)
     session = SimpleNamespace(temporary_savedir=dest, isolation=isolation)
     live._SESSIONS[live._key(project)] = session  # type: ignore[assignment]
     try:
@@ -494,6 +495,46 @@ def test_live_saves_list_user_and_import(
         assert blocked["code"] == "SAVE_IMPORT_NOT_ISOLATED"
     finally:
         live._SESSIONS.pop(live._key(project), None)
+
+
+def test_live_saves_import_refuses_a_savedir_the_caller_chose(
+    tmp_path: Path, monkeypatch, host_save_root: Path
+) -> None:
+    """launch(savedir=<dir>) and import are both mutating, so under enforce
+    they must not together copy the player's saves into a folder of the
+    caller's choosing. Only a temporary session's own savedir takes imports."""
+    from types import SimpleNamespace
+
+    from renforge.tools import live
+
+    project = tmp_path / "game-root"
+    game = project / "game"
+    game.mkdir(parents=True)
+    (game / "options.rpy").write_text(
+        'define config.save_directory = "renforge-demo"\n', encoding="utf-8"
+    )
+    host_saves = host_save_root / "renforge-demo"
+    host_saves.mkdir(parents=True)
+    (host_saves / "1-1-LT1.save").write_bytes(b"SLOT-1-1")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    chosen = tmp_path / "shared" / "saves"
+    chosen.mkdir(parents=True)
+    root = tmp_path / "session"
+
+    for isolation, savedir in (
+        (SimpleNamespace(savedir_mode="path", session_root=None), chosen),
+        # A temporary mode whose savedir sits outside its own session root.
+        (SimpleNamespace(savedir_mode="temporary", session_root=root), chosen),
+    ):
+        live._SESSIONS[live._key(project)] = SimpleNamespace(  # type: ignore[assignment]
+            temporary_savedir=savedir, isolation=isolation)
+        try:
+            refused = live.saves(str(project), "import", regexp=".*")
+        finally:
+            live._SESSIONS.pop(live._key(project), None)
+        assert refused["ok"] is False
+        assert refused["code"] == "SAVE_IMPORT_NOT_ISOLATED"
+        assert not list(chosen.iterdir())
 
 
 def test_renpy_tool_environment_keeps_one_shot_commands_out_of_player_saves(monkeypatch) -> None:
