@@ -80,6 +80,7 @@ from .source import (
     textbutton_patch_kwargs,
     uses_runtime_delta_position,
 )
+from .scope import require_in_scope
 
 
 def expected_measurement_method(statement_kind: str) -> str:
@@ -1426,6 +1427,7 @@ class EditorCoordinator:
                 raise EditorError("GUI_RPY_PATH_MISSING", "gui.rpy path is missing from source_key")
 
             gui_absolute = resolve_game_path(self._project.root, gui_rpy_path)
+            require_in_scope(self._project.root, gui_rpy_path)
             gui_current_bytes = gui_absolute.read_bytes()
             gui_current_sha = sha256_bytes(gui_current_bytes)
 
@@ -1502,7 +1504,10 @@ class EditorCoordinator:
                 state="staged",
             )
         else:
-            # Normal single-file transaction (screens.rpy)
+            # Normal single-file transaction (screens.rpy). Only this file is
+            # written, so scope is enforced against it rather than against the
+            # identity file of a style-backed gui write.
+            require_in_scope(self._project.root, relative_path)
             transaction_id = uuid.uuid4().hex
             transaction = _TransactionRecord(
                 transaction_id=transaction_id,
@@ -1638,6 +1643,7 @@ class EditorCoordinator:
         if not (is_style_color_tx or is_structural_tx or is_say_style_position_tx):
             raise EditorError("UNDO_STYLE_COLOR_ONLY", "product commit undo is limited to text style color, zorder structural swap, and say.what style position")
 
+        require_in_scope(self._project.root, prior.source_relative_path)
         current_bytes = prior.source_absolute_path.read_bytes()
         current_sha = sha256_bytes(current_bytes)
         if current_sha != prior.staged_sha256:

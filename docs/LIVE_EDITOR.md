@@ -62,6 +62,36 @@ state, not failures to retry blindly.
   `renforge_stop` / process teardown. Do not hand-edit generated
   `zzrenforge_*` session files.
 
+## Write scope
+
+Writes are always confined to `<project>/game/`. To narrow that further — for
+example on a shared or hosted project — set `RENFORGE_ALLOW_PATHS` next to the
+launch command:
+
+```text
+RENFORGE_ALLOW_PATHS=screens/*.rpy,gui.rpy
+```
+
+- Patterns are comma-separated, game-relative POSIX globs. `*`, `?` and
+  `[...]` match within one path segment and never cross `/`; `**` as a whole
+  segment matches zero or more directories (`screens/**/*.rpy` includes
+  `screens/say.rpy` and `screens/tl/say.rpy`).
+- A save or undo whose resolved target matches no pattern is refused before
+  any transaction is written. The refusal names the path and the active scope
+  (`PATH_OUT_OF_SCOPE`).
+- Matching is case-sensitive POSIX matching on every platform, including
+  Windows: `Screens.rpy` and `screens.rpy` are different patterns, and
+  separators must be `/`. Patterns starting with a drive letter (`C:...`) or
+  ending in `/` are rejected as invalid instead of being silently rewritten.
+- Invalid patterns (absolute paths, `..`, backslashes, drive letters, trailing
+  slashes) **fail closed**: every save and undo is refused with
+  `PATH_SCOPE_INVALID` until the variable is fixed. Blank entries are ignored;
+  an empty value means no scope.
+- Unset or blank preserves the old behavior: any regular file inside `game/`
+  is writable.
+- This setting is independent of `RENFORGE_POLICY`; it narrows writes even
+  when policy enforcement is off.
+
 ## Human workflow (dashboard / game window)
 
 1. **Launch** — `uvx --from "renforge[ui]@latest" renforge ui`, pick your
