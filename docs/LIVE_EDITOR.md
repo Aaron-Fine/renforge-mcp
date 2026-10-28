@@ -47,6 +47,16 @@ state, not failures to retry blindly.
   that the intended result survived the reload. For your own external `.rpy`
   edits, use `renforge_control(project_path, action="reload_script")` and observe
   again.
+- **Dry run is preview-only.** `renforge_editor(..., action="save", dry_run=true)`
+  stages the edit in memory and returns a unified source diff without applying
+  anything: it skips shadow validation, publish, reload, and attestation, and
+  creates no transaction. The diff is capped at 64 KiB and truncated on a line
+  boundary (`diff_truncated`; `diff_bytes` keeps the full size), and a missing
+  final newline is marked with `\ No newline at end of file`. It cannot be
+  combined with `x`/`y` because positioning the target is itself a runtime
+  change; select and move first, then preview. A session whose bridge predates
+  dry-run support is refused with `DRY_RUN_UNSUPPORTED` instead of falling back
+  to a real save. Run a real `save` (without `dry_run`) to write the change.
 - **Session-owned bridge/editor artifacts.** Injected bridge and editor files
   belong to the launch session and are cleaned up on a clean
   `renforge_stop` / process teardown. Do not hand-edit generated
@@ -88,7 +98,8 @@ renforge_launch_status(project_path)   # poll while starting
 renforge_screenshot(project_path)      # fresh visual observation
 renforge_scene_tree(project_path)      # structured layout (logical coords)
 renforge_editor(project_path, action="status")
-  -> selected_widget_id, lock_reason, capabilities, frame_id
+  -> selected_widget_id, lock_reason, capabilities, frame_id,
+     selected_source_position, preview_position
 renforge_editor(
   project_path,
   action="select",
@@ -97,6 +108,8 @@ renforge_editor(
   expected_frame_id=frame_id,          # when you have one
 )
   -> overlay hit path; capabilities.move when the target is proven
+renforge_editor(project_path, action="save", dry_run=True)
+  -> unified source diff; writes/lints/reloads nothing
 renforge_editor(project_path, action="save", x=..., y=...)  # optional destination
   -> overlay Save (reload + attest). Locked targets return the lock code.
 renforge_screenshot / renforge_scene_tree / renforge_get_errors
@@ -114,6 +127,12 @@ renforge_stop(project_path)
   just called; do not invent private bridge RPC names.
 - Distinguish **editable** vs **locked** from `renforge_editor` `status` /
   `select` (`lock_reason`, `capabilities`) — locked is not “click harder”.
+- Check `selected_source_position` / `preview_position` in `status` to confirm
+  the source line and live preview before saving.
+- Prefer `action="save", dry_run=true` first when you need to show the exact
+  source diff; it returns `diff`, `diff_bytes`, `diff_truncated`, and the
+  original/staged SHA-256 values and creates no transaction. Then call the real
+  `save` when the diff is what you want.
 - After `renforge_editor` `save`, wait for its final `status_code` and observe
   again; the editor already reloaded and attested the change. After your own
   external `.rpy` edits, call `renforge_control(project_path, action="reload_script")`

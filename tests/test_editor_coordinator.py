@@ -228,6 +228,7 @@ def _commit(
     y: int,
     w: int | None = None,
     h: int | None = None,
+    dry_run: bool = False,
     request_id: str = "co-1",
 ) -> dict[str, Any]:
     # Temporarily raise the socket timeout so slow Windows CI hosts can finish
@@ -235,6 +236,20 @@ def _commit(
     previous_timeout = sock.gettimeout()
     sock.settimeout(max(float(previous_timeout or 0.0), _COMMIT_SOCKET_TIMEOUT_SECONDS))
     try:
+        payload: dict[str, Any] = {
+            "session_id": auth["session_id"],
+            "intents": [
+                {
+                    "analysis_id": analysis["result"]["analysis_id"],
+                    "source_key": analysis["result"]["source_key"],
+                    "x": x,
+                    "y": y,
+                    **({"w": w, "h": h} if w is not None and h is not None else {}),
+                }
+            ],
+        }
+        if dry_run:
+            payload["dry_run"] = True
         _send_json(
             sock,
             {
@@ -243,18 +258,7 @@ def _commit(
                 "connection_id": auth["connection_id"],
                 "request_id": request_id,
                 "command": "commit",
-                "payload": {
-                    "session_id": auth["session_id"],
-                    "intents": [
-                        {
-                            "analysis_id": analysis["result"]["analysis_id"],
-                            "source_key": analysis["result"]["source_key"],
-                            "x": x,
-                            "y": y,
-                            **({"w": w, "h": h} if w is not None and h is not None else {}),
-                        }
-                    ],
-                },
+                "payload": payload,
             },
         )
         return _recv_json(sock)
@@ -486,6 +490,169 @@ def test_button_statement_dispatches_through_analyze_and_commit(tmp_path: Path) 
             )
     finally:
         coordinator.close()
+
+
+def test_commit_dry_run_returns_diff_without_side_effects(tmp_path: Path) -> None:
+    project, source = _make_project(tmp_path)
+    baseline = source.read_bytes()
+    observation = _base_observation()
+    probe = _Probe(
+        observe_reply={
+            **observation,
+            "frame_id": "independent-dry-run-frame",
+            "object_id": "obj-independent-dry-run",
+        }
+    )
+    coordinator = EditorCoordinator(project, _make_sdk(tmp_path))
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    transaction_root = coordinator._transaction_root
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analysis = _analyze(sock, auth, observation, request_id="an-dry")
+            assert analysis["ok"] is True
+
+            dry = _commit(
+                sock,
+                auth,
+                analysis,
+                x=333,
+                y=444,
+                dry_run=True,
+                request_id="co-dry",
+            )
+            assert dry["ok"] is True
+            preview = dry["result"]
+            assert preview["dry_run"] is True
+            assert preview["state"] == "dry_run"
+            assert preview["source_relative_path"] == "script.rpy"
+            assert preview["changed"] is True
+            assert preview["diff_format"] == "unified"
+            assert preview["diff_encoding"] == "utf-8"
+            assert preview["diff_truncated"] is False
+            assert preview["diff_bytes"] == len(preview["diff"].encode("utf-8"))
+            assert preview["original_sha256"] == hashlib.sha256(baseline).hexdigest()
+            assert preview["staged_sha256"] != preview["original_sha256"]
+            assert "--- a/script.rpy\n" in preview["diff"]
+            assert "+++ b/script.rpy\n" in preview["diff"]
+            assert (
+                '-    textbutton "Play" id "start_btn" xpos 12 ypos 10 action NullAction()'
+                in preview["diff"]
+            )
+            assert (
+                '+    textbutton "Play" id "start_btn" xpos 333 ypos 444 action NullAction()'
+                in preview["diff"]
+            )
+
+            # A dry run must not write source, register a transaction, or
+            # persist a transaction directory/manifest for the attempt.
+            assert source.read_bytes() == baseline
+            assert list(transaction_root.iterdir()) == []
+            assert coordinator._transactions == {}
+
+            real = _commit(
+                sock,
+                auth,
+                analysis,
+                x=333,
+                y=444,
+                request_id="co-real",
+            )
+            assert real["ok"] is True
+            assert real["result"]["state"] == "published"
+            committed = source.read_bytes()
+            assert committed == baseline.replace(b"xpos 12", b"xpos 333").replace(
+                b"ypos 10", b"ypos 444"
+            )
+            # The preview described exactly the change the real commit wrote.
+            assert preview["staged_sha256"] == hashlib.sha256(committed).hexdigest()
+    finally:
+        coordinator.close()
+
+
+def test_dry_run_diff_handles_identical_binary_and_truncation(tmp_path: Path) -> None:
+    from renforge.editor.coordinator import (
+        DRY_RUN_DIFF_MAX_BYTES,
+        _TransactionRecord,
+        _dry_run_result,
+    )
+
+    def record(original: bytes, staged: bytes) -> Any:
+        return _TransactionRecord(
+            transaction_id="dry-run-unit",
+            source_relative_path="script.rpy",
+            source_absolute_path=tmp_path / "script.rpy",
+            original_bytes=original,
+            staged_bytes=staged,
+            original_sha256=hashlib.sha256(original).hexdigest(),
+            staged_sha256=hashlib.sha256(staged).hexdigest(),
+            generation=1,
+            expected_targets=[],
+        )
+
+    unchanged = _dry_run_result(record(b"same\n", b"same\n"))
+    assert unchanged["changed"] is False
+    assert unchanged["diff"] == ""
+    assert unchanged["diff_bytes"] == 0
+    assert unchanged["diff_truncated"] is False
+
+    binary = _dry_run_result(record(b"\xff\xfe\x00", b"\xff\xfe\x01"))
+    assert binary["changed"] is True
+    assert "\ufffd" in binary["diff"]
+    assert binary["diff_encoding"] == "utf-8"
+
+    original = b"".join(b"line %d\n" % index for index in range(10000))
+    staged = b"".join(b"line %d preview\n" % index for index in range(10000))
+    large = _dry_run_result(record(original, staged))
+    import difflib
+
+    from renforge.editor.coordinator import _diff_input_lines
+
+    full_diff = "".join(
+        difflib.unified_diff(
+            _diff_input_lines(original.decode("utf-8")),
+            _diff_input_lines(staged.decode("utf-8")),
+            fromfile="a/script.rpy",
+            tofile="b/script.rpy",
+            n=3,
+        )
+    )
+    assert large["diff_truncated"] is True
+    assert large["diff_bytes"] == len(full_diff.encode("utf-8"))
+    assert large["diff_bytes"] > DRY_RUN_DIFF_MAX_BYTES
+    assert len(large["diff"].encode("utf-8")) <= DRY_RUN_DIFF_MAX_BYTES
+    assert large["diff"].startswith("--- a/script.rpy\n+++ b/script.rpy\n")
+    # A truncated diff is a prefix of the real one, never a rewritten report.
+    assert full_diff.startswith(large["diff"])
+    assert large["changed"] is True
+    assert "-line 0\n" in large["diff"]
+    assert "+line 0 preview\n" in full_diff
+    assert large["diff"].endswith("\n")
+
+
+def test_dry_run_diff_marks_missing_trailing_newline(tmp_path: Path) -> None:
+    from renforge.editor.coordinator import _TransactionRecord, _dry_run_result
+
+    def record(original: bytes, staged: bytes) -> Any:
+        return _TransactionRecord(
+            transaction_id="dry-run-newline",
+            source_relative_path="script.rpy",
+            source_absolute_path=tmp_path / "script.rpy",
+            original_bytes=original,
+            staged_bytes=staged,
+            original_sha256=hashlib.sha256(original).hexdigest(),
+            staged_sha256=hashlib.sha256(staged).hexdigest(),
+            generation=1,
+            expected_targets=[],
+        )
+
+    preview = _dry_run_result(record(b"alpha\nbeta", b"alpha\nBETA\n"))
+
+    assert "-beta+BETA" not in preview["diff"]
+    assert "-beta\n\\ No newline at end of file\n" in preview["diff"]
+    assert "+BETA\n" in preview["diff"]
+    assert preview["diff_bytes"] == len(preview["diff"].encode("utf-8"))
 
 
 def test_commit_refuses_stale_source_and_duplicate_intent_ids(tmp_path: Path) -> None:

@@ -606,6 +606,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "Drive the in-game Live Editor with public actions `status`, `select`, and `save`. "
             "`select` uses the overlay hit path in `logical` or `screenshot` coordinates. "
             "`save` is the overlay Save (reload + attest), not a silent source write. "
+            "`save` with `dry_run=true` returns a unified source diff and applies nothing: it skips "
+            "shadow validation, publish, reload, and attestation, and creates no transaction. "
             "Never call private `editor_task0_*` handlers."
         ),
         annotations=_ann(
@@ -621,10 +623,15 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "y": "Required for `select`. Optional destination for `save` when applying a move.",
             "coordinate_space": "`logical` (default) or `screenshot` coordinates.",
             "expected_frame_id": "Optional frame id from a recent screenshot or listing; rejects a stale frame.",
+            "dry_run": (
+                "`save` only. Preview the source diff without writing, linting, reloading, "
+                "or creating a transaction. Cannot be combined with x/y."
+            ),
         },
         parameter_schemas={
             "action": _enum("status", "select", "save"),
             "coordinate_space": _enum("logical", "screenshot"),
+            "dry_run": {"type": "boolean"},
         },
         input_schema={
             "oneOf": [
@@ -641,7 +648,10 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
                     "required": ["action", "x", "y"],
                 },
                 {
-                    "properties": {"action": {"const": "save"}},
+                    "properties": {
+                        "action": {"const": "save"},
+                        "dry_run": {"type": "boolean"},
+                    },
                     "required": ["action"],
                 },
             ]

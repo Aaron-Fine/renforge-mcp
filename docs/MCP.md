@@ -159,9 +159,12 @@ renforge_inspect_screen(project_path, name="say")
 renforge_list_ui_elements(project_path)
   -> visible controls and frame_id
 renforge_editor(project_path, action="status")
-  -> selected_widget_id, lock_reason, capabilities, frame_id
+  -> selected_widget_id, lock_reason, capabilities, frame_id,
+     selected_source_position, preview_position
 renforge_editor(project_path, action="select", x=..., y=..., expected_frame_id=frame_id)
   -> overlay hit path (not a game click)
+renforge_editor(project_path, action="save", dry_run=True)
+  -> unified source diff; no transaction, lint, publish, or reload
 renforge_editor(project_path, action="save")
   -> overlay Save: reload + attest, or the lock code
 renforge_hover_element(..., expected_frame_id=frame_id)
@@ -406,7 +409,7 @@ guards: each capture hashes a new frame.
 | `renforge_hover_element` | Move the pointer over a control by ID or text without clicking. Supports `exact`, `screen`, and `expected_frame_id`. |
 | `renforge_get_ui_element_bounds` | Report `focus_bounds` and, for `ImageButton` controls, rendered `painted_bounds` for the active state. Returns `painted_bounds_available: false` with a reason when the painted content cannot be measured. |
 | `renforge_click_element` | Click a control by ID or text. Supports `exact`, `screen`, `expected_frame_id`, `interaction_id`, and `wait_for_effect`. Returns `received_by` when another control owns the hit point. |
-| `renforge_editor` | Public Live Editor: `status`, `select` (overlay hit path), and `save` (reload + attest). Locked targets return the lock code. Never call private `editor_task0_*` handlers. |
+| `renforge_editor` | Public Live Editor: `status`, `select` (overlay hit path), and `save` (reload + attest). `save` with `dry_run` returns a unified source diff without writing, linting, reloading, or creating a transaction; it rejects `x`/`y` and older bridges without dry-run support (`DRY_RUN_UNSUPPORTED`). Locked targets return the lock code. Never call private `editor_task0_*` handlers. |
 | `renforge_click_at` | Click `logical` or `screenshot` coordinates, with `expected_frame_id` and `expected_state` guards. |
 | `renforge_hit_test` | Inspect the interactive focus stack at a point (`topmost` + `underneath`) to diagnose overlays that intercept clicks. |
 | `renforge_capture_screenshot` | Persist the current frame as a named PNG under `<project>/.renforge/captures/` and return `path`, `relative_path`, SHA-256, and dimensions for later diff/translation tools. |

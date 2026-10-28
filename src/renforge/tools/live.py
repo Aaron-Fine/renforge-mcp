@@ -1218,6 +1218,9 @@ def click_element(
 _EDITOR_ACTIONS = frozenset({"status", "select", "save"})
 _EDITOR_ANALYSIS_WAIT_SECONDS = 5.0
 _EDITOR_SAVE_WAIT_SECONDS = 30.0
+# Kept below the bridge's 35 s request budget so the tool always stops before
+# the engine does, and reports a timeout instead of racing the socket.
+_EDITOR_DRY_RUN_WAIT_SECONDS = 30.0
 _EDITOR_STATUS_RPC = "editor_task0_status"
 _EDITOR_SELECT_RPC = "editor_task0_select"
 _EDITOR_SAVE_RPC = "editor_task0_save"
@@ -1278,6 +1281,20 @@ def _editor_logical_point(
     return int(round(float(converted[0]))), int(round(float(converted[1])))
 
 
+_EDITOR_DRY_RUN_FIELDS = (
+    "state",
+    "source_relative_path",
+    "original_sha256",
+    "staged_sha256",
+    "changed",
+    "diff",
+    "diff_format",
+    "diff_truncated",
+    "diff_bytes",
+    "diff_encoding",
+)
+
+
 def _editor_public_view(
     raw: dict[str, Any],
     *,
@@ -1289,13 +1306,33 @@ def _editor_public_view(
         "action": action,
         "active": bool(raw.get("active")),
         "selected_widget_id": raw.get("selected_widget_id"),
+        "selected_source_position": raw.get("selected_source_position"),
+        "preview_position": raw.get("preview_position"),
+        "selected_source_size": raw.get("selected_source_size"),
+        "preview_size": raw.get("preview_size"),
         "lock_reason": _editor_lock_code(raw.get("selected_lock_reason") or raw.get("lock_reason")),
         "capabilities": dict(raw.get("capabilities") or {}),
         "frame_id": frame_id,
         "save_enabled": bool(raw.get("save_enabled")),
         "status_code": raw.get("status_code"),
         "dirty_target_count": int(raw.get("dirty_target_count") or 0),
+        "dry_run": False,
     }
+    # A preview result belongs to the save call that asked for it. Status
+    # stays a pure observation: it neither reports a stale diff nor turns
+    # ok:false because an earlier preview failed.
+    if action == "save":
+        dry_run_result = raw.get("dry_run_result")
+        if isinstance(dry_run_result, dict):
+            view["ok"] = True
+            view["dry_run"] = True
+            for field_name in _EDITOR_DRY_RUN_FIELDS:
+                view[field_name] = dry_run_result.get(field_name)
+        dry_run_error = raw.get("dry_run_error")
+        if dry_run_error:
+            view["ok"] = False
+            view["dry_run"] = True
+            view["error"] = str(dry_run_error)
     if raw.get("error") is not None:
         view["ok"] = False
         view["error"] = raw["error"]
@@ -1344,6 +1381,20 @@ def _editor_wait_until_save_settled(client: BridgeClient) -> dict[str, Any]:
     return last
 
 
+def _editor_wait_until_dry_run_settled(client: BridgeClient) -> dict[str, Any]:
+    """Poll until a preview result/error lands, never a real save outcome."""
+    deadline = time.monotonic() + _EDITOR_DRY_RUN_WAIT_SECONDS
+    last = _editor_read_status(client)
+    while time.monotonic() < deadline:
+        if last.get("dry_run_result") is not None or last.get("dry_run_error"):
+            return last
+        if not (last.get("save_in_progress") or last.get("save_requested")):
+            return last
+        time.sleep(0.1)
+        last = _editor_read_status(client)
+    return last
+
+
 def editor(
     project_path: str,
     action: str,
@@ -1352,12 +1403,21 @@ def editor(
     y: int | float | None = None,
     coordinate_space: str = "logical",
     expected_frame_id: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """Public Live Editor host: status, overlay select, overlay Save."""
 
     def _handler(client: BridgeClient) -> dict:
         if action not in _EDITOR_ACTIONS:
             return {"ok": False, "error": "action must be status, select, or save"}
+        if dry_run and action != "save":
+            return {"ok": False, "error": "dry_run is only valid with action=save"}
+        if dry_run and (x is not None or y is not None):
+            return {
+                "ok": False,
+                "dry_run": True,
+                "error": "dry_run cannot be combined with x/y; it applies nothing",
+            }
         frame_id = client.screenshot_hash()
         if action == "status":
             return _editor_public_view(_editor_read_status(client), action=action, frame_id=frame_id)
@@ -1391,6 +1451,11 @@ def editor(
         if activated is not None:
             return _editor_public_view(activated, action=action, frame_id=frame_id)
         current = _editor_wait_until_analyzed(client)
+        if dry_run and current.get("dry_run_supported") is not True:
+            # An older bridge ignores the dry_run payload and performs a real
+            # save. Refuse before sending anything: this session may be a
+            # pre-upgrade process that renforge_launch reused.
+            return {"ok": False, "dry_run": True, "error": "DRY_RUN_UNSUPPORTED"}
         lock = _editor_lock_code(current.get("selected_lock_reason"))
         if lock:
             view = _editor_public_view(current, action=action, frame_id=frame_id)
@@ -1410,16 +1475,29 @@ def editor(
             client.eval_expr(
                 f"_renforge_editor_apply_preview({point[0]}, {point[1]}, shift=False)"
             )
-        save_reply = client.request(_EDITOR_SAVE_RPC, {})
+        save_reply = client.request(_EDITOR_SAVE_RPC, {"dry_run": True} if dry_run else {})
         if not isinstance(save_reply, dict):
             return {"ok": False, "error": "editor save unavailable"}
         if save_reply.get("ok") is False:
             view = _editor_public_view(current, action=action, frame_id=frame_id)
             view["ok"] = False
+            view["dry_run"] = dry_run
             error = save_reply.get("error") or "SAVE_UNAVAILABLE"
             if error == "SAVE_UNAVAILABLE" and int(current.get("dirty_target_count") or 0) == 0:
                 error = "NO_INTENTS"
             view["error"] = error
+            return view
+        if dry_run and save_reply.get("dry_run") is not True:
+            # Defense in depth: a bridge that accepted the RPC but did not
+            # acknowledge preview-only mode must not be reported as a preview.
+            return {"ok": False, "dry_run": True, "error": "DRY_RUN_UNSUPPORTED"}
+        if dry_run:
+            settled = _editor_wait_until_dry_run_settled(client)
+            view = _editor_public_view(settled, action=action, frame_id=client.screenshot_hash())
+            if settled.get("dry_run_result") is None and not settled.get("dry_run_error"):
+                view["ok"] = False
+                view["dry_run"] = True
+                view["error"] = "DRY_RUN_TIMEOUT"
             return view
         settled = _editor_wait_until_save_settled(client)
         view = _editor_public_view(settled, action=action, frame_id=client.screenshot_hash())

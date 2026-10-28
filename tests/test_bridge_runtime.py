@@ -3347,6 +3347,319 @@ def test_editor_status_exposes_current_host_capabilities(
         globs["_renforge_editor_stop_coordinator"]()
 
 
+def test_editor_status_exposes_source_position_and_dry_run(
+    running_bridge,
+    monkeypatch,
+) -> None:
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    for name in (
+        "RENFORGE_EDITOR_HOST",
+        "RENFORGE_EDITOR_PORT",
+        "RENFORGE_EDITOR_TOKEN",
+        "RENFORGE_EDITOR_PROTOCOL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    renpy.config.after_load_callbacks = []
+    renpy.Displayable = object
+    exec(compile(_load_editor_body(), "editor.rpy", "exec"), globs)
+    try:
+        state = globs["_renforge_editor_state"]()
+        state.selected_source_position = [12, 34]
+        state.preview_position = [56, 78]
+        state.dry_run_result = {"dry_run": True, "state": "dry_run", "changed": True}
+        state.dry_run_error = None
+
+        status = globs["_renforge_editor_h_status"]({})
+
+        assert status["selected_source_position"] == [12, 34]
+        assert status["preview_position"] == [56, 78]
+        assert status["dry_run_supported"] is True
+        assert status["dry_run_result"] == {
+            "dry_run": True,
+            "state": "dry_run",
+            "changed": True,
+        }
+        assert status["dry_run_error"] is None
+
+        state.dry_run_result = None
+        state.dry_run_error = "VALIDATION_FAILED"
+        failed = globs["_renforge_editor_h_status"]({})
+        assert failed["dry_run_result"] is None
+        assert failed["dry_run_error"] == "VALIDATION_FAILED"
+    finally:
+        globs["_renforge_editor_stop_coordinator"]()
+
+
+def test_editor_save_dry_run_submits_flag_and_applies_preview_result(
+    running_bridge,
+    monkeypatch,
+) -> None:
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    for name in (
+        "RENFORGE_EDITOR_HOST",
+        "RENFORGE_EDITOR_PORT",
+        "RENFORGE_EDITOR_TOKEN",
+        "RENFORGE_EDITOR_PROTOCOL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    renpy.config.after_load_callbacks = []
+    renpy.Displayable = object
+    renpy.Render = lambda width, height: types.SimpleNamespace(
+        width=width, height=height
+    )
+    renpy.IgnoreEvent = type("IgnoreEvent", (Exception,), {})
+    exec(compile(_load_editor_body(), "editor.rpy", "exec"), globs)
+    try:
+        submissions = []
+
+        class Submitter:
+            def submit_host(self, command, payload, context=None):
+                submissions.append((command, payload, context))
+                return "dry-run-request"
+
+            def collect_nowait(self):
+                return []
+
+        globs["_renforge_editor_ensure_coordinator"] = lambda: Submitter()
+        state = globs["_renforge_editor_state"]()
+        state.save_enabled = True
+        state.selected_lock_reason = None
+        state.current_analysis_id = "analysis-1"
+        state.targets["target"] = {
+            "analysis_id": "analysis-1",
+            "source_key": {
+                "relative_path": "script.rpy",
+                "line": 2,
+                "widget_id": "start_btn",
+            },
+            "capabilities": {"move": True},
+            "position": [40, 50],
+            "runtime_baseline": [12, 10],
+            "source_position": [12, 10],
+            "dirty": True,
+        }
+
+        reply = globs["_renforge_editor_h_save"]({"dry_run": True})
+
+        assert reply["ok"] is True
+        assert reply["dry_run"] is True
+        assert len(submissions) == 1
+        command, payload, context = submissions[0]
+        assert command == "commit"
+        assert payload["dry_run"] is True
+        assert payload["intents"][0]["x"] == 40
+        assert payload["intents"][0]["y"] == 50
+        assert context == {"command": "commit", "dry_run": True}
+        assert state.dry_run_request_id == "dry-run-request"
+        assert state.save_in_progress is True
+
+        result = {
+            "dry_run": True,
+            "state": "dry_run",
+            "source_relative_path": "script.rpy",
+            "changed": True,
+            "diff": "--- a/script.rpy\n+++ b/script.rpy\n",
+        }
+
+        class Collector:
+            def collect_nowait(self):
+                return [
+                    {
+                        "request_id": "dry-run-request",
+                        "command": "commit",
+                        "context": {"command": "commit", "dry_run": True},
+                        "reply": {"ok": True, "result": result},
+                    }
+                ]
+
+        globs["_renforge_editor_ensure_coordinator"] = lambda: Collector()
+        applied = globs["_renforge_editor_apply_coordinator_results"]()
+
+        assert len(applied) == 1
+        assert state.dry_run_result == result
+        assert state.dry_run_error is None
+        assert state.save_in_progress is False
+        assert state.save_requested is False
+        assert state.save_enabled is True
+        assert state.pending_transaction_id is None
+        assert state.pending_handshake_generation is None
+        assert state.pending_reload_requested is False
+        assert state.status_code == "dry_run_ready"
+        assert globs["_renforge_editor_h_status"]({})["dry_run_result"] == result
+
+        class FailingCollector:
+            def collect_nowait(self):
+                return [
+                    {
+                        "request_id": "dry-run-request-2",
+                        "command": "commit",
+                        "context": {"command": "commit", "dry_run": True},
+                        "reply": {
+                            "ok": False,
+                            "error": {
+                                "code": "VALIDATION_FAILED",
+                                "message": "lint failed",
+                            },
+                        },
+                    }
+                ]
+
+        globs["_renforge_editor_ensure_coordinator"] = lambda: FailingCollector()
+        state.dry_run_request_id = "dry-run-request-2"
+        globs["_renforge_editor_apply_coordinator_results"]()
+
+        assert state.dry_run_result is None
+        assert state.dry_run_error == "lint failed"
+        assert state.save_in_progress is False
+        assert state.save_requested is False
+        assert state.save_enabled is True
+        assert state.pending_transaction_id is None
+        assert state.status_code == "dry_run_failed"
+    finally:
+        globs["_renforge_editor_stop_coordinator"]()
+
+
+def test_editor_late_dry_run_result_after_select_is_ignored(
+    running_bridge,
+    monkeypatch,
+) -> None:
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    for name in (
+        "RENFORGE_EDITOR_HOST",
+        "RENFORGE_EDITOR_PORT",
+        "RENFORGE_EDITOR_TOKEN",
+        "RENFORGE_EDITOR_PROTOCOL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    renpy.config.after_load_callbacks = []
+    renpy.Displayable = object
+    renpy.Render = lambda width, height: types.SimpleNamespace(
+        width=width, height=height
+    )
+    renpy.IgnoreEvent = type("IgnoreEvent", (Exception,), {})
+    renpy.show_screen = lambda *args, **kwargs: None
+    renpy.restart_interaction = lambda: None
+    exec(compile(_load_editor_body(), "editor.rpy", "exec"), globs)
+    try:
+        state = globs["_renforge_editor_state"]()
+        state.active = True
+        state.dry_run_request_id = "dry-old"
+        state.save_in_progress = True
+        state.save_requested = True
+        state.save_button_state = "saving"
+        state.selected_lock_reason = None
+        runtime_key = {"screen": "late_screen", "widget_id": "late_target"}
+        candidate = {
+            "rect": [10, 20, 100, 20],
+            "runtime_key": runtime_key,
+            "editor_owned": False,
+        }
+        globs["_renforge_editor_hit_candidates"] = lambda *_args: [candidate]
+        globs["_renforge_editor_candidate_hit"] = lambda *_args: True
+        globs["_renforge_editor_validate_runtime_key"] = lambda _key: None
+        globs["_renforge_editor_observation_for_candidate"] = lambda _candidate: (
+            {"runtime_key": runtime_key},
+            None,
+        )
+        globs["_renforge_editor_target_key"] = lambda _key: "late-target"
+        globs["_renforge_editor_set_label"] = lambda _x, _y: None
+        globs["_renforge_editor_show_target_overrides"] = lambda _screen: None
+
+        selected = globs["_renforge_editor_select"](15, 25)
+
+        assert selected["ok"] is True
+        assert state.dry_run_request_id is None
+        assert state.save_in_progress is False
+        assert state.save_requested is False
+        assert state.save_button_state == "idle"
+
+        class LateCollector:
+            def collect_nowait(self):
+                return [
+                    {
+                        "request_id": "dry-old",
+                        "command": "commit",
+                        "context": {"command": "commit", "dry_run": True},
+                        "reply": {
+                            "ok": True,
+                            "result": {
+                                "dry_run": True,
+                                "state": "dry_run",
+                                "diff": "-old\n+new\n",
+                            },
+                        },
+                    }
+                ]
+
+        globs["_renforge_editor_ensure_coordinator"] = lambda: LateCollector()
+        applied = globs["_renforge_editor_apply_coordinator_results"]()
+
+        assert applied == []
+        assert state.coordinator_applied[-1]["stale_dry_run"] is True
+        assert state.dry_run_result is None
+        assert state.dry_run_error is None
+    finally:
+        globs["_renforge_editor_stop_coordinator"]()
+
+
+def test_editor_preview_move_invalidates_dry_run_result(
+    running_bridge,
+    monkeypatch,
+) -> None:
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+    for name in (
+        "RENFORGE_EDITOR_HOST",
+        "RENFORGE_EDITOR_PORT",
+        "RENFORGE_EDITOR_TOKEN",
+        "RENFORGE_EDITOR_PROTOCOL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    renpy.config.after_load_callbacks = []
+    renpy.Displayable = object
+    renpy.Render = lambda width, height: types.SimpleNamespace(
+        width=width, height=height
+    )
+    renpy.IgnoreEvent = type("IgnoreEvent", (Exception,), {})
+    renpy.restart_interaction = lambda: None
+    exec(compile(_load_editor_body(), "editor.rpy", "exec"), globs)
+    try:
+        state = globs["_renforge_editor_state"]()
+        state.selected_screen = "move_screen"
+        state.selected_target_key = "move-target"
+        state.selected_lock_reason = None
+        state.preview_position = [10, 10]
+        state.dry_run_result = {"dry_run": True, "diff": "-old\n+new\n"}
+        state.targets["move-target"] = {
+            "source_key": {},
+            "position": [10, 10],
+            "dirty": True,
+        }
+        globs["_renforge_editor_refuse_structural_mix"] = lambda for_zorder=False: None
+        globs["_renforge_editor_apply_snap"] = lambda x, y, shift: (
+            int(x),
+            int(y),
+            {"snapped_x": False, "snapped_y": False},
+        )
+        globs["_renforge_editor_set_target_position"] = lambda _key, _pos: {"ok": True}
+        globs["_renforge_editor_refresh_save_enabled"] = lambda: None
+
+        moved = globs["_renforge_editor_apply_preview"](40, 50)
+
+        assert moved["ok"] is True
+        assert state.dry_run_result is None
+        assert state.dry_run_error is None
+    finally:
+        globs["_renforge_editor_stop_coordinator"]()
+
+
 def test_editor_discovers_anonymous_text_from_screen_cache(
     running_bridge,
     monkeypatch,
