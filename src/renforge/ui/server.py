@@ -994,7 +994,8 @@ def run_ui_server(
 
     project_root = Path(project).expanduser().resolve()
     ui_token = token_urlsafe(16)
-    browser_host = "127.0.0.1" if host == "0.0.0.0" else ("[::1]" if host == "::" else host)
+    # Compares the bind host to pick a browser URL; it binds nothing itself.
+    browser_host = "127.0.0.1" if host == "0.0.0.0" else ("[::1]" if host == "::" else host)  # nosec B104
     dashboard_url = f"http://{browser_host}:{port}/"
     target = f"{dashboard_url}?token={ui_token}"
     app = create_ui_app(project_root, ui_token, dashboard_url=dashboard_url)

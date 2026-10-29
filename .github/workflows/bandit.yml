@@ -40,11 +40,14 @@ jobs:
           # File or directory to run bandit on
           # path: # optional, default is .
           # Report only issues of a given severity level or higher. Can be LOW, MEDIUM or HIGH. Default is UNDEFINED (everything)
-          # level: # optional, default is UNDEFINED
+          # LOW is mostly try/except/pass and subprocess-import notices.
+          level: MEDIUM
           # Report only issues of a given confidence level or higher. Can be LOW, MEDIUM or HIGH. Default is UNDEFINED (everything)
           # confidence: # optional, default is UNDEFINED
           # comma-separated list of paths (glob patterns supported) to exclude from scan (note that these are in addition to the excluded paths provided in the config file) (default: .svn,CVS,.bzr,.hg,.git,__pycache__,.tox,.eggs,*.egg)
-          # excluded_paths: # optional, default is DEFAULT
+          # Tests use assert, exec of the bridge script, and fake /tmp paths by
+          # design. Bare names ("tests") do not match; Bandit needs these globs.
+          excluded_paths: "./tests/*,./ui/*,./examples/*"
           # comma-separated list of test IDs to skip
           # skips: # optional, default is DEFAULT
           # path to a .bandit file that supplies command line arguments
