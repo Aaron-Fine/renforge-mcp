@@ -24,6 +24,7 @@ from .. import session_registry
 from ..tools import live
 from ..tools import project_ops
 from ..lint import run_lint
+from ..save_isolation import STATE_MODE_TOKENS
 from .activity import read_recent_activity, tail_activity
 from .graph import build_story_map, resolve_game_file_path, resolve_warp_target
 from .errors import error_response
@@ -669,10 +670,12 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 status_code=400,
                 details={"savedir": savedir},
             )
-        if persistent is not None and (not isinstance(persistent, str) or not persistent):
+        if persistent is not None and (
+            not isinstance(persistent, str) or persistent.strip() not in STATE_MODE_TOKENS
+        ):
             return error_response(
                 code="launch_persistent_invalid",
-                error="persistent must be a non-empty string",
+                error="persistent must be 'auto', 'existing', or 'empty'",
                 status_code=400,
                 details={"persistent": persistent},
             )
@@ -683,10 +686,12 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 status_code=400,
                 details={"home": home},
             )
-        if preferences is not None and (not isinstance(preferences, str) or not preferences):
+        if preferences is not None and (
+            not isinstance(preferences, str) or preferences.strip() not in STATE_MODE_TOKENS
+        ):
             return error_response(
                 code="launch_preferences_invalid",
-                error="preferences must be a non-empty string",
+                error="preferences must be 'auto', 'existing', or 'empty'",
                 status_code=400,
                 details={"preferences": preferences},
             )
