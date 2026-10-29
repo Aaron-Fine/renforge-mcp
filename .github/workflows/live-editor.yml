@@ -20,6 +20,10 @@ concurrency:
   group: live-editor-${{ github.ref }}
   cancel-in-progress: true
 
+# Jobs only check out code and pass artifacts; jobs that need more set their own.
+permissions:
+  contents: read
+
 jobs:
   live:
     name: Live editor suites (Ren'Py 8.5.3)
