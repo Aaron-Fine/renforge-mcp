@@ -125,13 +125,10 @@ def apply_launch_isolation_defaults(
     home_explicit = home is not None and bool(str(home).strip()) and str(home).strip() not in AUTO_TOKENS
     resolved_savedir = default_launch_value(savedir, field="savedir", environ=environ)
     resolved_home = default_launch_value(home, field="home", environ=environ)
-    if not home_explicit:
-        savedir_mode = classify_savedir(resolved_savedir)
-        if savedir_mode == "existing":
-            resolved_home = "existing"
-        elif savedir_mode == "temporary":
-            resolved_home = "temporary"
-    state_default = "empty" if classify_savedir(resolved_savedir) == "temporary" else "existing"
+    savedir_mode = classify_savedir(resolved_savedir)
+    if not home_explicit and savedir_mode in ("existing", "temporary"):
+        resolved_home = savedir_mode
+    state_default = "empty" if savedir_mode == "temporary" else "existing"
 
     def state_mode(value: str | None) -> str:
         token = "auto" if value is None else str(value).strip()
@@ -845,7 +842,7 @@ def _copy_slot_files(source_dir: Path, dest_dir: Path, slot: str) -> list[str]:
             source = entry.resolve()
         except OSError:
             continue
-        if not _is_relative_to(source, source_root):
+        if not source.is_relative_to(source_root):
             continue
         destination = (dest_root / source.name).resolve()
         if destination.parent != dest_root:
@@ -854,14 +851,6 @@ def _copy_slot_files(source_dir: Path, dest_dir: Path, slot: str) -> list[str]:
         copied.append(source.name)
     copied.sort()
     return copied
-
-
-def _is_relative_to(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
 
 
 def _prepare_isolated_home(home: Path) -> None:

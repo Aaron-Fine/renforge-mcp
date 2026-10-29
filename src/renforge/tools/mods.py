@@ -49,7 +49,7 @@ def _reload(project_path: str) -> dict[str, Any]:
     errors = get_errors(project_path, since=cursor)
     if not isinstance(errors, dict):
         errors = _error_reply("get_errors returned a non-object result")
-    ok = bool(reload_reply.get("ok")) and errors.get("ok") is True and not _errors_changed(baseline, errors)
+    ok = errors.get("ok") is True and not _errors_changed(baseline, errors)
     return {
         "ok": ok,
         "reload": reload_reply,

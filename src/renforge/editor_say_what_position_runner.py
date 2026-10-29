@@ -218,7 +218,7 @@ def run_editor_say_what_style_position_live_scenario(
                 '(_renforge_editor_state().pending_attestation_screen, '
                 '_renforge_editor_state().pending_attestation_screen_kwargs)'
             )
-        except (BridgeError, BridgeProtocolError) as exc:
+        except BridgeError as exc:
             report["bridge_failure"] = f"{type(exc).__name__}: {exc}"
             report["reload_slot"] = "bridge unavailable"
         try:
@@ -228,7 +228,7 @@ def run_editor_say_what_style_position_live_scenario(
                 for node in (client.scene_tree(types=["text"], detail="semantic").get("nodes") or [])
                 if isinstance(node, dict) and node.get("text")
             ]
-        except (BridgeError, BridgeProtocolError) as exc:
+        except BridgeError as exc:
             report["bridge_failure"] = f"{type(exc).__name__}: {exc}"
             report["say_after_reload"] = "bridge unavailable"
         report["last_status_code"] = last_status.get("status_code") if last_status else None
