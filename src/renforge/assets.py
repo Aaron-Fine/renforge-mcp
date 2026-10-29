@@ -14,6 +14,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .util.files import read_text_nofollow
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".tga", ".bmp"}
 AUDIO_EXTS = {".ogg", ".opus", ".mp3", ".wav", ".flac", ".m4a", ".aac", ".mp2", ".wma"}
 VIDEO_EXTS = {".webm", ".mp4", ".ogv", ".avi", ".mkv", ".mov", ".mpg", ".mpeg", ".flv"}
@@ -33,8 +35,10 @@ def _game_dir(project_path: str | Path) -> Path:
 def _iter_rpy(game: Path):
     for root, _dirs, files in os.walk(game):
         for name in files:
-            if name.endswith(".rpy"):
-                yield Path(root) / name
+            path = Path(root) / name
+            # A linked .rpy could point anywhere; its strings would be reported.
+            if name.endswith(".rpy") and not path.is_symlink():
+                yield path
 
 
 def _image_name_from_show(rest: str) -> str:
@@ -75,7 +79,7 @@ def analyze_assets(project_path: str | Path) -> dict[str, Any]:
     shown_images: set[str] = set()
     for rpy in _iter_rpy(game):
         try:
-            text = rpy.read_text(encoding="utf-8", errors="replace")
+            text = read_text_nofollow(rpy, errors="replace")
         except OSError:
             continue
         for line in text.splitlines():

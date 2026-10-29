@@ -73,6 +73,18 @@ def hash_file_nofollow(path: Path) -> str:
         os.close(fd)
 
 
+def read_text_nofollow(path: Path, *, encoding: str = "utf-8", errors: str = "strict") -> str:
+    """Read a regular file as text, refusing symlinks.
+
+    Game folders are untrusted: a linked ``.rpy`` must not make RenForge read
+    and report a file elsewhere on the machine. Raises ``OSError`` for links.
+    """
+    fd, _opened = _open_regular_nofollow(Path(path))
+    # Text mode, like Path.read_text: universal newlines.
+    with open(fd, "r", encoding=encoding, errors=errors) as handle:
+        return handle.read()
+
+
 def copy_regular_file_nofollow(
     source: Path,
     destination: Path,
@@ -136,7 +148,8 @@ def write_exclusive_bytes(path: Path, data: bytes, *, mode: int = 0o600) -> None
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-    except Exception:
+    except BaseException:
+        # A partial bridge file would fail its digest check and block later launches.
         try:
             target.unlink()
         except FileNotFoundError:

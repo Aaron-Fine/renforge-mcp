@@ -982,160 +982,166 @@ def _launch_after_project_lock(
     )
     temporary_savedir = isolation.savedir
     cleanup_savedir = isolation.cleanup
-    env.update(isolation.environ(host_env=env))
-    savedir_path = str(isolation.savedir) if isolation.savedir is not None else None
-
-    # Token may be caller-supplied; session id is allocated with the artifact
-    # intent so names, ownership, and bridge.json share one identity.
-    if token is not None and not _is_bridge_token(token):
-        raise LaunchError(
-            "BRIDGE_TOKEN_INVALID",
-            "Bridge token must be 64 lowercase hexadecimal characters.",
-            phase="preparing_bridge_metadata",
-            suggested_fix="Omit token to let RenForge generate one, or pass secrets.token_hex(32).",
-        )
-    if token is None:
-        token = secrets.token_hex(32)
-
-    _phase("injecting_bridge")
-    editor_assets_dirname: str | None = None
-    editor_font_relative: str = ""
     try:
-        editor_payload: bytes | None = None
-        editor_assets: list[tuple[str, bytes]] | None = None
-        if editor_endpoint is not None:
-            _phase("injecting_editor")
-            editor_payload = _editor_payload()
-            editor_assets, editor_font_relative = _prepare_editor_asset_payloads()
-        materialized = allocate_and_materialize(
-            project,
-            bridge_payload=bridge_payload(),
-            include_session_init=bool(savedir_path),
-            editor_payload=editor_payload,
-            editor_asset_files=editor_assets,
-            editor_font_relative=editor_font_relative,
-        )
-        session_id = materialized.session_id
-        editor_assets_dirname = materialized.editor_assets_dirname
-        if materialized.editor_font_relative:
-            editor_font_relative = materialized.editor_font_relative
-    except LaunchError:
-        raise
-    except OSError as exc:
-        raise LaunchError(
-            "BRIDGE_FILE_NOT_CREATED",
-            f"Could not inject the bridge into the project: {exc}",
-            phase="injecting_bridge",
-            suggested_fix="Check project write permissions under game/.",
-        ) from exc
+        env.update(isolation.environ(host_env=env))
+        savedir_path = str(isolation.savedir) if isolation.savedir is not None else None
 
-    _phase("reserving_bridge_metadata")
-    try:
-        write_starting_bridge_info(
-            project.root,
-            session_id=session_id,
-            token=token,
-        )
-    except LaunchError:
-        # Do not cleanup against a failed reservation (unsafe preplanted metadata).
-        raise
-    except BridgeProtocolError as exc:
-        raise LaunchError(
-            "BRIDGE_INFO_CONFLICT",
-            "Bridge metadata conflicted with the reserved launch identity.",
-            phase="reserving_bridge_metadata",
-            suggested_fix="Remove the conflicting bridge.json from the project's RenForge control folder and retry.",
-        ) from exc
-    except PrivatePathError as exc:
-        raise LaunchError(
-            "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
-            "Bridge metadata path is unsafe and was left untouched.",
-            phase="reserving_bridge_metadata",
-            suggested_fix="Remove unsafe paths in the project's RenForge control folder and retry.",
-        ) from exc
-    except Exception as exc:
-        raise LaunchError(
-            "BRIDGE_MANIFEST_PUBLICATION_FAILED",
-            f"Could not reserve starting bridge metadata: {exc}",
-            phase="reserving_bridge_metadata",
-            suggested_fix="Check write permissions in the project's RenForge control folder.",
-        ) from exc
-    project_lock.owned_session_id = session_id
-
-    env["RENFORGE_BRIDGE_TOKEN"] = token
-    env["RENFORGE_BRIDGE_SESSION_ID"] = session_id
-    env["RENFORGE_BRIDGE_PROJECT_ROOT"] = str(project.root)
-    env["RENFORGE_BRIDGE_CONTROL_DIR"] = str(control_dir(project.root))
-    env["RENFORGE_BRIDGE_PORT"] = str(port)
-    # Transitions only slow an agent down and leave half-drawn frames to wait
-    # out. Turn them off when the session's preferences are its own (empty,
-    # or in a save folder that is not the player's), so the change never
-    # reaches the player's real preferences.
-    own_preferences = isolation.preferences_mode == "empty" or not isolation.exposes_user_saves
-    if own_preferences and env.get(TRANSITIONS_ENV, "").strip().lower() != "on":
-        env["RENFORGE_BRIDGE_TRANSITIONS"] = "off"
-    # Vsync makes every frame wait for the display. A hidden or locked-screen
-    # window is throttled (about 70 ms a frame here), and skipping draws at
-    # least one frame per line, so it capped skipping at ~7 lines a second.
-    # Idle CPU is the same without it. RENPY_GL_VSYNC, if set, is respected.
-    if "RENPY_GL_VSYNC" not in env and env.get(VSYNC_ENV, "").strip().lower() != "on":
-        env["RENPY_GL_VSYNC"] = "0"
-    # A crash would open traceback.txt in the user's editor; the launch and
-    # the session report it instead. A RENPY_EDIT_PY already set is kept.
-    env.setdefault("RENPY_EDIT_PY", str(Path(__file__).with_name("no_editor.py")))
-    if editor_endpoint is not None:
-        env.update(
-            _editor_environment(
-                editor_endpoint,
-                assets_dirname=editor_assets_dirname or "",
-                font_relative=editor_font_relative,
+        # Token may be caller-supplied; session id is allocated with the artifact
+        # intent so names, ownership, and bridge.json share one identity.
+        if token is not None and not _is_bridge_token(token):
+            raise LaunchError(
+                "BRIDGE_TOKEN_INVALID",
+                "Bridge token must be 64 lowercase hexadecimal characters.",
+                phase="preparing_bridge_metadata",
+                suggested_fix="Omit token to let RenForge generate one, or pass secrets.token_hex(32).",
             )
-        )
+        if token is None:
+            token = secrets.token_hex(32)
 
-    run_args: list[str] = ["run"]
-    if warp is not None:
-        run_args.extend(["--warp", warp])
-    run_args.extend(isolation.command_args())
-    command = project.renpy_command(sdk, tuple(run_args))
-    if headless:
-        if shutil.which("xvfb-run") is None:
+        _phase("injecting_bridge")
+        editor_assets_dirname: str | None = None
+        editor_font_relative: str = ""
+        try:
+            editor_payload: bytes | None = None
+            editor_assets: list[tuple[str, bytes]] | None = None
+            if editor_endpoint is not None:
+                _phase("injecting_editor")
+                editor_payload = _editor_payload()
+                editor_assets, editor_font_relative = _prepare_editor_asset_payloads()
+            materialized = allocate_and_materialize(
+                project,
+                bridge_payload=bridge_payload(),
+                include_session_init=bool(savedir_path),
+                editor_payload=editor_payload,
+                editor_asset_files=editor_assets,
+                editor_font_relative=editor_font_relative,
+            )
+            session_id = materialized.session_id
+            editor_assets_dirname = materialized.editor_assets_dirname
+            if materialized.editor_font_relative:
+                editor_font_relative = materialized.editor_font_relative
+        except LaunchError:
+            raise
+        except OSError as exc:
+            raise LaunchError(
+                "BRIDGE_FILE_NOT_CREATED",
+                f"Could not inject the bridge into the project: {exc}",
+                phase="injecting_bridge",
+                suggested_fix="Check project write permissions under game/.",
+            ) from exc
+
+        _phase("reserving_bridge_metadata")
+        try:
+            write_starting_bridge_info(
+                project.root,
+                session_id=session_id,
+                token=token,
+            )
+        except LaunchError:
+            # Do not cleanup against a failed reservation (unsafe preplanted metadata).
+            raise
+        except BridgeProtocolError as exc:
+            raise LaunchError(
+                "BRIDGE_INFO_CONFLICT",
+                "Bridge metadata conflicted with the reserved launch identity.",
+                phase="reserving_bridge_metadata",
+                suggested_fix="Remove the conflicting bridge.json from the project's RenForge control folder and retry.",
+            ) from exc
+        except PrivatePathError as exc:
+            raise LaunchError(
+                "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
+                "Bridge metadata path is unsafe and was left untouched.",
+                phase="reserving_bridge_metadata",
+                suggested_fix="Remove unsafe paths in the project's RenForge control folder and retry.",
+            ) from exc
+        except Exception as exc:
+            raise LaunchError(
+                "BRIDGE_MANIFEST_PUBLICATION_FAILED",
+                f"Could not reserve starting bridge metadata: {exc}",
+                phase="reserving_bridge_metadata",
+                suggested_fix="Check write permissions in the project's RenForge control folder.",
+            ) from exc
+        project_lock.owned_session_id = session_id
+
+        env["RENFORGE_BRIDGE_TOKEN"] = token
+        env["RENFORGE_BRIDGE_SESSION_ID"] = session_id
+        env["RENFORGE_BRIDGE_PROJECT_ROOT"] = str(project.root)
+        env["RENFORGE_BRIDGE_CONTROL_DIR"] = str(control_dir(project.root))
+        env["RENFORGE_BRIDGE_PORT"] = str(port)
+        # Transitions only slow an agent down and leave half-drawn frames to wait
+        # out. Turn them off when the session's preferences are its own (empty,
+        # or in a save folder that is not the player's), so the change never
+        # reaches the player's real preferences.
+        own_preferences = isolation.preferences_mode == "empty" or not isolation.exposes_user_saves
+        if own_preferences and env.get(TRANSITIONS_ENV, "").strip().lower() != "on":
+            env["RENFORGE_BRIDGE_TRANSITIONS"] = "off"
+        # Vsync makes every frame wait for the display. A hidden or locked-screen
+        # window is throttled (about 70 ms a frame here), and skipping draws at
+        # least one frame per line, so it capped skipping at ~7 lines a second.
+        # Idle CPU is the same without it. RENPY_GL_VSYNC, if set, is respected.
+        if "RENPY_GL_VSYNC" not in env and env.get(VSYNC_ENV, "").strip().lower() != "on":
+            env["RENPY_GL_VSYNC"] = "0"
+        # A crash would open traceback.txt in the user's editor; the launch and
+        # the session report it instead. A RENPY_EDIT_PY already set is kept.
+        env.setdefault("RENPY_EDIT_PY", str(Path(__file__).with_name("no_editor.py")))
+        if editor_endpoint is not None:
+            env.update(
+                _editor_environment(
+                    editor_endpoint,
+                    assets_dirname=editor_assets_dirname or "",
+                    font_relative=editor_font_relative,
+                )
+            )
+
+        run_args: list[str] = ["run"]
+        if warp is not None:
+            run_args.extend(["--warp", warp])
+        run_args.extend(isolation.command_args())
+        command = project.renpy_command(sdk, tuple(run_args))
+        if headless:
+            if shutil.which("xvfb-run") is None:
+                remove_bridge_artifacts(project.root, expected_session_id=session_id)
+                raise LaunchError(
+                    "DISPLAY_START_FAILED",
+                    "Xvfb fallback selected but xvfb-run is not on PATH.",
+                    phase="starting_virtual_display",
+                    suggested_fix="Install xvfb or provide a DISPLAY.",
+                )
+            _phase("starting_virtual_display")
+            command = ["xvfb-run", "-a", *command]
+
+        _phase("starting_renpy")
+        error_stamps = _game_error_stamps(project.root)
+        spawned_ns = time.time_ns()
+        try:
+            process = subprocess.Popen(
+                command,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=headless,
+            )
+        except FileNotFoundError as exc:
             remove_bridge_artifacts(project.root, expected_session_id=session_id)
             raise LaunchError(
-                "DISPLAY_START_FAILED",
-                "Xvfb fallback selected but xvfb-run is not on PATH.",
-                phase="starting_virtual_display",
-                suggested_fix="Install xvfb or provide a DISPLAY.",
-            )
-        _phase("starting_virtual_display")
-        command = ["xvfb-run", "-a", *command]
-
-    _phase("starting_renpy")
-    error_stamps = _game_error_stamps(project.root)
-    spawned_ns = time.time_ns()
-    try:
-        process = subprocess.Popen(
-            command,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=headless,
-        )
-    except FileNotFoundError as exc:
-        remove_bridge_artifacts(project.root, expected_session_id=session_id)
-        raise LaunchError(
-            "RENPY_EXECUTABLE_NOT_FOUND",
-            f"Could not start Ren'Py: {exc}",
-            phase="starting_renpy",
-            suggested_fix="Install a Ren'Py SDK via renforge or pass a valid version.",
-        ) from exc
-    except OSError as exc:
-        remove_bridge_artifacts(project.root, expected_session_id=session_id)
-        raise LaunchError(
-            "RENPY_PROCESS_EXITED",
-            f"Failed to spawn Ren'Py: {exc}",
-            phase="starting_renpy",
-            suggested_fix="Check the SDK install and project path.",
-        ) from exc
+                "RENPY_EXECUTABLE_NOT_FOUND",
+                f"Could not start Ren'Py: {exc}",
+                phase="starting_renpy",
+                suggested_fix="Install a Ren'Py SDK via renforge or pass a valid version.",
+            ) from exc
+        except OSError as exc:
+            remove_bridge_artifacts(project.root, expected_session_id=session_id)
+            raise LaunchError(
+                "RENPY_PROCESS_EXITED",
+                f"Failed to spawn Ren'Py: {exc}",
+                phase="starting_renpy",
+                suggested_fix="Check the SDK install and project path.",
+            ) from exc
+    except BaseException:
+        # Nothing was spawned, so no session will remove the session root.
+        if cleanup_savedir and isolation.session_root is not None:
+            shutil.rmtree(isolation.session_root, ignore_errors=True)
+        raise
 
     startup_event = threading.Event()
     startup_code: list[str | None] = [None]

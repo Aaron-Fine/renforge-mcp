@@ -27,9 +27,15 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any, Iterable, Mapping
 
+from .util.files import read_text_nofollow
+
 EXISTING_TOKENS: frozenset[str] = frozenset({"existing", "default"})
 TEMPORARY_TOKENS: frozenset[str] = frozenset({"", "temporary"})
 AUTO_TOKENS: frozenset[str] = frozenset({"auto"})
+# Non-empty persistent/preferences values resolve_launch_isolation accepts.
+STATE_MODE_TOKENS: frozenset[str] = (
+    AUTO_TOKENS | EXISTING_TOKENS | TEMPORARY_TOKENS | {"empty"}
+) - {""}
 ISOLATION_ENV: str = "RENFORGE_ISOLATION"
 SESSION_PREFIX: str = "renforge-session-"
 SESSION_ID_PREFIX: str = "sess_"
@@ -163,7 +169,8 @@ class LaunchIsolation:
         if self.savedir_mode == "existing" or self.home_mode == "existing":
             return True
         if self.savedir_mode == "path" and self.savedir is not None:
-            return path_exposes_user_saves(self.savedir)
+            if path_exposes_user_saves(self.savedir):
+                return True
         if self.home_mode == "path" and self.home is not None:
             return home_exposes_user_saves(self.home)
         return False
@@ -245,25 +252,30 @@ def resolve_launch_isolation(
         session_root = Path(tempfile.mkdtemp(prefix=SESSION_PREFIX))
         cleanup = bool(cleanup_on_stop)
 
-    if savedir_mode == "temporary":
-        assert session_root is not None
-        savedir_path = session_root / SAVES_DIRNAME
-        savedir_path.mkdir(parents=True, exist_ok=True)
-        (savedir_path / MULTIPERSISTENT_DIRNAME).mkdir(parents=True, exist_ok=True)
-    elif savedir_mode == "path":
-        assert savedir is not None
-        savedir_path = Path(savedir).expanduser().resolve()
-        savedir_path.mkdir(parents=True, exist_ok=True)
-        (savedir_path / MULTIPERSISTENT_DIRNAME).mkdir(parents=True, exist_ok=True)
+    try:
+        if savedir_mode == "temporary":
+            assert session_root is not None
+            savedir_path = session_root / SAVES_DIRNAME
+            savedir_path.mkdir(parents=True, exist_ok=True)
+            (savedir_path / MULTIPERSISTENT_DIRNAME).mkdir(parents=True, exist_ok=True)
+        elif savedir_mode == "path":
+            assert savedir is not None
+            savedir_path = Path(savedir).expanduser().resolve()
+            savedir_path.mkdir(parents=True, exist_ok=True)
+            (savedir_path / MULTIPERSISTENT_DIRNAME).mkdir(parents=True, exist_ok=True)
 
-    if home_mode == "temporary":
-        assert session_root is not None
-        home_path = session_root / HOME_DIRNAME
-        _prepare_isolated_home(home_path)
-    elif home_mode == "path":
-        assert home is not None
-        home_path = Path(home).expanduser().resolve()
-        _prepare_isolated_home(home_path)
+        if home_mode == "temporary":
+            assert session_root is not None
+            home_path = session_root / HOME_DIRNAME
+            _prepare_isolated_home(home_path)
+        elif home_mode == "path":
+            assert home is not None
+            home_path = Path(home).expanduser().resolve()
+            _prepare_isolated_home(home_path)
+    except BaseException:
+        if session_root is not None:
+            shutil.rmtree(session_root, ignore_errors=True)
+        raise
 
     return LaunchIsolation(
         savedir_mode=savedir_mode,
@@ -663,6 +675,9 @@ def import_host_slots(
             continue
         directory = Path(record["directory"])
         copied = _copy_slot_files(directory, dest, name)
+        if not copied:
+            missing.append(name)
+            continue
         imported.append({"name": name, "files": copied, "directory": str(directory)})
 
     if not imported:
@@ -792,10 +807,11 @@ def _slots_in_directory(directory: Path) -> list[dict[str, Any]]:
 
 
 def extra_info_from_sidecar(path: Path) -> str:
-    if not path.is_file():
-        return ""
+    # A linked sidecar could point at any JSON file this process can read.
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        if path.is_symlink() or not path.is_file():
+            return ""
+        payload = json.loads(read_text_nofollow(path))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return ""
     if isinstance(payload, dict):
