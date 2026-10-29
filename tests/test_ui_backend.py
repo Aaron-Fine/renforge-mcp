@@ -748,3 +748,68 @@ def test_api_live_launch_rejects_an_unknown_state_mode(tmp_path: Path, monkeypat
     assert response.status_code == 400
     assert response.json()["error_code"] == f"launch_{field}_invalid"
     assert {"auto", "existing", "empty"} <= server.STATE_MODE_TOKENS
+
+
+@pytest.mark.skipif(TestClient is None, reason="starlette not installed")
+@pytest.mark.parametrize(
+    ("route", "body", "code"),
+    [
+        ("/api/live/launch", {"timeout": True}, "launch_timeout_invalid"),
+        ("/api/live/launch", {"display": "natvie"}, "launch_display_invalid"),
+        ("/api/live/launch", {"audio": 3}, "launch_audio_invalid"),
+        ("/api/warp", {"target": "start", "timeout": "abc"}, "launch_timeout_invalid"),
+        ("/api/warp", {"target": "start", "version": False}, "launch_version_invalid"),
+        ("/api/warp", {"target": "start", "cleanup_on_stop": "false"}, "launch_cleanup_on_stop_invalid"),
+        ("/api/warp", {"target": "start", "display": "natvie"}, "launch_display_invalid"),
+        ("/api/eval", {"expr": None}, "eval_expr_invalid"),
+        ("/api/set-var", {"value": 1}, "set_var_name_invalid"),
+        ("/api/set-var", {"name": "a.b", "value": 1}, "set_var_name_invalid"),
+        ("/api/screenshot", {"width": True}, "screenshot_size_invalid"),
+        ("/api/screenshot", {"height": -5}, "screenshot_size_invalid"),
+        ("/api/select-choice", {"index": "1"}, "select_choice_invalid"),
+        ("/api/select-choice", {"text": ""}, "select_choice_invalid"),
+        ("/api/live/control", {"action": "advnace"}, "live_action_invalid"),
+    ],
+)
+def test_dashboard_rejects_malformed_requests_before_acting(
+    tmp_path: Path, monkeypatch, route: str, body: dict, code: str
+) -> None:
+    import renforge.ui.server as server
+
+    project = _project_root(tmp_path)
+    for name in ("launch_game", "eval_expr", "set_var", "screenshot_png", "select_choice", "control"):
+        monkeypatch.setattr(
+            server.live, name, lambda *_a, _n=name, **_k: (_ for _ in ()).throw(AssertionError(f"{_n} called"))
+        )
+    client = TestClient(create_ui_app(project, ui_token="token"))
+
+    response = client.post(f"{route}?token=token", json=body)
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == code
+
+
+@pytest.mark.skipif(TestClient is None, reason="starlette not installed")
+@pytest.mark.parametrize("route", ["/api/translation-strings", "/api/translation-stats"])
+def test_translation_routes_reject_a_language_that_is_not_a_name(tmp_path: Path, route: str) -> None:
+    client = TestClient(create_ui_app(_project_root(tmp_path), ui_token="token"))
+    response = client.get(route, params={"token": "token", "language": "../.."})
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "translation_language_invalid"
+
+
+@pytest.mark.skipif(TestClient is None, reason="starlette not installed")
+def test_api_live_launch_treats_an_empty_warp_as_none(tmp_path: Path, monkeypatch) -> None:
+    import renforge.ui.server as server
+
+    seen = {}
+
+    def fake_launch(project_path: str, **kwargs):
+        seen.update(kwargs)
+        return {"ok": True, "ready": True, "already_running": True}
+
+    monkeypatch.setattr(server.live, "launch_game", fake_launch)
+    client = TestClient(create_ui_app(_project_root(tmp_path), ui_token="token"))
+    client.post("/api/live/launch?token=token", json={"warp": "", "timeout": 0})
+    assert seen["warp"] is None
+    assert seen.get("timeout") is None

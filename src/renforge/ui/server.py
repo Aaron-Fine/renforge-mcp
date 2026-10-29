@@ -24,6 +24,9 @@ from .. import session_registry
 from ..tools import live
 from ..tools import project_ops
 from ..lint import run_lint
+from ..interaction import _real_number
+from ..launch_env import AUDIO_STRATEGIES, DISPLAY_STRATEGIES
+from ..policy import CONTROL_ACTIONS
 from ..save_isolation import STATE_MODE_TOKENS
 from .activity import read_recent_activity, tail_activity
 from .graph import build_story_map, resolve_game_file_path, resolve_warp_target
@@ -553,6 +556,14 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 status_code=400,
                 details={"parameter": "language"},
             )
+        if not language.isidentifier():
+            # It names a folder under game/tl; "/" or ".." would leave it.
+            return error_response(
+                code="translation_language_invalid",
+                error="language must be a Ren'Py language name",
+                status_code=400,
+                details={"language": language},
+            )
         return JSONResponse(project_ops.translation_stats(str(runtime.root), language))
 
     async def translation_strings(request: Request):
@@ -565,6 +576,14 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 error="language is required",
                 status_code=400,
                 details={"parameter": "language"},
+            )
+        if not language.isidentifier():
+            # It names a folder under game/tl; "/" or ".." would leave it.
+            return error_response(
+                code="translation_language_invalid",
+                error="language must be a Ren'Py language name",
+                status_code=400,
+                details={"language": language},
             )
         from ..translation import list_translation_strings
         return JSONResponse({"ok": True, "strings": list_translation_strings(runtime.root, language)})
@@ -703,6 +722,47 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             )
         return None
 
+    def _launch_option_error(payload: dict[str, Any]):
+        """400 response for a malformed launch option shared by launch and warp, else None."""
+        version = payload.get("version", "stable")
+        if not isinstance(version, str) or not version:
+            return error_response(
+                code="launch_version_invalid",
+                error="version must be a non-empty string",
+                status_code=400,
+                details={"version": version},
+            )
+        for field, allowed in (("display", DISPLAY_STRATEGIES), ("audio", AUDIO_STRATEGIES)):
+            value = payload.get(field, "auto")
+            if not isinstance(value, str) or value.strip().casefold() not in allowed:
+                return error_response(
+                    code=f"launch_{field}_invalid",
+                    error=f"{field} must be one of: {', '.join(sorted(allowed))}",
+                    status_code=400,
+                    details={field: value},
+                )
+        cleanup_on_stop = payload.get("cleanup_on_stop", True)
+        if not isinstance(cleanup_on_stop, bool):
+            return error_response(
+                code="launch_cleanup_on_stop_invalid",
+                error="cleanup_on_stop must be a boolean",
+                status_code=400,
+                details={"cleanup_on_stop": cleanup_on_stop},
+            )
+        timeout = payload.get("timeout")
+        if timeout is not None and not _real_number(timeout):
+            return error_response(
+                code="launch_timeout_invalid",
+                error="timeout must be a number",
+                status_code=400,
+                details={"timeout": timeout},
+            )
+        return _isolation_option_error(payload)
+
+    def _launch_timeout(timeout: Any) -> float | None:
+        # As for renforge_launch: zero or less means the default deadline.
+        return float(timeout) if timeout is not None and timeout > 0 else None
+
     async def warp(request: Request):
         if not await _check_token(request):
             return _unauthorized(request)
@@ -715,9 +775,9 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 status_code=400,
                 details={"target": target},
             )
-        isolation_error = _isolation_option_error(payload)
-        if isolation_error is not None:
-            return isolation_error
+        option_error = _launch_option_error(payload)
+        if option_error is not None:
+            return option_error
         resolved = resolve_warp_target(str(runtime.root), target)
         if not resolved.get("ok"):
             error = str(resolved.get("error", "invalid warp target"))
@@ -729,15 +789,15 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             )
         result = await asyncio.to_thread(
             _start_live_launch,
-            version=str(payload.get("version") or "stable"),
+            version=payload.get("version", "stable"),
             warp=str(resolved["target"]),
             editor=True,
-            display=str(payload.get("display") or "auto"),
-            audio=str(payload.get("audio") or "auto"),
+            display=payload.get("display", "auto"),
+            audio=payload.get("audio", "auto"),
             savedir=payload.get("savedir"),
             persistent=payload.get("persistent"),
-            cleanup_on_stop=bool(payload.get("cleanup_on_stop", True)),
-            timeout=payload.get("timeout"),
+            cleanup_on_stop=payload.get("cleanup_on_stop", True),
+            timeout=_launch_timeout(payload.get("timeout")),
             home=payload.get("home"),
             preferences=payload.get("preferences"),
         )
@@ -757,6 +817,13 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             return error_response(
                 code="live_action_missing",
                 error="action is required",
+                status_code=400,
+                details={"action": action},
+            )
+        if action not in CONTROL_ACTIONS:
+            return error_response(
+                code="live_action_invalid",
+                error=f"action must be one of: {', '.join(CONTROL_ACTIONS)}",
                 status_code=400,
                 details={"action": action},
             )
@@ -793,13 +860,6 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 status_code=400,
                 details={"start_label": start_label},
             )
-        if not isinstance(version, str) or not version:
-            return error_response(
-                code="launch_version_invalid",
-                error="version must be a non-empty string",
-                status_code=400,
-                details={"version": version},
-            )
         if warp is not None and not isinstance(warp, str):
             return error_response(
                 code="live_warp_invalid",
@@ -807,6 +867,8 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 status_code=400,
                 details={"warp": warp},
             )
+        # An empty warp is no warp; any other warp restarts the running game.
+        warp = warp or None
         if not isinstance(editor, bool):
             return error_response(
                 code="launch_editor_invalid",
@@ -814,37 +876,9 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 status_code=400,
                 details={"editor": editor},
             )
-        if not isinstance(display, str) or not display:
-            return error_response(
-                code="launch_display_invalid",
-                error="display must be a non-empty string",
-                status_code=400,
-                details={"display": display},
-            )
-        if not isinstance(audio, str) or not audio:
-            return error_response(
-                code="launch_audio_invalid",
-                error="audio must be a non-empty string",
-                status_code=400,
-                details={"audio": audio},
-            )
-        isolation_error = _isolation_option_error(payload)
-        if isolation_error is not None:
-            return isolation_error
-        if not isinstance(cleanup_on_stop, bool):
-            return error_response(
-                code="launch_cleanup_on_stop_invalid",
-                error="cleanup_on_stop must be a boolean",
-                status_code=400,
-                details={"cleanup_on_stop": cleanup_on_stop},
-            )
-        if timeout is not None and not isinstance(timeout, (int, float)):
-            return error_response(
-                code="launch_timeout_invalid",
-                error="timeout must be a number",
-                status_code=400,
-                details={"timeout": timeout},
-            )
+        option_error = _launch_option_error(payload)
+        if option_error is not None:
+            return option_error
         result = await asyncio.to_thread(
             _start_live_launch,
             version=version,
@@ -855,7 +889,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             savedir=savedir,
             persistent=persistent,
             cleanup_on_stop=cleanup_on_stop,
-            timeout=float(timeout) if timeout is not None else None,
+            timeout=_launch_timeout(timeout),
             home=home,
             preferences=preferences,
             start_label=start_label,
@@ -879,39 +913,64 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
         if not await _check_token(request):
             return _unauthorized(request)
         payload = _as_dict(await _read_json(request))
-        return JSONResponse(
-            live.select_choice(
-                str(runtime.root),
-                text=payload.get("text"),
-                index=payload.get("index"),
+        text = payload.get("text")
+        index = payload.get("index")
+        # An empty text would match every choice.
+        text_ok = text is None or (isinstance(text, str) and bool(text.strip()))
+        index_ok = index is None or (isinstance(index, int) and not isinstance(index, bool) and index >= 0)
+        if not text_ok or not index_ok or (text is None and index is None):
+            return error_response(
+                code="select_choice_invalid",
+                error="pass a non-empty text or a non-negative integer index",
+                status_code=400,
+                details={"text": text, "index": index},
             )
-        )
+        return JSONResponse(live.select_choice(str(runtime.root), text=text, index=index))
 
     async def eval_route(request: Request):
         if not await _check_token(request):
             return _unauthorized(request)
         payload = _as_dict(await _read_json(request))
-        return JSONResponse(live.eval_expr(str(runtime.root), str(payload.get("expr", ""))))
+        expr = payload.get("expr")
+        if not isinstance(expr, str) or not expr.strip():
+            return error_response(
+                code="eval_expr_invalid",
+                error="expr must be a non-empty string",
+                status_code=400,
+                details={"expr": expr},
+            )
+        return JSONResponse(live.eval_expr(str(runtime.root), expr))
 
     async def set_var(request: Request):
         if not await _check_token(request):
             return _unauthorized(request)
         payload = _as_dict(await _read_json(request))
-        return JSONResponse(
-            live.set_var(
-                str(runtime.root),
-                str(payload.get("name", "")),
-                payload.get("value"),
+        name = payload.get("name")
+        if not isinstance(name, str) or not name.isidentifier():
+            return error_response(
+                code="set_var_name_invalid",
+                error="name must be a Python identifier",
+                status_code=400,
+                details={"name": name},
             )
-        )
+        return JSONResponse(live.set_var(str(runtime.root), name, payload.get("value")))
 
     async def screenshot(request: Request):
         if not await _check_token(request):
             return _unauthorized(request)
         payload = _as_dict(await _read_json(request))
+        width = payload.get("width", 0)
+        height = payload.get("height", 0)
+        for field, value in (("width", width), ("height", height)):
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+                return error_response(
+                    code="screenshot_size_invalid",
+                    error=f"{field} must be a non-negative integer",
+                    status_code=400,
+                    details={field: value},
+                )
+        width, height = width or 0, height or 0
         try:
-            width = int(payload.get("width", 0) or 0)
-            height = int(payload.get("height", 0) or 0)
             png = live.screenshot_png(str(runtime.root), width=width, height=height)
         except Exception:
             return error_response(

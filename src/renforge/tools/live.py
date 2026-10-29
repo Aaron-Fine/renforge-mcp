@@ -2353,6 +2353,9 @@ def get_var(project_path: str, name: str) -> dict:
 
 
 def set_var(project_path: str, name: str, value: Any) -> dict:
+    # The bridge setattr()s the name on the store, so any string "works".
+    if not isinstance(name, str) or not name.isidentifier():
+        return {"ok": False, "error": "name must be a Python identifier", "name": name}
     return _with_client(project_path, lambda c: c.set_var(name, value))
 
 
@@ -2737,7 +2740,9 @@ def run_scenario(
                 if not isinstance(payload, dict):
                     raise ValueError("set payload must be an object of name→value")
                 for var_name, var_value in payload.items():
-                    set_var(project_path, str(var_name), var_value)
+                    reply = set_var(project_path, str(var_name), var_value)
+                    if not reply.get("ok"):
+                        raise RuntimeError(reply.get("error") or "set %s failed" % var_name)
                 last_action = "set(%s)" % ", ".join(str(k) for k in payload)
                 step_result["status"] = "passed"
             elif action == "eval":
@@ -2780,12 +2785,14 @@ def run_scenario(
                 step_result["status"] = "passed"
                 last_action = "click_at(%s,%s)" % (coords.get("x"), coords.get("y"))
             elif action == "advance":
-                count = 1
+                # Schema: null, an integer >= 1, or {"count": integer >= 1}.
                 if isinstance(payload, dict):
-                    count = int(payload.get("count") or 1)
-                elif isinstance(payload, (int, float)) and not isinstance(payload, bool):
-                    count = int(payload)
-                for _ in range(max(1, count)):
+                    count = payload.get("count", 1)
+                else:
+                    count = 1 if payload is None else payload
+                if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+                    raise ValueError("advance takes null, an integer >= 1, or {\"count\": integer >= 1}")
+                for _ in range(count):
                     reply = advance(project_path)
                     if not reply.get("ok", True) and reply.get("error"):
                         raise RuntimeError(reply.get("error"))

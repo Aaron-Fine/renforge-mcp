@@ -72,6 +72,9 @@ class EnvironmentCapabilities:
         }
 
 
+DISPLAY_STRATEGIES = frozenset({"auto", "native", "xvfb", "external", "none"})
+AUDIO_STRATEGIES = frozenset({"auto", "native", "dummy", "none"})
+
 def _detect_environment_name(env: dict[str, str] | None = None) -> str:
     source = env if env is not None else os.environ
     if source.get("WSL_DISTRO_NAME") or source.get("WSL_INTEROP"):
@@ -157,7 +160,7 @@ def resolve_display_strategy(
     ``mode`` is one of ``native``, ``xvfb``, ``external``.
     """
     strategy = (display or "auto").strip().casefold()
-    if strategy not in {"auto", "native", "xvfb", "external", "none"}:
+    if strategy not in DISPLAY_STRATEGIES:
         raise LaunchError(
             "INVALID_DISPLAY_STRATEGY",
             "display must be one of: auto, native, xvfb, external",
@@ -214,7 +217,7 @@ def resolve_display_strategy(
 def resolve_audio_strategy(audio: str, capabilities: EnvironmentCapabilities) -> dict[str, str]:
     """Return environment updates for the requested audio strategy."""
     strategy = (audio or "auto").strip().casefold()
-    if strategy not in {"auto", "native", "dummy", "none"}:
+    if strategy not in AUDIO_STRATEGIES:
         raise LaunchError(
             "INVALID_AUDIO_STRATEGY",
             "audio must be one of: auto, native, dummy, none",
