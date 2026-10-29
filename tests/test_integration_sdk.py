@@ -405,7 +405,9 @@ def test_live_menu_selection_continues_to_next_menu(sdk, demo_copy: Path) -> Non
 
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
 def test_live_demo_control_supports_editor_save(sdk, demo_copy: Path) -> None:
+    from renforge.bridge.client import poll_command
     from renforge.bridge.launcher import launch_with_bridge
+    from renforge.editor_runner_status import is_reload_committed
     from renforge.project import RenpyProject
 
     with launch_with_bridge(sdk, RenpyProject(demo_copy), startup_timeout=90, editor=True) as session:
@@ -461,11 +463,18 @@ def test_live_demo_control_supports_editor_save(sdk, demo_copy: Path) -> None:
             time.sleep(0.1)
         assert status.get("save_enabled") is True, status
 
-        # Script reload can briefly replace the listener. Reuse the acceptance
-        # runner's bounded handshake rather than assuming every poll connects.
-        from renforge.editor_demo_runner import _ed_do_save
-
-        status = _ed_do_save(client, timeout=150)
+        saved = client.click_element(id="rf_save", screen="_renforge_editor_overlay")
+        assert saved.get("ok") is True, saved
+        # Save calls renpy.reload_script(), which blocks the main thread and
+        # resets this one-shot connection. Keep reading status until the
+        # surviving listener reports the commit.
+        status = poll_command(
+            client,
+            "editor_task0_status",
+            is_reload_committed,
+            timeout=150.0,
+            pause=0.25,
+        )
         assert status.get("status_code") == "reload_committed", status
 
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")

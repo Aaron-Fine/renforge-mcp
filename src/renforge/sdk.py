@@ -478,7 +478,8 @@ def _download_archive(url: str, destination: Path) -> Path:
     os.close(fd)
     archive_path = Path(archive_file)
     try:
-        with urllib.request.urlopen(url) as response:
+        # renpy.org, or a mirror the operator set in the environment (file:// included).
+        with urllib.request.urlopen(url) as response:  # nosec B310
             with archive_path.open("wb") as target:
                 shutil.copyfileobj(response, target)
     except (HTTPError, URLError, OSError):

@@ -206,7 +206,7 @@ def build_guest_argv(tree: SandboxTestTree, inner: list[str]) -> list[str]:
         "/xdg/data",
         "--bind",
         str(tree.tmp),
-        "/tmp",
+        "/tmp",  # nosec B108 - mount point inside the sandbox, bound to tree.tmp
         "--setenv",
         "HOME",
         "/home/guest",
@@ -221,7 +221,7 @@ def build_guest_argv(tree: SandboxTestTree, inner: list[str]) -> list[str]:
         "/xdg/data",
         "--setenv",
         "TMPDIR",
-        "/tmp",
+        "/tmp",  # nosec B108 - the sandbox's own /tmp, bound to tree.tmp above
         "--setenv",
         "RENPY_PATH_TO_SAVES",
         "/profile/primary-saves",

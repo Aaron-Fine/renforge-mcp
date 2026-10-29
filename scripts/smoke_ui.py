@@ -58,7 +58,7 @@ def _pick_port() -> int:
 
 def _request_text(url: str, *, timeout: int = 5) -> str:
     req = Request(url, method="GET")
-    with urlopen(req, timeout=timeout) as response:
+    with urlopen(req, timeout=timeout) as response:  # nosec B310 - the local dashboard under test
         payload = response.read()
     return payload.decode("utf-8", errors="ignore")
 

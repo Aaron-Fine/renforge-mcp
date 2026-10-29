@@ -1960,7 +1960,7 @@
     }
   },
   "renforge_editor": {
-    "description": "Drive the in-game Live Editor with public actions `status`, `select`, and `save`. `select` uses the overlay hit path in `logical` or `screenshot` coordinates. `save` is the overlay Save (reload + attest), not a silent source write. Never call private `editor_task0_*` handlers.",
+    "description": "Drive the in-game Live Editor with public actions `status`, `select`, and `save`. `select` uses the overlay hit path in `logical` or `screenshot` coordinates. `save` is the overlay Save (reload + attest), not a silent source write. `save` with `dry_run=true` returns a unified source diff and applies nothing: it skips shadow validation, publish, reload, and attestation, and creates no transaction. Never call private `editor_task0_*` handlers.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -2020,6 +2020,11 @@
           "default": "",
           "description": "Optional frame id from a recent screenshot or listing; rejects a stale frame.",
           "type": "string"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "`save` only. Preview the source diff without writing, linting, reloading, or creating a transaction. Cannot be combined with x/y.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -2060,6 +2065,9 @@
           "properties": {
             "action": {
               "const": "save"
+            },
+            "dry_run": {
+              "type": "boolean"
             }
           },
           "required": [
