@@ -206,9 +206,11 @@ renforge_saves(project_path=project, action="import", slots=["1-1", "branch-a"])
 renforge_saves(project_path=project, action="load", slot="1-1", authorize=true)
 ```
 
-`list_user` is observational and does not need a running game. `import` is
-mutating, copies files (`.save` and `.save.json`), and is refused when the
-session already exposes the user tree (`savedir=existing`).
+`list_user` does not need a running game. It and `import` read the player's
+own saves, so under `RENFORGE_POLICY=enforce` both need `authorize=true`.
+`import` copies files (`.save` and `.save.json`) and is refused
+(`SAVE_IMPORT_NOT_ISOLATED`) unless the session was launched with
+`savedir=temporary`; with no session it returns `NO_ISOLATED_SESSION`.
 
 ### Recipe 3 — run against the user's save tree (all-or-nothing)
 
@@ -285,7 +287,7 @@ renforge_launch(project_path)
   -> ready, or starting after at most 20 seconds
   -> Live Editor injected by default (floating RF control in the game window)
 renforge_launch_status(project_path)  # while starting
-  -> starting, ready, failed, or idle
+  -> starting, ready, failed, closing, closed, or idle
 renforge_screenshot(project_path)          # observe the frame (and editor chrome)
 renforge_scene_tree(project_path)          # structured layout in logical coords
 renforge_game_state_compact(project_path)  # once ready
@@ -828,11 +830,11 @@ be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 | Tool | Purpose |
 | --- | --- |
 | `renforge_session` | The play-session lifecycle (`play` toolset): `launch` with agent-mode defaults (isolated saves and preferences, no Live Editor), `status`, `save`/`load`/`list` named slots (`load` returns the restored game's observation; `list` also shows the player's `player_slots`), `import` to copy one of the player's slots in, and `stop`. The tools below remain for existing workflows. |
-| `renforge_launch` | Start or reuse a game with the **Live Editor enabled by default** and inject the temporary bridge. After launch, poll `renforge_launch_status`, observe with `renforge_screenshot` / `renforge_scene_tree`, then use guarded clicks — see [LIVE_EDITOR.md](LIVE_EDITOR.md). The call waits at most 20 seconds, then returns `status=starting` while startup continues in the background. A competing launch returns `code=LAUNCH_IN_PROGRESS` instead of discarding its parameters. `warp` accepts `file:line`; `display`/`audio` default to `auto`; **saves, preferences, and HOME default to isolated temporary locations** so the session does not read or write the user's normal Ren'Py state (`~/.renpy` / `game/saves` / host preferences). Ready payloads include `session_id` and an `isolation` object. Pass `savedir=existing` (host HOME follows unless `home` is set) or set `RENFORGE_ISOLATION=existing` to use the user's files; that requires `authorize=true` when `RENFORGE_POLICY=enforce`. Prefer `renforge_saves(action="import")` to copy selected host slots. `timeout` controls the background startup deadline. |
-| `renforge_launch_status` | Report `starting`, `ready`, `failed`, or `idle` for the latest launch. While cancellation is pending it keeps `status=starting` and sets `cancel_requested=true`. Ready payloads repeat `session_id` and `isolation`. |
+| `renforge_launch` | Start or reuse a game with the **Live Editor enabled by default** and inject the temporary bridge. After launch, poll `renforge_launch_status`, observe with `renforge_screenshot` / `renforge_scene_tree`, then use guarded clicks — see [LIVE_EDITOR.md](LIVE_EDITOR.md). The call waits at most 20 seconds, then returns `status=starting` while startup continues in the background. A competing launch returns `code=LAUNCH_IN_PROGRESS` instead of discarding its parameters. A launch that would be handed a running (or starting) game it may not have is refused instead: `SESSION_ISOLATION_MISMATCH` when it asked for an isolated session and that game keeps its saves or HOME outside RenForge's own folders, `SESSION_EVAL_MISMATCH` when this server's toolsets allow no code but that game's bridge runs it. `warp` accepts `file:line`; `display`/`audio` default to `auto`; **saves, preferences, and HOME default to isolated temporary locations** so the session does not read or write the user's normal Ren'Py state (`~/.renpy` / `game/saves` / host preferences). Ready payloads include `session_id` and an `isolation` object. Pass `savedir=existing` (host HOME follows unless `home` is set) or set `RENFORGE_ISOLATION=existing` to use the user's files. Under `RENFORGE_POLICY=enforce`, `savedir`/`home` set to `existing`, a host save or HOME path, or any other path outside the RenForge state folder (the shared temp dir included) needs `authorize=true`. Prefer `renforge_saves(action="import")` to copy selected host slots. `timeout` controls the background startup deadline. |
+| `renforge_launch_status` | Report `starting`, `ready`, `failed`, `closing`, `closed`, or `idle` for the latest launch. While cancellation is pending it keeps `status=starting` and sets `cancel_requested=true`. Ready payloads repeat `session_id` and `isolation`, and report `isolated` and `eval_enabled`. |
 | `renforge_jump` | Restart at a label or `file:line`; it uses the same non-blocking launch lifecycle and the same isolation knobs as `renforge_launch`. |
 | `renforge_new_game` | Start a fresh process at the `start` label through the same non-blocking lifecycle and isolation knobs as `renforge_launch`. |
-| `renforge_stop` | Stop a running game or cancel an in-progress launch. Uses authenticated bridge quit when a session is owned; may return `SHUTDOWN_INCOMPLETE` with deferred cleanup while the process/artifacts finish tearing down. When another launch holds the project lock, reports `replacement_running`. An uninterruptible startup phase may return `launch_cancel_requested=true`; poll launch status until it becomes `failed` or `closed`. |
+| `renforge_stop` | Stop a running game or cancel an in-progress launch. Uses authenticated bridge quit when a session is owned; may return `SHUTDOWN_INCOMPLETE` with deferred cleanup while the process/artifacts finish tearing down, or `ok=false` with `BRIDGE_TEARDOWN_INCOMPLETE` and the `failed` items when the game or its bridge files are still there (the session stays registered, so stop can be retried). When another launch holds the project lock, reports `replacement_running`. An uninterruptible startup phase may return `launch_cancel_requested=true`; poll launch status until it becomes `failed` or `closed`. |
 | `renforge_game_state` | Complete state, including variables. Pass `include=["metrics", "audio"]` to add compact render/cache/window metrics and registered-channel audio state. Omitting `include` preserves the default response. Optional `state_profile` filters the store. |
 | `renforge_game_state_compact` | Bounded state (`state_profile=interaction` by default); select variables by name or prefix; supports serialization limits. |
 | `renforge_advance` | Advance the current dialogue. |
@@ -847,7 +849,7 @@ be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 
 | Tool | Purpose |
 | --- | --- |
-| `renforge_mod` | Write, test, and remove a mod under `game/mods/<name>/`. `action` is `write` (`path`, `content`), `list`, `lint`, `reload`, `remove`, `package`, or `guide`; every action except `list` and `guide` takes `name`. Game files outside that directory are never modified. `remove` deletes only manifest-listed files plus their `.rpyc` siblings, and reports unlisted files under `kept`. `reload` hot-reloads the running game and returns `reload`, `observation`, and `errors`. See [Modding](#modding). |
+| `renforge_mod` | Write, test, and remove a mod under `game/mods/<name>/`. `action` is `write` (`path`, `content`), `list`, `lint`, `reload`, `remove`, `package`, or `guide`; every action except `list`, `guide`, and `reload` takes `name`. Game files outside that directory are never modified. `remove` deletes only manifest-listed files plus their `.rpyc` siblings, and reports unlisted files under `kept`. `reload` hot-reloads the running game and returns `reload`, `observation`, and `errors`. See [Modding](#modding). |
 
 ### Choices and user interface
 
@@ -868,7 +870,7 @@ be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 | `renforge_get_displayable_bounds` | Report the logical bounds and center where a shown image tag was rendered. |
 | `renforge_position_element` | Reposition a shown image tag live (`xpos`, `ypos`, anchors, align, offsets, `zoom`, `rotate`) and return its new bounds. |
 | `renforge_diff_screenshots` | Diff two frames (or a saved PNG against the live frame) and return the changed region's bounding box. |
-| `renforge_scene_tree` | Inspect a bounded scene inventory with completed-frame logical geometry — layer displayables, supported controls, and text — with `id`, `type`, `bounds`, `center`, `zorder`, `screen`, and an `omitted` completeness hint. Beyond `renforge_list_ui_elements` (supported controls/menu actions) it also reports non-focusable text and images. `detail` is `semantic` (default), `layout`, or `raw`; `layers`/`types`/`screen`/`ids` scope it; `include=["color","style","overflow"]` adds composited colour and declared style; natural-text overflow remains explicitly unavailable; `format="wireframe"` adds an ASCII map; `save_as`/`diff_against` persist and diff snapshots under `<project>/.renforge/scenes/`. |
+| `renforge_scene_tree` | Inspect a bounded scene inventory with completed-frame logical geometry — layer displayables, supported controls, and text — with `id`, `type`, `bounds`, `center`, `zorder`, `screen`, and an `omitted` completeness hint. Beyond `renforge_list_ui_elements` (supported controls/menu actions) it also reports non-focusable text and images. `detail` is `semantic` (default), `layout`, or `raw`; `layers`/`types`/`screen`/`ids` scope it; `include=["color","style","overflow"]` adds composited colour and declared style; natural-text overflow remains explicitly unavailable; `format="wireframe"` adds an ASCII map; `save_as`/`diff_against` persist and diff snapshots under `<state>/scenes/`. |
 | `renforge_measure` | Measure pixel relationships between scene nodes (by `id`) or literal bounds without vision: `align`, `gap`, `distribute`, `center`, `overlap`, `fit`, and WCAG `contrast`. Returns logical-pixel deltas and, with `tolerance`, a `pass` verdict. |
 
 ### State and controlled execution
@@ -903,9 +905,11 @@ be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 
 ## Writes and safety
 
-These tools change game or project state: `renforge_launch`, `renforge_jump`,
-`renforge_new_game`, `renforge_stop`, `renforge_advance`,
-`renforge_control`, `renforge_send_input`, `renforge_saves`,
+These tools change game or project state: `renforge_session`,
+`renforge_launch`, `renforge_jump`, `renforge_new_game`, `renforge_stop`,
+`renforge_act`, `renforge_advance`, `renforge_control`,
+`renforge_send_input`, `renforge_saves`, `renforge_mod` and
+`renforge_editor` (both write source files),
 `renforge_select_choice`, `renforge_click_*`, `renforge_run_scenario`,
 `renforge_position_element`, `renforge_set_var`,
 `renforge_generate_translations`, `renforge_web_build`, and
@@ -938,9 +942,11 @@ tool yet: use `renforge_eval` as the controlled style-introspection escape
 hatch when the active screen's resolved style needs investigation. Treat
 `renforge_eval` as arbitrary Python execution and use it only on a trusted
 local project. When `RENFORGE_POLICY=enforce`, `renforge_eval`, destructive
-`renforge_control` / `renforge_saves` actions, launches that expose the user
-save tree (`savedir=existing` or a host save path), and matching
-`renforge_run_scenario` steps are denied unless `authorize=true` or an
+`renforge_control` / `renforge_saves` actions, launches with
+`savedir=existing`, `home=existing`, or any other `savedir`/`home` path outside
+the RenForge state folder, and
+matching `renforge_run_scenario` steps (including every `assert` and every
+`wait` on an `expr`) are denied unless `authorize=true` or an
 allowlist permits them. See [POLICY.md](POLICY.md) for the operation-level
 model, its relationship to MCP `ToolAnnotations`, and the compatibility plan.
 
@@ -959,6 +965,30 @@ Recommended practices:
 - list the UI before clicking and always pass `frame_id`;
 - after a guard error, capture or list the current screen instead of replaying
   the same click.
+
+## Environment variables
+
+Set these next to the `renforge serve` command in the MCP client config.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `RENFORGE_TOOLSETS` | all groups | Comma-separated tool groups the server lists (see [Toolsets](#toolsets)). Unknown names are an error. |
+| `RENFORGE_POLICY` | `off` | `enforce` requires `authorize=true` for destructive and open-world calls. Invalid values fail closed to `enforce`. See [POLICY.md](POLICY.md). |
+| `RENFORGE_POLICY_ALLOW`, `RENFORGE_POLICY_ALLOW_RISK` | empty | Comma-separated operations or risk classes allowed without `authorize`; combined with the project policy file's lists. |
+| `RENFORGE_ISOLATION` | `temporary` | `existing` (or `default`) makes launches use the user's saves and HOME by default. Other values are treated as `temporary`. `renforge_session` always isolates. |
+| `RENFORGE_STATE_DIR` | `~/.local/state/renforge` (`%LOCALAPPDATA%\renforge` on Windows) | Where per-project state lives (see [Where RenForge keeps its files](#where-renforge-keeps-its-files)). |
+| `RENFORGE_RUNTIME_DIR` | platform cache folder | Where running dashboards register themselves so MCP calls reach them. |
+| `RENFORGE_STARTUP_TIMEOUT` | `180` | Seconds a launch waits for the game's bridge. |
+| `RENFORGE_TRANSITIONS` | off | `on` keeps transitions in sessions with isolated preferences. |
+| `RENFORGE_VSYNC` | off | `on` keeps vsync in launched games. |
+| `RENFORGE_LANG` | `en` | Live Editor interface language: `en` or `zh-CN`. |
+| `RENFORGE_ALLOW_PATHS` | unset | Live Editor write scope: glob patterns under `game/` that Save may write. See [LIVE_EDITOR.md](LIVE_EDITOR.md). |
+| `RENPY_SDK_CACHE_DIR` | `~/.cache/renforge/sdks` | Where downloaded Ren'Py SDKs are kept. |
+| `RENPY_SDK_STABLE_VERSION` | built-in | The version `version="stable"` resolves to. |
+| `RENPY_SDK_BASE_URL`, `RENPY_SDK_ARCHIVE_URL` | renpy.org | A mirror for SDK downloads, or one archive URL to use as is. |
+
+`RENFORGE_BRIDGE_*`, `RENFORGE_EDITOR_*` and `RENFORGE_SAVEDIR` are set by
+RenForge for the launched game; do not set them yourself.
 
 ## Troubleshooting
 

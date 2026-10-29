@@ -337,6 +337,10 @@ test:live-editor:
     - export DISPLAY=:99
     - pip install uv
     - uv sync --all-extras
+  variables:
+    # SDKs are cached under ~/.cache/renforge/sdks unless this points
+    # inside the project, where GitLab's cache can keep them.
+    RENPY_SDK_CACHE_DIR: "$CI_PROJECT_DIR/.renpy-sdk-cache"
   script:
     - bash scripts/run_live_editor_suites.sh
   cache:

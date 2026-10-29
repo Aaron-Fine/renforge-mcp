@@ -63,9 +63,9 @@ versioning.
   start while the screen is locked. The startup deadline defaults to 180 s and
   reads `RENFORGE_STARTUP_TIMEOUT`.
 - Sessions with isolated preferences start with transitions off
-  (`RENFORGE_TRANSITIONS=on` keeps them). `observe`, `act`, and
-  `advance_until` return a compact observation by default (`detail=full` for
-  every field), and `act` accepts `observation_id` alone as its guard.
+  (`RENFORGE_TRANSITIONS=on` keeps them). `observe` and `act` return a
+  compact observation (`renforge_explain(id=...)` has a control's full
+  record), and `act` accepts `observation_id` alone as its guard.
 - Observations report `seen` (the current statement already finished once
   since launch), and repeated lines in `crossed` carry `seen: true`, so an
   agent can tell when it is looping.
@@ -124,7 +124,7 @@ versioning.
   during clickable lines, and stops with `stop="loop"` on a line it already
   passed; a time-budget stop is no longer reported as a failure.
 - `RENFORGE_TOOLSETS` lists only chosen tool groups (`play`, `live`, `debug`,
-  `editor`, `project`, `translation`, `build`, `docs`); it replaces the
+  `editor`, `mod`, `project`, `translation`, `build`, `docs`); it replaces the
   fork-only `RENFORGE_TOOLS` filter.
 - Lint, compile dumps, translation runs, and shadow lint run Ren'Py with a
   disposable HOME and one disposable save location. Ren'Py writes a game's

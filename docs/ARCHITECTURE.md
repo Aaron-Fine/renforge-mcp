@@ -6,18 +6,19 @@
 src/renforge/
   cli.py            # argparse entrypoint (inspect / serve / ui)
   server.py         # MCP app bootstrap + FastMCP/fallback; delegates tool registration
-  tool_definitions.py # canonical 58-tool public contract (names, schemas, annotations)
+  tool_definitions.py # canonical 60-tool public contract (names, schemas, annotations)
   tool_schema.py    # shared JSON Schema fragments used by the contract catalog
   tool_registration/
     registry.py     # backend-aware ToolRegistrar; clones wrappers before annotating
     wrappers.py     # shared context, activity logging, PNG content helper
     project_analysis.py  # info, inspect, scan, lint, references
-    lifecycle.py    # launch, jump, new_game, stop
+    lifecycle.py    # session, launch, jump, new_game, stop
     runtime_state.py # game state, eval, vars, wait, errors
     interaction.py  # control, input, saves, choices, clicks
     inspection.py   # screenshots, scene tree, measure
     scenarios.py    # run_scenario, autopilot
     content_build.py # assets, translations, builds, docs
+    mods.py         # renforge_mod
   interaction.py    # pure gameplay contract shared with the injected bridge
   observe.py        # host image decoding + compatibility exports
   progression.py    # native skip, guarded dismiss, settling, process failures
@@ -26,6 +27,7 @@ src/renforge/
     live.py         # running-game control (launch, eval, screenshot, ...)
     project_ops.py  # assets, translations, builds, docs
     static.py       # inspect / scan / parse-lint
+    mods.py         # renforge_mod dispatcher: file operations plus a live reload check
   ui/               # Starlette dashboard (server, ws, graph, activity, poller)
   dashboard_client.py # private display-bound delegation to the dashboard
   image_ops.py       # local/live image crop and zoom primitives
@@ -58,7 +60,7 @@ never mutates shared `__annotations__` or `__doc__`, then applies description,
 unknown names, parameter drift, duplicate registrations, and backends that
 cannot accept required metadata raise instead of shipping a partial catalog.
 
-The public 58-tool contract is snapshotted in
+The public 60-tool contract is snapshotted in
 `tests/snapshots/mcp_public_tool_contract.json`. Intentional API changes must
 update that file; accidental ones fail CI.
 
@@ -73,7 +75,7 @@ wrap direct launches with `xvfb-run`.
 
 MCP launch calls wait no more than 20 seconds. Slow startups continue in a
 daemon launch task tracked per project; `renforge_launch_status` exposes the
-`starting`, `ready`, or `failed` result, and `renforge_stop` signals the launch
+`starting`, `ready`, `failed`, `closing`, or `closed` lifecycle, and `renforge_stop` signals the launch
 task so the launcher terminates Ren'Py and removes injected artifacts.
 
 The dashboard publishes its selected project in a per-user local runtime
@@ -158,9 +160,9 @@ The server falls back to a compatibility mode with a clear message if
 
 ## Runtime policy
 
-`policy.py` classifies high-risk MCP calls (`renforge_control`,
-`renforge_saves`, `renforge_eval`, `renforge_run_scenario`) from the tool name
-and validated parameters, then allows or denies them inside `_log_tool_call`
+`policy.py` classifies high-risk MCP calls (session, launch, control, saves,
+mod, editor, eval, set_var, wait_until and scenario tools; the full list is in
+[POLICY.md](POLICY.md)) from the tool name and validated parameters, then allows or denies them inside `_log_tool_call`
 before the live implementation runs. MCP `ToolAnnotations` remain static
 discovery hints; this layer is invocation-time enforcement. Defaults stay
 permissive (`RENFORGE_POLICY=off`). See [POLICY.md](POLICY.md).
