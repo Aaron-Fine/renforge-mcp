@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+# Jobs only check out code and pass artifacts; jobs that need more set their own.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build distributions
