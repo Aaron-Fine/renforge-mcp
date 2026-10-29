@@ -918,3 +918,18 @@ def test_stop_game_attempts_external_stop_when_cancellation_is_still_pending(
     release.set()
     assert _wait_for_launch_status(project, "failed")["code"] == "LAUNCH_CANCELLED"
     live.stop_game(str(project))
+
+
+def test_stop_game_reports_an_incomplete_teardown_as_not_ok(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    live._SESSIONS[key] = _RetryingSession()
+    try:
+        result = live.stop_game(str(project))
+    finally:
+        live._SESSIONS.pop(key, None)
+
+    assert result["ok"] is False
+    assert result["code"] == "BRIDGE_TEARDOWN_INCOMPLETE"
+    assert result["failed"] == ["process_alive"]
+    assert "process_alive" in result["error"]

@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable
 
 from .lint import run_lint
-from .util.files import PrivatePathError, ensure_nofollow_directory, write_atomic
+from .util.files import PrivatePathError, ensure_nofollow_directory, read_text_nofollow, write_atomic
 from .state import project_state_dir
 
 MANIFEST_NAME = "renforge-mod.json"
@@ -130,12 +130,20 @@ def _resolve_target(project_root: str | Path, name: str, rel: str) -> Path:
     return target
 
 
+def _is_safe_relpath(path: str) -> bool:
+    try:
+        _validate_relpath(path)
+    except ValueError:
+        return False
+    return True
+
+
 def _load_manifest(mod_dir: Path) -> dict[str, Any] | None:
     manifest = mod_dir / MANIFEST_NAME
-    if not manifest.is_file():
+    if manifest.is_symlink() or not manifest.is_file():
         return None
     try:
-        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data = json.loads(read_text_nofollow(manifest))
     except (OSError, ValueError) as exc:
         raise ValueError(f"{MANIFEST_NAME} is unreadable: {exc}") from exc
     files = data.get("files") if isinstance(data, dict) else None
@@ -221,7 +229,8 @@ def list_mods(project_root: str | Path) -> dict[str, Any]:
             if manifest is None:
                 continue
             files = sorted(manifest["files"])
-            missing = [rel for rel in files if not (child / rel).is_file()]
+            # The manifest may come with the game: check only paths inside the mod.
+            missing = [rel for rel in files if not _is_safe_relpath(rel) or not (child / rel).is_file()]
             unlisted = [
                 rel for rel in _unlisted(child, set(files)) if not rel.endswith(".rpyc")
             ]

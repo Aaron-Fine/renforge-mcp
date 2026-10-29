@@ -18,6 +18,7 @@ from renforge.save_isolation import (
     host_renpy_root,
     host_save_directories,
     import_host_slots,
+    LaunchIsolation,
     isolation_report,
     launch_exposes_user_saves,
     list_host_slots,
@@ -639,3 +640,47 @@ def test_a_game_saves_symlink_out_of_the_project_is_not_a_host_save_folder(
     (project / "game" / "saves").symlink_to(elsewhere, target_is_directory=True)
 
     assert host_save_directories(project) == []
+
+
+def test_an_explicit_host_home_exposes_user_saves_beside_an_unrelated_savedir(tmp_path: Path) -> None:
+    isolation = LaunchIsolation(
+        savedir_mode="path",
+        home_mode="path",
+        persistent_mode="existing",
+        preferences_mode="existing",
+        savedir=tmp_path / "scratch",
+        home=Path.home(),
+        session_root=None,
+        cleanup=False,
+    )
+    assert isolation.exposes_user_saves is True
+    assert isolation_report(isolation)["isolation"]["exposes_user_saves"] is True
+
+def test_failed_isolation_setup_removes_its_session_root(tmp_path: Path, monkeypatch) -> None:
+    import renforge.save_isolation as save_isolation
+
+    monkeypatch.setattr(save_isolation.tempfile, "tempdir", str(tmp_path))
+
+    def full_disk(_home: Path) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(save_isolation, "_prepare_isolated_home", full_disk)
+    with pytest.raises(OSError):
+        resolve_launch_isolation("temporary", home="temporary")
+    assert not list(tmp_path.glob(save_isolation.SESSION_PREFIX + "*"))
+
+def test_import_reports_a_slot_whose_files_vanished_as_missing(
+    tmp_path: Path, host_save_root: Path, monkeypatch
+) -> None:
+    import renforge.save_isolation as save_isolation
+
+    project = tmp_path / "game-root"
+    saves = project / "game" / "saves"
+    saves.mkdir(parents=True)
+    (saves / "1-1-LT1.save").write_bytes(b"SLOT")
+    monkeypatch.setattr(save_isolation, "_copy_slot_files", lambda *_args: [])
+
+    result = import_host_slots(project, tmp_path / "session" / "saves", slot="1-1")
+
+    assert result["ok"] is False
+    assert result["missing"] == ["1-1"]

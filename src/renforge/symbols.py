@@ -7,6 +7,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from .util.files import read_text_nofollow
+
 
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _NAMED_TARGET_CALLS = (
@@ -146,7 +148,11 @@ def find_references(
             if file_glob and not fnmatch(relative, file_glob):
                 continue
             triple_quote: str | None = None
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            try:
+                # A linked .rpy could point anywhere; its lines would be returned.
+                lines = read_text_nofollow(path, errors="replace").splitlines()
+            except OSError:
+                continue
             for line_number, line in enumerate(lines, start=1):
                 code, semantic_code, triple_quote = _mask_non_code(line, triple_quote)
                 definition_column = _definition_column(code, symbol)

@@ -94,3 +94,18 @@ def test_write_json_atomic_nofollow_still_writes_inside_real_directory(tmp_path:
     path = tmp_path / "data.json"
     write_json_atomic(path, {"ok": True}, follow_symlinks=False, max_bytes=1024)
     assert path.read_text(encoding="utf-8") == '{"ok":true}'
+
+
+def test_an_interrupted_exclusive_write_leaves_no_partial_file(tmp_path: Path, monkeypatch) -> None:
+    # A truncated bridge file fails its digest check and blocks later launches.
+    from renforge.util import files
+
+    target = tmp_path / "zzrenforge_bridge_x.rpy"
+
+    def interrupted(_fd: int) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(files.os, "fsync", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        files.write_exclusive_bytes(target, b"payload")
+    assert not target.exists()

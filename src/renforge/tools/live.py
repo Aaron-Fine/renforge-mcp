@@ -449,7 +449,11 @@ def _isolation_result(session: Any) -> dict[str, Any]:
     session_id = agent_session_id(artifact_id)
     result: dict[str, Any] = {}
     if isolation is not None:
-        report = isolation_report(isolation, session_id=session_id)
+        report = isolation_report(
+            isolation,
+            session_id=session_id,
+            project_path=getattr(session, "_project_root", None),
+        )
         result.update(report)
         isolation_obj = report.get("isolation") or {}
         if isolation_obj.get("savedir"):
@@ -883,6 +887,17 @@ def stop_game(project_path: str) -> dict:
                 ):
                     _LAUNCHES.pop(key, None)
         payload = cleaned if isinstance(cleaned, dict) else {"cleaned": {}, "failed": ["close"]}
+        if not session.closed:
+            # The game or its bridge files are still there; the session stays
+            # registered so stop can be retried.
+            message = "The game did not stop completely: %s." % ", ".join(payload.get("failed") or ["close"])
+            return {
+                "ok": False,
+                "was_running": True,
+                "code": "BRIDGE_TEARDOWN_INCOMPLETE",
+                "error": message,
+                **payload,
+            }
         return {"ok": True, "was_running": True, **payload}
 
     if (
