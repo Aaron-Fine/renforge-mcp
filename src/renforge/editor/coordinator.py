@@ -312,10 +312,14 @@ class EditorCoordinator:
                 return EditorEndpoint(str(host), int(port), self._token, PROTOCOL_VERSION)
 
             listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            listener.bind(("127.0.0.1", 0))
-            listener.listen(16)
-            listener.settimeout(0.2)
+            try:
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind(("127.0.0.1", 0))
+                listener.listen(16)
+                listener.settimeout(0.2)
+            except BaseException:
+                listener.close()
+                raise
             self._listener = listener
             self._stop_event.clear()
             self._accept_thread = threading.Thread(target=self._accept_loop, daemon=True)

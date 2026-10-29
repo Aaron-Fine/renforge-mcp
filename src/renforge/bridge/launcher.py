@@ -1143,26 +1143,28 @@ def _launch_after_project_lock(
             shutil.rmtree(isolation.session_root, ignore_errors=True)
         raise
 
-    startup_event = threading.Event()
-    startup_code: list[str | None] = [None]
-    stdout_reader = _BoundedPipeReader(
-        process.stdout,
-        watch_startup=False,
-    )
-    stderr_reader = _BoundedPipeReader(
-        process.stderr,
-        watch_startup=True,
-        startup_event=startup_event,
-        startup_code=startup_code,
-    )
-    if startup_timeout is None:
-        startup_timeout = default_startup_timeout()
-    deadline = time.time() + startup_timeout
-    _phase("waiting_for_bridge", port=port or None)
-
-    game_error: dict[str, str] | None = None
-    game_error_seen = 0.0
+    # The game is running from here on: every failure, including a reader
+    # thread that cannot start, must reach _teardown_failed_launch.
     try:
+        startup_event = threading.Event()
+        startup_code: list[str | None] = [None]
+        stdout_reader = _BoundedPipeReader(
+            process.stdout,
+            watch_startup=False,
+        )
+        stderr_reader = _BoundedPipeReader(
+            process.stderr,
+            watch_startup=True,
+            startup_event=startup_event,
+            startup_code=startup_code,
+        )
+        if startup_timeout is None:
+            startup_timeout = default_startup_timeout()
+        deadline = time.time() + startup_timeout
+        _phase("waiting_for_bridge", port=port or None)
+
+        game_error: dict[str, str] | None = None
+        game_error_seen = 0.0
         while time.time() < deadline:
             _raise_if_cancelled(cancel_event, phase="waiting_for_bridge")
             if startup_event.is_set() and startup_code[0] is not None:
@@ -1464,6 +1466,9 @@ def _signal_process(process: subprocess.Popen, headless: bool, *, force: bool) -
         pass
 
 
+_REAP_ARTIFACT_SECONDS = 60.0
+
+
 def _teardown_failed_launch(
     process: subprocess.Popen,
     headless: bool,
@@ -1474,11 +1479,17 @@ def _teardown_failed_launch(
     expected_session_id: str | None = None,
 ) -> None:
     session_id = expected_session_id or project_lock.owned_session_id
+
+    def remove_session_root() -> None:
+        # The session root is RenForge's own temp folder; it does not depend
+        # on the bridge files in the game folder.
+        if temporary_savedir is not None:
+            shutil.rmtree(temporary_savedir, ignore_errors=True)
+
     if _terminate(process, headless):
+        remove_session_root()
         try:
             remove_bridge_artifacts(project_root, expected_session_id=session_id)
-            if temporary_savedir is not None:
-                shutil.rmtree(temporary_savedir, ignore_errors=False)
             return
         except FileNotFoundError:
             return
@@ -1494,20 +1505,24 @@ def _teardown_failed_launch(
                 process.wait(timeout=1.0)
             except Exception:
                 time.sleep(0.1)
+        remove_session_root()
+        # Retry a transient failure (a file still held open), but not forever:
+        # an ownership conflict never clears, and holding the lock would keep
+        # every later launch out with no reason given. The next launch's own
+        # artifact checks report a file that is still there.
+        deadline = time.monotonic() + _REAP_ARTIFACT_SECONDS
         while True:
             try:
                 remove_bridge_artifacts(project_root, expected_session_id=session_id)
-                if temporary_savedir is not None:
-                    shutil.rmtree(temporary_savedir, ignore_errors=False)
-                project_lock.release()
-                _DEFERRED_LOCKS.discard(project_lock)
-                return
+                break
             except FileNotFoundError:
-                project_lock.release()
-                _DEFERRED_LOCKS.discard(project_lock)
-                return
+                break
             except Exception:
+                if time.monotonic() >= deadline:
+                    break
                 time.sleep(0.1)
+        project_lock.release()
+        _DEFERRED_LOCKS.discard(project_lock)
 
     threading.Thread(target=reap, name="renforge-bridge-reaper", daemon=True).start()
 

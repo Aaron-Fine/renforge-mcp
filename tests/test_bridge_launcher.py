@@ -2329,3 +2329,79 @@ def test_a_launch_that_fails_before_spawning_removes_its_session_root(
 
     assert excinfo.value.code == "BRIDGE_TOKEN_INVALID"
     assert not list(temp_root.glob(save_isolation.SESSION_PREFIX + "*"))
+
+
+def test_a_reader_thread_that_cannot_start_still_tears_the_game_down(monkeypatch, tmp_path: Path) -> None:
+    # Between Popen and the startup wait, a failure used to skip
+    # _teardown_failed_launch and leave the game running with no owner.
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    process = _FakeProcess()
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", lambda *_a, **_k: process)
+
+    def no_threads(*_args, **_kwargs):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr("renforge.bridge.launcher._BoundedPipeReader", no_threads)
+    with pytest.raises(Exception, match="new thread"):
+        launch_with_bridge(sdk, project)
+    assert process.terminated is True
+    assert not list((project_root / "game").glob("zzrenforge_*"))
+
+
+def test_failed_launch_cleanup_gives_up_on_stuck_artifacts_but_frees_root_and_lock(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from renforge.bridge import launcher
+
+    session_root = tmp_path / "session"
+    session_root.mkdir()
+    process = _FakeProcess()
+    process.returncode = 0
+
+    def ownership_conflict(*_args, **_kwargs):
+        raise RuntimeError("BRIDGE_ARTIFACT_OWNERSHIP_CONFLICT")
+
+    monkeypatch.setattr(launcher, "remove_bridge_artifacts", ownership_conflict)
+    monkeypatch.setattr(launcher, "_REAP_ARTIFACT_SECONDS", 0.2)
+    released = threading.Event()
+
+    class _Lock:
+        owned_session_id = "session"
+        is_deferred = False
+
+        def release(self) -> None:
+            released.set()
+
+    launcher._teardown_failed_launch(process, False, tmp_path, session_root, _Lock())
+
+    assert not session_root.exists()
+    assert released.wait(5.0)
+
+
+def test_a_collision_whose_cleanup_fails_is_not_retried(monkeypatch, tmp_path: Path) -> None:
+    # A retry publishes a new intent over the old one; files the old intent
+    # still lists would be left in game/ with no owner.
+    from renforge.bridge import artifacts
+
+    project, _sdk, _root = _make_project(tmp_path)
+    attempts = []
+
+    def collide(*_args, **_kwargs):
+        attempts.append(1)
+        raise FileExistsError("occupied")
+
+    def cleanup_refused(*_args, **_kwargs):
+        raise RuntimeError("digest mismatch")
+
+    monkeypatch.setattr(artifacts, "materialize_from_manifest", collide)
+    monkeypatch.setattr(artifacts, "remove_owned_artifacts", cleanup_refused)
+    with pytest.raises(FileExistsError):
+        artifacts.allocate_and_materialize(
+            project,
+            bridge_payload=b"bridge",
+            include_session_init=False,
+            editor_payload=None,
+            editor_asset_files=None,
+        )
+    assert attempts == [1]

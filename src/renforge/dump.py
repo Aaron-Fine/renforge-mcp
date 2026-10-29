@@ -135,6 +135,8 @@ def run_native_dump(sdk: RenpySdk, project: RenpyProject, *, timeout: int = 180)
             return json.loads(out_path.read_text(encoding="utf-8"))
         finally:
             out_path.unlink(missing_ok=True)
+            # Ren'Py writes <out>.new and renames it; a timeout leaves it behind.
+            out_path.with_name(out_path.name + ".new").unlink(missing_ok=True)
 
 
 def normalize_definitions(raw_dump: dict[str, Any]) -> list[dict[str, Any]]:

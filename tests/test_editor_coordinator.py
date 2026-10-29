@@ -4187,3 +4187,28 @@ def test_expected_measurement_method_for_add_and_frame() -> None:
     assert expected_measurement_method("add") == "scene_tree_displayable"
     assert expected_measurement_method("frame") == "scene_tree_displayable"
     assert expected_measurement_method("textbutton") == "focus_list"
+
+
+def test_start_closes_the_listener_when_bind_fails(tmp_path: Path, monkeypatch) -> None:
+    from renforge.editor import coordinator as coordinator_mod
+
+    project, _root = _make_project(tmp_path)
+    closed = []
+
+    class _Socket:
+        def __init__(self, *_args):
+            pass
+
+        def setsockopt(self, *_args):
+            pass
+
+        def bind(self, _address):
+            raise OSError(98, "Address already in use")
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(coordinator_mod.socket, "socket", _Socket)
+    with pytest.raises(OSError):
+        EditorCoordinator(project, _make_sdk(tmp_path)).start()
+    assert closed == [True]

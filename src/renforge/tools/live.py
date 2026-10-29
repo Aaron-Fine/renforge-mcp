@@ -863,6 +863,7 @@ def stop_game(project_path: str) -> dict:
         session = _SESSIONS.get(key)
 
     if session is not None:
+        cleaned = None  # read in the finally even when close() raises
         try:
             cleaned = session.close()
         finally:
