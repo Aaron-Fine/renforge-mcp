@@ -154,9 +154,4 @@ def bridge_eval_allowed(environ: Mapping[str, str] | None = None) -> bool:
     games whose bridge refuses both. With ``play`` alone no tool can run code
     in the game; ``mod`` writes scripts on purpose.
     """
-    env = os.environ if environ is None else environ
-    raw = env.get(TOOLSETS_ENV, "").strip()
-    tokens = {part.strip() for part in raw.split(",") if part.strip()}
-    if not tokens or "all" in tokens:
-        return True
-    return bool(tokens & EVAL_TOOLSETS)
+    return not EVAL_TOOLSETS.isdisjoint(enabled_toolsets(environ))

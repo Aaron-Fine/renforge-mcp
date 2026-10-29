@@ -270,8 +270,8 @@ def classify(name: str, params: Mapping[str, Any] | None = None) -> tuple[str, s
     if name == "renforge_wait_until":
         # Its expr runs in the game like renforge_eval, as a scenario's
         # wait step does; a label or screen condition only observes.
-        if "expr" in payload and payload.get("expr") is not None:
-            expr = payload.get("expr")
+        expr = payload.get("expr")
+        if expr is not None:
             if not isinstance(expr, str) or not expr.strip():
                 return "renforge_wait_until", RISK_MALFORMED
             return "renforge_wait_until.expr", RISK_OPEN_WORLD

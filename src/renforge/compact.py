@@ -56,12 +56,10 @@ def compact_observation(snapshot: Any) -> Any:
             continue
         if key == "keys" and not value:
             continue
-        if key == "controls" and isinstance(value, list):
+        if key in ("controls", "input_candidates") and isinstance(value, list):
             out[key] = [compact_control(item) for item in value if isinstance(item, Mapping)]
         elif key == "chrome" and isinstance(value, list):
             out[key] = [compact_control(item, chrome=True) for item in value if isinstance(item, Mapping)]
-        elif key == "input_candidates" and isinstance(value, list):
-            out[key] = [compact_control(item) for item in value if isinstance(item, Mapping)]
         elif key == "readout" and isinstance(value, list):
             out[key] = [{k: v for k, v in item.items() if k != "bounds"} if isinstance(item, Mapping) else item
                         for item in value]

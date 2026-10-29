@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .bridge.client import BridgeError, BridgeProtocolError
-from .interaction import classify, progression_boundary
+from .interaction import _real_number, classify, progression_boundary
 from .util.frames import FRAME_TIMEOUT
 
 POLL_SECONDS = 0.05
@@ -234,11 +234,7 @@ def run_advance_until(
             "observation": None,
             "error": "max_steps must be an integer from 1 to 200",
         }
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-        timeout_ok = False
-    else:
-        timeout_ok = timeout >= 0.1 and timeout <= 120
-    if not timeout_ok:
+    if not _real_number(timeout) or not 0.1 <= timeout <= 120:
         return {
             "ok": False,
             "stop": "invalid_arguments",

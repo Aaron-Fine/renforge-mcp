@@ -148,3 +148,35 @@ def test_run_scenario_capture_rejects_symlinked_destination(monkeypatch, tmp_pat
     assert result["ok"] is False
     assert "symlink" in result["steps"][0]["error"]
     assert outside.read_bytes() == b"keep"
+
+
+def test_run_scenario_advance_rejects_counts_outside_its_schema(monkeypatch, tmp_path):
+    advanced = []
+    monkeypatch.setattr(live, "advance", lambda path: advanced.append(1) or {"ok": True})
+    monkeypatch.setattr(live, "game_state", lambda path, **kwargs: {"ok": True})
+    for bad in ("3", 0, -4, 2.9, True, {"count": 0}, {"count": "2"}):
+        result = live.run_scenario(str(tmp_path), steps=[{"advance": bad}])
+        assert result["failed"] == 1, bad
+    assert advanced == []
+
+    for good, expected in ((None, 1), (3, 3), ({}, 1), ({"count": 2}, 2)):
+        advanced.clear()
+        result = live.run_scenario(str(tmp_path), steps=[{"advance": good}])
+        assert result["passed"] == 1, good
+        assert len(advanced) == expected
+
+
+def test_run_scenario_set_fails_when_the_game_refuses_the_write(monkeypatch, tmp_path):
+    monkeypatch.setattr(live, "set_var", lambda path, name, value: {"ok": False, "error": "eval_disabled"})
+    monkeypatch.setattr(live, "game_state", lambda path, **kwargs: {"ok": True})
+    result = live.run_scenario(str(tmp_path), steps=[{"set": {"gold": 5}}])
+    assert result["failed"] == 1
+
+
+def test_set_var_refuses_a_name_the_store_cannot_hold(monkeypatch, tmp_path):
+    # The bridge setattr()s the name on the store: "" or "a.b" would be
+    # stored under that literal name and change nothing the game reads.
+    monkeypatch.setattr(live, "_with_client", lambda path, handler: {"ok": True})
+    for bad in ("", "a.b", "1x", None):
+        assert live.set_var(str(tmp_path), bad, 1)["ok"] is False, bad
+    assert live.set_var(str(tmp_path), "gold", 1)["ok"] is True

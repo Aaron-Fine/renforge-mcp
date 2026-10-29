@@ -441,6 +441,19 @@ versioning.
 
 ### Fixed
 
+- `renforge_set_var` and the dashboard's set-var refuse a name that is not a
+  Python identifier. The bridge stored `""` or a dotted name such as
+  `_preferences.skip_unseen` under that literal name, changed nothing the game
+  reads, and reported success. A scenario `set` step now fails when the write
+  is refused, and an `advance` step fails on a count outside its schema
+  (`"3"`, `0`, `2.9`) instead of advancing once.
+- The dashboard answers malformed requests with a 400 naming the field instead
+  of acting on a coerced value: a boolean, zero or negative launch `timeout`,
+  an unknown `display`/`audio`, a non-boolean `cleanup_on_stop` on `/api/warp`,
+  a non-string `expr`, a boolean or negative screenshot size, a choice `index`
+  that is not an integer or an empty choice `text`, an unknown control action,
+  and a translation `language` that is not a name. `{"warp": ""}` on
+  `/api/live/launch` no longer restarts the running game.
 - Live Editor Save keeps polling after `reload_script` resets the bridge
   connection, instead of failing the status read with "Connection reset by
   peer".

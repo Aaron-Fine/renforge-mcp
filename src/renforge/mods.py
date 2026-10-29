@@ -201,7 +201,7 @@ def write_file(project_root: str | Path, name: str, path: str, content: str) -> 
 
     target = _resolve_target(project_root, name, rel)
     mod_dir = _mod_dir(project_root, name)
-    manifest = _load_manifest(mod_dir) if mod_dir.is_dir() else None
+    manifest = _load_manifest(mod_dir)
     listed = set(manifest["files"]) if manifest else set()
     listed.add(rel)
 
@@ -247,7 +247,7 @@ def remove(project_root: str | Path, name: str) -> dict[str, Any]:
     """
     _check_name(name)
     mod_dir = _mod_dir(project_root, name)
-    manifest = _load_manifest(mod_dir) if mod_dir.is_dir() else None
+    manifest = _load_manifest(mod_dir)
     if manifest is None:
         return {"ok": False, "error": f"unknown mod: {name}"}
 
@@ -293,7 +293,7 @@ def package(project_root: str | Path, name: str) -> dict[str, Any]:
     """Zip a mod's listed files into ``<project state>/mods/<name>.zip``."""
     _check_name(name)
     mod_dir = _mod_dir(project_root, name)
-    manifest = _load_manifest(mod_dir) if mod_dir.is_dir() else None
+    manifest = _load_manifest(mod_dir)
     if manifest is None:
         return {"ok": False, "error": f"unknown mod: {name}"}
 
