@@ -15,7 +15,7 @@ from typing import Any
 from .project import RenpyProject
 from .save_isolation import renpy_tool_environment
 from .sdk import RenpySdk
-from .util.files import read_text_nofollow
+from .util.files import read_text_nofollow, resolves_inside
 from .util.subprocess import run_command
 
 _TL_DIR = "tl"
@@ -111,8 +111,9 @@ def export_dialogue(sdk: RenpySdk, project: RenpyProject, language: str = "None"
 
 def list_translation_strings(project_path: str | Path, language: str) -> list[dict[str, Any]]:
     """Parse real translation blocks (dialogue & strings) from game/tl/<language>/*.rpy."""
-    tl_dir = Path(project_path).expanduser().resolve() / "game" / "tl" / language
-    if not tl_dir.is_dir():
+    root = Path(project_path).expanduser().resolve()
+    tl_dir = root / "game" / "tl" / language
+    if not tl_dir.is_dir() or not resolves_inside(tl_dir, root):
         return []
 
     strings = []

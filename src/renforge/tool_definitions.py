@@ -87,10 +87,10 @@ _ISOLATION_PARAMETERS = {
 }
 
 _LAUNCH_AUTHORIZE = (
-    "Explicitly authorize launching against the user's Ren'Py saves with "
-    "`authorize=true` (`savedir=existing`, a host save path, `home=existing`, or "
-    "`RENFORGE_ISOLATION=existing`) when `RENFORGE_POLICY=enforce`. Isolated "
-    "launches do not need this."
+    "Pass `authorize=true` when `RENFORGE_POLICY=enforce` and the game would keep its saves or HOME outside RenForge's "
+    "state folder: `savedir` or `home` set to `existing` (or `RENFORGE_ISOLATION=existing`), a host save or "
+    "HOME path, or any other path, the shared temp dir included. Isolated launches (`savedir`/`home` omitted "
+    "or `temporary`) do not need this."
 )
 
 _ISOLATION_PARAMETER_SCHEMAS = {
@@ -248,7 +248,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and "
             "publish authenticated ownership/bridge metadata under `<state>/control/`, where `<state>` is this project's RenForge "
             "folder outside the game (`RENFORGE_STATE_DIR` or `~/.local/state/renforge`, then `projects/<name>-<hash>`). `renforge_stop` removes only owned "
-            "session artifacts. Exposing the user save tree (`savedir=existing`) requires `authorize=true` when "
+            "session artifacts. A `savedir` or `home` of `existing`, or any path outside the RenForge state folder, requires `authorize=true` when "
             "`RENFORGE_POLICY=enforce`. Copy selected host slots with `renforge_saves(action=\"import\")` instead of "
             "bind-mounting the user tree."
         ),
@@ -312,7 +312,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         description=(
             "Restart into a specific label/file position and keep interacting in a fresh game session. If needed, this may "
             "download and cache the required SDK before restart. Isolation matches `renforge_launch`: saves, preferences, "
-            "and HOME default to temporary locations. Exposing the user save tree requires `authorize=true` when "
+            "and HOME default to temporary locations. A `savedir` or `home` outside the RenForge state folder requires `authorize=true` when "
             "`RENFORGE_POLICY=enforce`. Use for deterministic positioning before scripted checks."
         ),
         annotations=_ann(
@@ -334,7 +334,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         description=(
             "Restart at `start` and begin a new story progression. This may download and cache the required SDK before the "
             "fresh launch. Isolation matches `renforge_launch`: saves, preferences, and HOME default to temporary locations. "
-            "Exposing the user save tree requires `authorize=true` when `RENFORGE_POLICY=enforce`. Prefer this for clean "
+            "A `savedir` or `home` outside the RenForge state folder requires `authorize=true` when `RENFORGE_POLICY=enforce`. Prefer this for clean "
             "scenario entry rather than reusing unstable runtime state."
         ),
         annotations=_ann(
@@ -379,7 +379,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "before the label has happened (a label normally reached with call ends the run when it returns); "
             "play from saves instead when the earlier state matters. An "
             "unknown label is reported as start_label_error. Server environment "
-            "variables cover the rare launch settings (RENFORGE_STARTUP_TIMEOUT, RENFORGE_ISOLATION, ...). "
+            "variables cover the rare launch settings (RENFORGE_STARTUP_TIMEOUT, RENFORGE_TRANSITIONS, RENFORGE_VSYNC); "
+            "saves and HOME are always isolated, whatever RENFORGE_ISOLATION says. "
             "load and import require authorize=true when RENFORGE_POLICY=enforce, and list shows player_slots "
             "only with it."
         ),
@@ -756,7 +757,10 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             ),
             "path": "Path relative to the mod directory, for example `script.rpy`. Required for `write`.",
             "content": "UTF-8 file content, at most 1,000,000 bytes. Required for `write`.",
-            "authorize": "Mod files are code the game runs, so `write` is open-world: pass true when RENFORGE_POLICY=enforce.",
+            "authorize": (
+                "Mod files are code the game runs, so `write` is open-world and `reload` destructive (like "
+                "`reload_script`): pass true for them when RENFORGE_POLICY=enforce."
+            ),
         },
         parameter_schemas={
             "action": _enum("write", "list", "lint", "reload", "remove", "package", "guide"),

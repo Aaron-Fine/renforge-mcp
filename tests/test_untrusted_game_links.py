@@ -95,3 +95,21 @@ def test_save_slot_listing_ignores_a_linked_sidecar(project: Path, tmp_path: Pat
     (saves / "1-1-LT1.save.json").symlink_to(secret)
     listed = list_host_slots(project, home=tmp_path / "home")
     assert [item["extra_info"] for item in listed["slots"]] == [""]
+
+
+def test_a_game_folder_linked_out_of_the_project_is_not_scanned(tmp_path: Path) -> None:
+    elsewhere = tmp_path / "home"
+    elsewhere.mkdir()
+    (elsewhere / "private.rpy").write_text(f"label leaked:\n    $ {SECRET} = 1\n", encoding="utf-8")
+    (elsewhere / "tl" / "french").mkdir(parents=True)
+    (elsewhere / "tl" / "french" / "x.rpy").write_text(
+        f'translate french strings:\n    old "{SECRET}"\n    new "x"\n', encoding="utf-8"
+    )
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "game").symlink_to(elsewhere, target_is_directory=True)
+
+    assert find_references(root, SECRET)["occurrences"] == []
+    assert SECRET not in json.dumps(scan_project(str(root)))
+    assert SECRET not in json.dumps(analyze_assets(root))
+    assert list_translation_strings(root, "french") == []

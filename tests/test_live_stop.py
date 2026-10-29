@@ -933,3 +933,25 @@ def test_stop_game_reports_an_incomplete_teardown_as_not_ok(tmp_path: Path) -> N
     assert result["code"] == "BRIDGE_TEARDOWN_INCOMPLETE"
     assert result["failed"] == ["process_alive"]
     assert "process_alive" in result["error"]
+
+
+def test_stop_game_reports_the_close_error_itself(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    key = live._key(project)
+
+    class _Exploding(_OwnedRunningSession):
+        def close(self) -> dict:
+            raise OSError("bridge socket gone")
+
+    session = _Exploding()
+    task = live._LaunchTask(project)
+    task.lifecycle = "ready"
+    task.session = session
+    live._LAUNCHES[key] = task
+    try:
+        # It used to surface as UnboundLocalError from the cleanup code.
+        with pytest.raises(OSError, match="bridge socket gone"):
+            live.stop_game(str(project))
+    finally:
+        live._LAUNCHES.pop(key, None)
+        live._SESSIONS.pop(key, None)

@@ -73,6 +73,18 @@ def hash_file_nofollow(path: Path) -> str:
         os.close(fd)
 
 
+def resolves_inside(path: Path, root: Path) -> bool:
+    """Whether ``path``, after following links, is ``root`` or inside it.
+
+    A project's ``game`` folder can itself be a link; scanning through one
+    that points elsewhere would read files outside the project.
+    """
+    try:
+        return Path(path).resolve().is_relative_to(Path(root).resolve())
+    except (OSError, RuntimeError):
+        return False
+
+
 def read_text_nofollow(path: Path, *, encoding: str = "utf-8", errors: str = "strict") -> str:
     """Read a regular file as text, refusing symlinks.
 

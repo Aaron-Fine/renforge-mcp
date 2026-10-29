@@ -399,3 +399,16 @@ class TestI18nScannerOnRealSource:
         assert code == 0
         assert payload["status"] == "GREEN"
         assert payload["summary"]["unusedKeyCount"] == 0
+
+
+def test_every_dashboard_error_code_has_a_message() -> None:
+    # A code with no errors.ts case shows the dashboard's generic
+    # "unexpected" message instead of naming what was wrong.
+    server = (REPO_ROOT / "src" / "renforge" / "ui" / "server.py").read_text(encoding="utf-8")
+    codes = set(re.findall(r'code="([a-z_]+)"', server))
+    for template in re.findall(r'code=f"([a-z_]*)\{field\}([a-z_]*)"', server):
+        codes.update(f"{template[0]}{field}{template[1]}" for field in ("display", "audio"))
+    cases = set(re.findall(r'case "([a-z_]+)":', (I18N_DIR / "errors.ts").read_text(encoding="utf-8")))
+    english = json.loads((I18N_DIR / "locales" / "en.json").read_text(encoding="utf-8"))["errors"]
+    assert sorted(codes - cases) == []
+    assert sorted(code for code in codes if code not in english) == []

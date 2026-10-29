@@ -128,8 +128,9 @@ The server command is the same for every client:
 uvx renforge@latest serve
 ```
 
-Every RenForge tool takes a `project_path` argument, so the agent passes your
-game's path on each call — copy the configs below as-is, no path substitution.
+Every tool that works on a game takes a `project_path` argument, so the agent
+passes your game's path on each call — copy the configs below as-is, no path
+substitution.
 
 **Claude Code**
 

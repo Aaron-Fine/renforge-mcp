@@ -256,3 +256,21 @@ def test_normalize_definitions_flattens_label_locations() -> None:
         {"name": "start", "kind": "label", "file": "game/script.rpy", "line": 12},
         {"name": "hud", "kind": "screen", "file": "game/screens.rpy", "line": 4},
     ]
+
+
+def test_run_native_dump_removes_the_partial_file_a_timeout_leaves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    left: dict[str, Path] = {}
+
+    def timed_out(command, **kwargs):
+        out = Path(command[command.index("--json-dump") + 1])
+        partial = out.with_name(out.name + ".new")
+        partial.write_text("{", encoding="utf-8")
+        left["partial"] = partial
+        return SimpleNamespace(returncode=-9, timed_out=True, stdout="", stderr="")
+
+    monkeypatch.setattr(dump_mod, "run_command", timed_out)
+    with pytest.raises(RuntimeError, match="no JSON dump"):
+        dump_mod.run_native_dump(SimpleNamespace(root=Path("/sdk")), _fake_project())
+    assert not left["partial"].exists()

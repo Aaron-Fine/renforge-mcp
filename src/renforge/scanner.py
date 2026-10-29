@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .util.files import read_text_nofollow
+from .util.files import read_text_nofollow, resolves_inside
 
 
 LABEL_RE = re.compile(
@@ -82,7 +82,7 @@ def scan_project(project_path: str) -> Dict[str, Any]:
         return result
 
     game_root = os.path.join(project_root, "game")
-    if not os.path.isdir(game_root):
+    if not os.path.isdir(game_root) or not resolves_inside(Path(game_root), Path(project_root)):
         return result
 
     for root, _dirs, filenames in os.walk(game_root):

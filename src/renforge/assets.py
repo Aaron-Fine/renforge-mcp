@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .util.files import read_text_nofollow
+from .util.files import read_text_nofollow, resolves_inside
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".tga", ".bmp"}
 AUDIO_EXTS = {".ogg", ".opus", ".mp3", ".wav", ".flac", ".m4a", ".aac", ".mp2", ".wma"}
@@ -59,7 +59,7 @@ def analyze_assets(project_path: str | Path) -> dict[str, Any]:
         "missing_files": [],
         "undefined_images": [],
     }
-    if not game.is_dir():
+    if not game.is_dir() or not resolves_inside(game, game.parent):
         result["error"] = f"no game/ directory under {project_path}"
         return result
 

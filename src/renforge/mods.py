@@ -205,9 +205,12 @@ def write_file(project_root: str | Path, name: str, path: str, content: str) -> 
     listed = set(manifest["files"]) if manifest else set()
     listed.add(rel)
 
-    _atomic_write_bytes(target, data)
     files = sorted(listed)
+    # Manifest first: if the file write then fails, the manifest lists a
+    # missing file, which list reports. The other order could leave an
+    # unlisted .rpy that the game loads and remove() never deletes.
     _write_manifest(mod_dir, name, files)
+    _atomic_write_bytes(target, data)
     return {
         "ok": True,
         "name": name,
@@ -306,14 +309,19 @@ def package(project_root: str | Path, name: str) -> dict[str, Any]:
     fd, tmp = tempfile.mkstemp(dir=str(out_dir), prefix=f".{name}.", suffix=".zip.tmp")
     os.close(fd)
     packed: list[str] = []
+    missing: list[str] = []
     try:
         with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for rel in candidates:
                 source = _resolve_target(project_root, name, _validate_relpath(rel))
                 if not source.is_file() or source.is_symlink():
+                    missing.append(rel)
                     continue
                 archive.write(source, arcname=f"game/mods/{name}/{rel}")
                 packed.append(rel)
+        if not packed:
+            os.unlink(tmp)
+            return {"ok": False, "error": f"none of mod {name}'s files exist", "missing": missing}
         os.replace(tmp, zip_path)
     except BaseException:
         try:
@@ -321,7 +329,10 @@ def package(project_root: str | Path, name: str) -> dict[str, Any]:
         except OSError:
             pass
         raise
-    return {"ok": True, "path": str(zip_path), "files": packed}
+    result: dict[str, Any] = {"ok": True, "path": str(zip_path), "files": packed}
+    if missing:
+        result["missing"] = missing
+    return result
 
 
 def _diagnostic_in_mod(diagnostic: Any, name: str) -> bool:

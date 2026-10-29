@@ -97,12 +97,13 @@ toolsets rather than being removed; `advance_until` (fork-only) was retired.
 - [ ] One id scheme. `list_ui_elements` and the tools built on it keep
   upstream's ids while `observe` uses `screen/...` ids; `control_id` links
   them. Settle on one when upstream agrees.
-- [ ] Perception tools that are views of the same collector as `observe`:
+- [x] Perception tools that are views of the same collector as `observe`:
   `screenshot`, `scene_tree`, `list_ui_elements`, `get_ui_element_bounds`,
   `get_displayable_bounds`, `hit_test`, `inspect_screen`, `list_choices`,
   `game_state`, `game_state_compact`. Action tools that duplicate `act`:
   `advance`, `click_element`, `click_at`, `hover_element`, `select_choice`,
-  `send_input`. Move them to a compatibility toolset.
+  `send_input`. Move them to a compatibility toolset. Done: they are in the
+  `live` and `debug` groups of `RENFORGE_TOOLSETS`.
 - [x] Engine facts instead of recomputation (2026-10-12): modal blocking
   follows `Render.take_focuses` (a modal render hides what was drawn before
   it; a window modal only inside its rectangle) instead of ranking screens;

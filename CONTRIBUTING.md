@@ -20,6 +20,8 @@ python -m pytest
 ```
 
 Use the virtual environment's interpreter for both installation and tests.
+The dashboard build uses Vite 7, which needs Node.js 20.19+ or 22.12+;
+`.node-version` pins the version CI uses.
 `fastmcp`, `mcp`, Pydantic, and Pillow are required runtime dependencies, not
 optional test stubs. If contract tests report `_FallbackServer` or missing
 `ToolAnnotations`, reinstall with `.venv/bin/python -m pip install -e ".[ui,test]"`
@@ -85,7 +87,8 @@ drift silently.
    `TOOL_NAMES`.
 3. Implement behavior in `src/renforge/tools/` (or an existing helper), not in
    `server.py`.
-4. Update `tests/test_server.py` (`EXPECTED_TOOLS`) when adding a tool.
+4. Update `tests/test_server.py` (`EXPECTED_TOOLS`) when adding a tool, and add
+   it to exactly one group in `src/renforge/toolsets.py` (a test enforces it).
 5. Refresh `tests/snapshots/mcp_public_tool_contract.json` when the emitted
    contract changes, then run:
 
@@ -120,10 +123,11 @@ Do not mutate shared wrapper `__annotations__` as a registration side effect;
   - Only add real Chinese translations for missing keys when available.
   - Preserve existing `zh-CN` values exactly.
   - Do not modify `zh-CN` with fake English/placeholder content.
-- Backend API error handling uses `errors.<error_code>` in
-  `src/renforge/ui/errors.py`; add matching canonical English entries in
-  `ui/src/i18n/locales/en.json` for all stable backend codes and
-  `errors.unexpected`.
+- Dashboard API errors are returned from `src/renforge/ui/server.py` through
+  `error_response(code=...)` (`src/renforge/ui/errors.py`). Every code needs a
+  `case` in `ui/src/i18n/errors.ts` and a canonical English entry under
+  `errors` in `ui/src/i18n/locales/en.json`; otherwise the dashboard shows
+  `errors.unexpected`. `tests/test_i18n_locale_contract.py` checks this.
 
 ## Releases and acknowledgements
 

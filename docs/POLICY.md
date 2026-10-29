@@ -18,7 +18,7 @@ runs. Denied calls return a structured `POLICY_DENIED` payload and never reach
 | `observational` | Read-only (for example `saves action=list`) | Allowed |
 | `mutating` | Recoverable live-state change (`advance`, `save`) | Allowed |
 | `destructive` | Replaces or discards live state (`quit`, `load`, `reload_script`, `quick_load`) | Denied unless authorized |
-| `open_world` | Arbitrary Python / unconstrained side effects (`eval`, scenario `eval` steps) | Denied unless authorized |
+| `open_world` | Arbitrary Python / unconstrained side effects (`eval`, scenario `eval` and `assert` steps, `wait` steps on an `expr`) | Denied unless authorized |
 | `malformed` | Parameters do not identify a known operation | Always denied in enforce mode |
 | `unmanaged` | Tools outside this model | Allowed (compatibility) |
 
@@ -33,7 +33,7 @@ Covered tools:
 - `renforge_eval` — always `open_world` when `expr` is a non-empty string
 - `renforge_wait_until` — `open_world` with an `expr` condition (it runs in the game, like a scenario `wait` step); `observational` for a label or screen
 - `renforge_set_var` — `mutating`
-- `renforge_run_scenario` — classified by the highest-risk step, including nested `control` actions
+- `renforge_run_scenario` — classified by the highest-risk step, including nested `control` actions. `assert` steps and `wait` steps on an `expr` run code in the game, so they are `open_world`: a scenario with any assertion needs `authorize=true` under enforce
 
 ## Authorization
 
@@ -67,8 +67,9 @@ Project file `<project>/.renforge/policy.json`:
 }
 ```
 
-`RENFORGE_POLICY` and `RENFORGE_POLICY_ALLOW*` environment variables override
-the file. MCP clients can set them next to the `uvx` / `renforge serve`
+`RENFORGE_POLICY` overrides the file's `mode`. The `RENFORGE_POLICY_ALLOW*`
+lists are combined with the file's `allow` and `allow_risk`: either source can
+allow an operation, so a project's file can loosen enforcement too. MCP clients can set them next to the `uvx` / `renforge serve`
 command. Invalid mode strings and unreadable policy files **fail closed** to
 `enforce`.
 

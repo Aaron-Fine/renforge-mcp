@@ -604,12 +604,16 @@ def allocate_and_materialize(
             last_error = exc
             try:
                 remove_owned_artifacts(project.root, expected_session_id=session_id)
+                cleaned = True
             except Exception:
-                pass
-            # Collision-style failures can retry; other errors re-raise after cleanup.
-            if isinstance(exc, FileExistsError):
-                continue
-            if isinstance(exc, LaunchError) and exc.code == "BRIDGE_ARTIFACT_COLLISION":
+                cleaned = False
+            # Collision-style failures can retry, but only once this attempt's
+            # files are gone: the retry publishes a new intent over this one,
+            # and anything it still lists would be left in game/ unowned.
+            collision = isinstance(exc, FileExistsError) or (
+                isinstance(exc, LaunchError) and exc.code == "BRIDGE_ARTIFACT_COLLISION"
+            )
+            if collision and cleaned:
                 continue
             raise
 

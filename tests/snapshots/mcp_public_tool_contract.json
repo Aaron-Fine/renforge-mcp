@@ -258,7 +258,7 @@
     }
   },
   "renforge_launch": {
-    "description": "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; Runtime control requires Ren'Py 8.0 or newer. Pre-8 bundled games or selected SDKs return UNSUPPORTED_RENPY_VERSION before SDK download, bridge injection, or process launch; an explicit newer SDK does not bypass a legacy game's incompatibility. poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. Saves, preferences, and HOME default to isolated temporary locations so the session does not read or write the user's normal Ren'Py state; the ready payload includes `session_id` and an `isolation` object. It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and publish authenticated ownership/bridge metadata under `<state>/control/`, where `<state>` is this project's RenForge folder outside the game (`RENFORGE_STATE_DIR` or `~/.local/state/renforge`, then `projects/<name>-<hash>`). `renforge_stop` removes only owned session artifacts. Exposing the user save tree (`savedir=existing`) requires `authorize=true` when `RENFORGE_POLICY=enforce`. Copy selected host slots with `renforge_saves(action=\"import\")` instead of bind-mounting the user tree.",
+    "description": "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; Runtime control requires Ren'Py 8.0 or newer. Pre-8 bundled games or selected SDKs return UNSUPPORTED_RENPY_VERSION before SDK download, bridge injection, or process launch; an explicit newer SDK does not bypass a legacy game's incompatibility. poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. Saves, preferences, and HOME default to isolated temporary locations so the session does not read or write the user's normal Ren'Py state; the ready payload includes `session_id` and an `isolation` object. It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and publish authenticated ownership/bridge metadata under `<state>/control/`, where `<state>` is this project's RenForge folder outside the game (`RENFORGE_STATE_DIR` or `~/.local/state/renforge`, then `projects/<name>-<hash>`). `renforge_stop` removes only owned session artifacts. A `savedir` or `home` of `existing`, or any path outside the RenForge state folder, requires `authorize=true` when `RENFORGE_POLICY=enforce`. Copy selected host slots with `renforge_saves(action=\"import\")` instead of bind-mounting the user tree.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -353,7 +353,7 @@
         },
         "authorize": {
           "default": false,
-          "description": "Explicitly authorize launching against the user's Ren'Py saves with `authorize=true` (`savedir=existing`, a host save path, `home=existing`, or `RENFORGE_ISOLATION=existing`) when `RENFORGE_POLICY=enforce`. Isolated launches do not need this.",
+          "description": "Pass `authorize=true` when `RENFORGE_POLICY=enforce` and the game would keep its saves or HOME outside RenForge's state folder: `savedir` or `home` set to `existing` (or `RENFORGE_ISOLATION=existing`), a host save or HOME path, or any other path, the shared temp dir included. Isolated launches (`savedir`/`home` omitted or `temporary`) do not need this.",
           "type": "boolean"
         }
       },
@@ -386,7 +386,7 @@
     }
   },
   "renforge_jump": {
-    "description": "Restart into a specific label/file position and keep interacting in a fresh game session. If needed, this may download and cache the required SDK before restart. Isolation matches `renforge_launch`: saves, preferences, and HOME default to temporary locations. Exposing the user save tree requires `authorize=true` when `RENFORGE_POLICY=enforce`. Use for deterministic positioning before scripted checks.",
+    "description": "Restart into a specific label/file position and keep interacting in a fresh game session. If needed, this may download and cache the required SDK before restart. Isolation matches `renforge_launch`: saves, preferences, and HOME default to temporary locations. A `savedir` or `home` outside the RenForge state folder requires `authorize=true` when `RENFORGE_POLICY=enforce`. Use for deterministic positioning before scripted checks.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -441,7 +441,7 @@
         },
         "authorize": {
           "default": false,
-          "description": "Explicitly authorize launching against the user's Ren'Py saves with `authorize=true` (`savedir=existing`, a host save path, `home=existing`, or `RENFORGE_ISOLATION=existing`) when `RENFORGE_POLICY=enforce`. Isolated launches do not need this.",
+          "description": "Pass `authorize=true` when `RENFORGE_POLICY=enforce` and the game would keep its saves or HOME outside RenForge's state folder: `savedir` or `home` set to `existing` (or `RENFORGE_ISOLATION=existing`), a host save or HOME path, or any other path, the shared temp dir included. Isolated launches (`savedir`/`home` omitted or `temporary`) do not need this.",
           "type": "boolean"
         }
       },
@@ -453,7 +453,7 @@
     }
   },
   "renforge_new_game": {
-    "description": "Restart at `start` and begin a new story progression. This may download and cache the required SDK before the fresh launch. Isolation matches `renforge_launch`: saves, preferences, and HOME default to temporary locations. Exposing the user save tree requires `authorize=true` when `RENFORGE_POLICY=enforce`. Prefer this for clean scenario entry rather than reusing unstable runtime state.",
+    "description": "Restart at `start` and begin a new story progression. This may download and cache the required SDK before the fresh launch. Isolation matches `renforge_launch`: saves, preferences, and HOME default to temporary locations. A `savedir` or `home` outside the RenForge state folder requires `authorize=true` when `RENFORGE_POLICY=enforce`. Prefer this for clean scenario entry rather than reusing unstable runtime state.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -504,7 +504,7 @@
         },
         "authorize": {
           "default": false,
-          "description": "Explicitly authorize launching against the user's Ren'Py saves with `authorize=true` (`savedir=existing`, a host save path, `home=existing`, or `RENFORGE_ISOLATION=existing`) when `RENFORGE_POLICY=enforce`. Isolated launches do not need this.",
+          "description": "Pass `authorize=true` when `RENFORGE_POLICY=enforce` and the game would keep its saves or HOME outside RenForge's state folder: `savedir` or `home` set to `existing` (or `RENFORGE_ISOLATION=existing`), a host save or HOME path, or any other path, the shared temp dir included. Isolated launches (`savedir`/`home` omitted or `temporary`) do not need this.",
           "type": "boolean"
         }
       },
@@ -537,7 +537,7 @@
     }
   },
   "renforge_session": {
-    "description": "The canonical play-session lifecycle. action=launch starts the game with agent-mode defaults (saves and preferences in the project's RenForge state folder, apart from the player's and kept across launches; isolated HOME; no Live Editor; transitions and vsync off) and returns status=starting or ready; poll action=status until ready or failed. save and load take a slot name; load returns the restored game's observation, ready for renforge_act; list shows the session's slots and the player's own (player_slots); import copies one player slot into the session's saves (the player's file is only read), so the agent can load and play or test a mod from the player's real progress; stop ends the game and cleans up. launch with label starts the story at that label (for testing and modding): the game leaves its splash screen or main menu for it, and every observation then carries started_at_label, because nothing the story did before the label has happened (a label normally reached with call ends the run when it returns); play from saves instead when the earlier state matters. An unknown label is reported as start_label_error. Server environment variables cover the rare launch settings (RENFORGE_STARTUP_TIMEOUT, RENFORGE_ISOLATION, ...). load and import require authorize=true when RENFORGE_POLICY=enforce, and list shows player_slots only with it.",
+    "description": "The canonical play-session lifecycle. action=launch starts the game with agent-mode defaults (saves and preferences in the project's RenForge state folder, apart from the player's and kept across launches; isolated HOME; no Live Editor; transitions and vsync off) and returns status=starting or ready; poll action=status until ready or failed. save and load take a slot name; load returns the restored game's observation, ready for renforge_act; list shows the session's slots and the player's own (player_slots); import copies one player slot into the session's saves (the player's file is only read), so the agent can load and play or test a mod from the player's real progress; stop ends the game and cleans up. launch with label starts the story at that label (for testing and modding): the game leaves its splash screen or main menu for it, and every observation then carries started_at_label, because nothing the story did before the label has happened (a label normally reached with call ends the run when it returns); play from saves instead when the earlier state matters. An unknown label is reported as start_label_error. Server environment variables cover the rare launch settings (RENFORGE_STARTUP_TIMEOUT, RENFORGE_TRANSITIONS, RENFORGE_VSYNC); saves and HOME are always isolated, whatever RENFORGE_ISOLATION says. load and import require authorize=true when RENFORGE_POLICY=enforce, and list shows player_slots only with it.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -4405,7 +4405,7 @@
         },
         "authorize": {
           "default": false,
-          "description": "Mod files are code the game runs, so `write` is open-world: pass true when RENFORGE_POLICY=enforce.",
+          "description": "Mod files are code the game runs, so `write` is open-world and `reload` destructive (like `reload_script`): pass true for them when RENFORGE_POLICY=enforce.",
           "type": "boolean"
         }
       },

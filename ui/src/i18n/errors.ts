@@ -60,6 +60,8 @@ export function translateDashboardApiError(payload: DashboardApiError, messageKe
       return i18next.t("errors.coverage_read_failed");
     case "debug_events_since_invalid":
       return i18next.t("errors.debug_events_since_invalid");
+    case "eval_expr_invalid":
+      return i18next.t("errors.eval_expr_invalid");
     case "file_access_failed":
       return i18next.t("errors.file_access_failed");
     case "file_not_found":
@@ -68,10 +70,32 @@ export function translateDashboardApiError(payload: DashboardApiError, messageKe
       return i18next.t("errors.file_path_out_of_bounds");
     case "invalid_token":
       return i18next.t("errors.invalid_token");
-    case "launch_version_invalid":
-      return i18next.t("errors.launch_version_invalid");
+    case "launch_audio_invalid":
+      return i18next.t("errors.launch_audio_invalid");
+    case "launch_bridge_eval_invalid":
+      return i18next.t("errors.launch_bridge_eval_invalid");
+    case "launch_cleanup_on_stop_invalid":
+      return i18next.t("errors.launch_cleanup_on_stop_invalid");
+    case "launch_display_invalid":
+      return i18next.t("errors.launch_display_invalid");
     case "launch_editor_invalid":
       return i18next.t("errors.launch_editor_invalid");
+    case "launch_home_invalid":
+      return i18next.t("errors.launch_home_invalid");
+    case "launch_persistent_invalid":
+      return i18next.t("errors.launch_persistent_invalid");
+    case "launch_preferences_invalid":
+      return i18next.t("errors.launch_preferences_invalid");
+    case "launch_savedir_invalid":
+      return i18next.t("errors.launch_savedir_invalid");
+    case "launch_start_label_invalid":
+      return i18next.t("errors.launch_start_label_invalid");
+    case "launch_timeout_invalid":
+      return i18next.t("errors.launch_timeout_invalid");
+    case "launch_version_invalid":
+      return i18next.t("errors.launch_version_invalid");
+    case "live_action_invalid":
+      return i18next.t("errors.live_action_invalid");
     case "live_action_missing":
       return i18next.t("errors.live_action_missing");
     case "live_warp_invalid":
@@ -96,14 +120,24 @@ export function translateDashboardApiError(payload: DashboardApiError, messageKe
       return i18next.t("errors.project_switch_blocked");
     case "screenshot_failed":
       return i18next.t("errors.screenshot_failed");
+    case "screenshot_size_invalid":
+      return i18next.t("errors.screenshot_size_invalid");
+    case "select_choice_invalid":
+      return i18next.t("errors.select_choice_invalid");
+    case "set_var_name_invalid":
+      return i18next.t("errors.set_var_name_invalid");
     case "story_map_failed":
       return i18next.t("errors.story_map_failed");
     case "story_map_root_missing":
       return i18next.t("errors.story_map_root_missing");
     case "timeline_limit_invalid":
       return i18next.t("errors.timeline_limit_invalid");
+    case "translation_language_invalid":
+      return i18next.t("errors.translation_language_invalid");
     case "translation_language_missing":
       return i18next.t("errors.translation_language_missing");
+    case "ui_assets_missing":
+      return i18next.t("errors.ui_assets_missing");
     case "warp_target_invalid":
       return i18next.t("errors.warp_target_invalid");
     case "warp_target_missing":

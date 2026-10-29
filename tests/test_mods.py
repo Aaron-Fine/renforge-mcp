@@ -460,3 +460,33 @@ def test_policy_rejects_unknown_mod_action() -> None:
         policy.RISK_MALFORMED,
     )
     assert policy.classify("renforge_mod", {})[1] == policy.RISK_MALFORMED
+
+
+def test_write_never_leaves_an_unlisted_file_when_the_manifest_fails(tmp_path, monkeypatch) -> None:
+    # An unlisted .rpy would load in the game and survive remove().
+    root = _project(tmp_path)
+
+    def manifest_refused(*_args, **_kwargs):
+        raise ValueError("refusing unsafe write to renforge-mod.json")
+
+    monkeypatch.setattr(mods, "_write_manifest", manifest_refused)
+    with pytest.raises(ValueError):
+        mods.write_file(root, "demo", "intro.rpy", "label demo:\n    return\n")
+    assert not (root / "game" / "mods" / "demo" / "intro.rpy").exists()
+
+
+def test_package_reports_missing_files_and_fails_when_nothing_is_left(tmp_path) -> None:
+    root = _project(tmp_path)
+    mods.write_file(root, "demo", "a.rpy", "label a:\n    return\n")
+    mods.write_file(root, "demo", "b.rpy", "label b:\n    return\n")
+    (root / "game" / "mods" / "demo" / "b.rpy").unlink()
+
+    partial = mods.package(root, "demo")
+    assert partial["ok"] is True
+    assert partial["files"] == ["a.rpy"]
+    assert partial["missing"] == ["b.rpy"]
+
+    (root / "game" / "mods" / "demo" / "a.rpy").unlink()
+    empty = mods.package(root, "demo")
+    assert empty["ok"] is False
+    assert empty["missing"] == ["a.rpy", "b.rpy"]
