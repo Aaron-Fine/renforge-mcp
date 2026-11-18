@@ -101,7 +101,7 @@ jobs:
         run: python -m compileall src tests
 
       - name: Run tests
-        run: python -m pytest -q
+        run: python -m pytest -q -rs
 
   engine-integration:
     name: Engine integration (Ren'Py 8.5.3)
