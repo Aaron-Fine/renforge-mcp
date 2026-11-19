@@ -100,3 +100,32 @@ def test_a_refused_choice_ends_the_run_and_is_reported(tmp_path, monkeypatch) ->
     assert report["choices_explored"] == 0
     assert [item["choice"] for item in report["choice_errors"]] == ["Left", "Right"]
     assert report["choice_errors"][0]["error"] == "ambiguous choice"
+
+
+def test_autopilot_does_not_follow_a_linked_state_folder(tmp_path, monkeypatch) -> None:
+    """The progress file goes where captures go: never through a link in the state tree."""
+    import os
+
+    import pytest
+
+    import renforge.autopilot as autopilot_module
+    from renforge.project import RenpyProject
+    from renforge.state import project_state_dir
+    from renforge.util.files import PrivatePathError
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project = RenpyProject(_DEMO)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    state = project_state_dir(project.root)
+    state.parent.mkdir(parents=True)
+    try:
+        os.symlink(elsewhere, state, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+    monkeypatch.setattr(autopilot_module, "launch_with_bridge",
+                        lambda *_a, **_k: pytest.fail("must not launch"))
+
+    with pytest.raises(PrivatePathError):
+        autopilot_module.autopilot(object(), project, max_runs=1)
+    assert list(elsewhere.iterdir()) == []
