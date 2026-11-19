@@ -1226,7 +1226,7 @@ def test_act_text_replaces_a_prefilled_input(running_bridge):
     class Input:
         def __init__(self):
             self.editable = True
-            self.content = "Zack"
+            self.content = "Remy"
             self.caret_pos = 4
             self.length = 8
             self.allow = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -1313,7 +1313,7 @@ def test_act_text_replaces_a_prefilled_input(running_bridge):
 def test_send_input_replaces_through_the_input_value(running_bridge):
     class Input:
         def __init__(self):
-            self.content = "Zack"
+            self.content = "Remy"
             self.caret_pos = 4
             self.value = self
 
@@ -7517,12 +7517,12 @@ def test_a_bar_that_is_not_adjustable_only_shows_a_value(running_bridge):
 
 
 def test_input_prompt_is_the_text_as_drawn(running_bridge):
-    """A prompt asks "(Leave blank for [mc_nick])"; the player sees the name."""
+    """A prompt asks "(Leave blank for [hero_nick])"; the player sees the name."""
     renpy = running_bridge.renpy
-    renpy.substitute = lambda value: value.replace("[mc_nick]", "Kyle")
+    renpy.substitute = lambda value: value.replace("[hero_nick]", "Sam")
     prompt = running_bridge.globs["_renforge_input_prompt"]
-    node = types.SimpleNamespace(scope={"prompt": "{i}Nickname?{/i} (Leave blank for [mc_nick])"})
-    assert prompt(node, None) == "Nickname? (Leave blank for Kyle)"
+    node = types.SimpleNamespace(scope={"prompt": "{i}Nickname?{/i} (Leave blank for [hero_nick])"})
+    assert prompt(node, None) == "Nickname? (Leave blank for Sam)"
 
 
 def test_focus_masked_buttons_report_the_region_a_click_reaches(running_bridge, monkeypatch):
