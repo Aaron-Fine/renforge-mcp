@@ -825,9 +825,8 @@ def guard_dismiss(snapshot: Mapping[str, Any], interaction: Any, *,
     if past_optional_controls:
         # The line accepts a plain click; menus and inputs never do.
         return None
-    for control in snapshot.get("controls") or []:
-        if not isinstance(control, Mapping):
-            continue
-        if _is_decision(control):
-            return "not_dismiss"
+    # classify already weighed the controls (buttons on a HUD kept up from
+    # earlier lines do not hold a line), so the guard follows its verdict.
+    if snapshot.get("forward") != "dismiss":
+        return "not_dismiss"
     return None

@@ -1223,6 +1223,38 @@ def test_hud_buttons_kept_up_from_earlier_lines_do_not_hold_a_clickable_line():
     assert classify(_raw(elements=hud, screens=screens, dialogue=None))["forward"] == "choose"
 
 
+def test_the_dismiss_guard_agrees_with_classify_about_kept_up_hud_buttons():
+    """advance_until(mode="dismiss") spun until timeout: classify said dismiss, the guard refused."""
+    hud = [_element(screen="phone_button", action="Show('Phone')", text="Phone")]
+    screens = [{"name": "say", "layer": "screens", "modal": False},
+               {"name": "phone_button", "layer": "screens", "modal": False, "kept_up": True}]
+    frames = [_raw(interaction=1, elements=hud, screens=screens),
+              _raw(interaction=2, say_dismiss=None, elements=[_element(screen="choice", menu_index=0, text="Go")],
+                   screens=[{"name": "choice", "layer": "screens", "modal": True}])]
+    line = classify(frames[0])
+    assert line["forward"] == "dismiss"
+    assert guard_dismiss(line, 1) is None
+    # The same HUD shown with this moment still stops the line.
+    called = classify(_raw(elements=hud, screens=[dict(s, kept_up=False) for s in screens]))
+    assert guard_dismiss(called, 4) == "not_dismiss"
+
+    clock = _Clock()
+    index = {"i": 0}
+
+    def dismiss(interaction):
+        # The bridge's dismiss_if: classify a fresh frame, then guard it.
+        refusal = guard_dismiss(classify(frames[index["i"]]), interaction)
+        if refusal:
+            return {"ok": False, "error": refusal}
+        index["i"] += 1
+        return {"ok": True}
+
+    result = run_advance_until(lambda _shot: frames[index["i"]], dismiss, max_steps=5, timeout=2.0,
+                               sleep=clock.sleep, now=clock.now)
+    assert result["stop"] == "choose"
+    assert result["steps"] == 1
+
+
 def test_a_first_pause_with_only_hud_buttons_is_clicked_past():
     # `show text "Title Card"` then `pause`, under a kept-up HUD button.
     hud = [_element(screen="character_menu_button", action="ShowMenu('character_info_menu')")]
