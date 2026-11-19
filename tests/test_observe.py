@@ -1134,7 +1134,7 @@ def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch)
     waited = progression.run_native_skip(Client(), lambda shot: stuck, max_steps=5,
                                          deadline=time.monotonic() + 0.1, total_deadline=time.monotonic() + 0.2)
     assert waited["ok"] is True and waited["stop"] == "timeout"
-    assert nudges == [7]
+    assert verdicts == [None]
 
 
 def test_dismiss_progression_stops_before_unclassified_input():
