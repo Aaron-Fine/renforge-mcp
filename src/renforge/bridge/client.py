@@ -293,7 +293,7 @@ class BridgeClient:
             payload["limit"] = limit
         if variables:
             payload["variables"] = list(variables)
-        return self.request("explain", payload)
+        return self._normalize_error_reply(self.request("explain", payload))
 
     def eval_expr(self, expr: str) -> Any:
         return self._checked("eval", {"expr": expr})["value"]
