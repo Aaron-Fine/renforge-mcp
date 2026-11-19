@@ -116,3 +116,27 @@ def test_a_stale_store_name_is_not_reported_for_a_comprehension_variable(running
         {"_conditions": ["any(q.done for q in quests)"]})
 
     assert values == {"quests": []}
+
+
+# --- variables is its own request -------------------------------------------
+
+
+def test_variables_with_another_selector_is_refused(running_bridge):
+    _set_script(running_bridge, {})
+
+    reply = running_bridge.client.explain(label="nope", variables=["score"])
+
+    assert reply["ok"] is False
+    assert "variables" in reply["error"] and "label" in reply["error"]
+    assert running_bridge.client.explain(search="x", variables=["score"])["ok"] is False
+
+
+def test_more_than_a_hundred_variables_says_it_was_cut(running_bridge):
+    names = ["score"] + ["missing_%03d" % number for number in range(120)]
+
+    reply = running_bridge.client.explain(variables=names)
+
+    assert reply["ok"] is True
+    assert len(reply["variables"]) == 100 and reply["variables"]["score"] == {"value": 7}
+    assert reply["truncated"] is True
+    assert running_bridge.client.explain(variables=["score"])["truncated"] is False

@@ -6658,13 +6658,20 @@ init python:
                     values[name] = read["value"]
         return values
 
+    _RENFORGE_EXPLAIN_VARIABLES_MAX = 100
+
     def _renforge_h_explain(payload):
         payload = payload or {}
         if payload.get("variables") is not None:
             names = payload["variables"]
             if isinstance(names, builtins.str) or not isinstance(names, (builtins.list, builtins.tuple)) or not names:
                 return {"ok": False, "error": "variables must be a list of names"}
-            return {"ok": True, "variables": {str(name): _renforge_explain_variable(name) for name in names[:100]}}
+            if any(payload.get(key) is not None for key in ("label", "screen", "id", "source", "search", "query")):
+                return {"ok": False,
+                        "error": "pass variables alone, without label, screen, id, source, search or query"}
+            wanted = names[:_RENFORGE_EXPLAIN_VARIABLES_MAX]
+            return {"ok": True, "variables": {str(name): _renforge_explain_variable(name) for name in wanted},
+                    "truncated": len(names) > len(wanted)}
         result = _renforge_h_explain_selected(payload)
         if isinstance(result, builtins.dict) and result.get("ok") is not False:
             values = _renforge_explain_condition_values(result)
