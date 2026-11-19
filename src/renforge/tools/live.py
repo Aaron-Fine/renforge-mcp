@@ -1810,6 +1810,7 @@ def play(
     if control_id is None:
         if value is not None:
             return {"ok": False, "error": "value needs a control id"}
+        deadline = time.monotonic() + timeout
         current = observe(project_path, screenshot=False)
         if current.get("ok") is False:
             return current
@@ -1834,7 +1835,13 @@ def play(
                     if now.get("ok") is False or now.get("interaction") != current["interaction"]:
                         break
                     time.sleep(0.02)
-        progress = advance_until(project_path, max_steps=200, timeout=timeout, screenshot=screenshot)
+        # Progression gets what the observe and the dismiss left of the budget.
+        remaining = deadline - time.monotonic()
+        if remaining < 0.1:
+            progress = {"ok": True, "stop": "timeout", "steps": 0, "observation": None,
+                        "observation_status": "timeout"}
+        else:
+            progress = advance_until(project_path, max_steps=200, timeout=remaining, screenshot=screenshot)
         result = {"ok": progress.get("ok", True), "action_outcome": "none",
                   **({"continued_from_newer_state": True} if stale else {}),
                   **({"clicked_past_line": bool(clicked_past.get("ok"))} if clicked_past else {}),
