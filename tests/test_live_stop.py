@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import threading
 import time
@@ -855,7 +856,13 @@ def _request_paths(tmp_path: Path, host_home: Path, knobs: dict) -> dict:
 # handed a running game that certainly uses the player's storage.
 _MIGHT_BE_THE_PLAYERS = [
     ({"savedir": "OTHER_GAME_SAVES"}, ("existing", "existing")),
-    ({"savedir": "HOST_TREE_OTHER_CASE"}, ("existing", "existing")),
+    pytest.param(
+        {"savedir": "HOST_TREE_OTHER_CASE"}, ("existing", "existing"),
+        # Where the platform's path rule ignores case (Windows), another
+        # spelling of the host tree certainly is the player's tree.
+        marks=pytest.mark.skipif(os.path.normcase("A") == os.path.normcase("a"),
+                                 reason="paths here compare case-insensitively"),
+    ),
     ({"savedir": "temporary", "home": "LINKED_HOME"}, ("temporary", "existing")),
 ]
 
