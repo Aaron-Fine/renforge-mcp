@@ -7106,13 +7106,19 @@ init python:
 
 
     def _renforge_h_dismiss_if(payload):
+        """Queue ``dismiss`` only when ``guard_dismiss`` accepts a fresh frame.
+
+        ``past_optional_controls`` and ``allow_pause`` opt in only when they are
+        literally true; ``allow_pause`` lets a line held by a pending pause be
+        clicked once (the stuck-pause nudge)."""
         payload = payload or {}
         raw = _renforge_observe_raw(False, include_readout=False)
         snapshot = _renforge_runtime.interaction.classify(raw)
         refusal = _renforge_runtime.interaction.guard_dismiss(
             snapshot, payload.get("interaction"), session_id=payload.get("session_id"),
             observation_id=payload.get("observation_id"),
-            past_optional_controls=payload.get("past_optional_controls") is True)
+            past_optional_controls=payload.get("past_optional_controls") is True,
+            allow_pause=payload.get("allow_pause") is True)
         if refusal:
             return {"ok": False, "error": refusal, "interaction": raw["interaction"]}
         renpy.exports.queue_event("dismiss")
