@@ -74,3 +74,51 @@ def test_an_inline_load_still_reports_the_restart_once(running_bridge, monkeypat
     reply = running_bridge.client.load_slot("teams")
     assert reply["ok"] is True and reply["restarting"] is True
     assert emitted == [("load.completed", {"slot": "teams", "restored_label": None})]
+
+
+# --- custom click attributes ----------------------------------------------
+
+
+class _CountingMapButton:
+    """A game's focusable displayable that counts clicks, holding no action."""
+
+    def __init__(self):
+        self.click_count = 0
+
+
+class _FlagButton:
+    def __init__(self):
+        self.clickable = True
+
+
+def test_a_custom_click_attribute_that_holds_no_action_is_not_run(running_bridge):
+    globs = running_bridge.globs
+    for widget in (_CountingMapButton(), _FlagButton()):
+        focus = types.SimpleNamespace(widget=widget, screen=None)
+        assert globs["_renforge_focus_action_value"](focus) is None
+        # Nothing to run, so the caller clicks the pointer instead.
+        assert globs["_renforge_invoke_focus_action"](focus) is False
+
+
+def test_a_custom_click_attribute_must_hold_renpy_actions_when_they_exist(running_bridge):
+    renpy = running_bridge.renpy
+    globs = running_bridge.globs
+
+    class Action:
+        def __call__(self):
+            return None
+
+    class Hotspot:
+        def __init__(self, click_action):
+            self.click_action = click_action
+
+    actions = [Action(), Action()]
+    renpy.ui = types.SimpleNamespace(Action=Action)
+    try:
+        focus = types.SimpleNamespace(widget=Hotspot(actions), screen=None)
+        assert globs["_renforge_focus_action_value"](focus) is actions
+        # A plain function is not a Ren'Py Action, as discovery requires.
+        focus = types.SimpleNamespace(widget=Hotspot(lambda: None), screen=None)
+        assert globs["_renforge_focus_action_value"](focus) is None
+    finally:
+        del renpy.ui

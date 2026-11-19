@@ -2357,6 +2357,29 @@ init python:
             return None
         return names[0] if len(names) == 1 else None
 
+    def _renforge_custom_action_value(widget):
+        """The click action a game's own displayable keeps, or None.
+
+        The attribute (see ``_renforge_custom_action_attr``) counts only when
+        it holds one or more actions: Ren'Py Actions when ``renpy.ui.Action``
+        exists, as control discovery requires, else callables. A counter or
+        flag such as ``click_count = 0`` is not an action, so the caller
+        clicks the pointer instead of running it.
+        """
+        attr = _renforge_custom_action_attr(widget)
+        if attr is None:
+            return None
+        value = getattr(widget, attr, None)
+        actions = _renforge_action_list(value)
+        if not actions:
+            return None
+        action_type = getattr(getattr(renpy, "ui", None), "Action", None)
+        if isinstance(action_type, type):
+            is_action = lambda item: isinstance(item, action_type)
+        else:
+            is_action = callable
+        return value if all(is_action(item) for item in actions) else None
+
     def _renforge_focus_action_value(focus):
         # Button.per_interact copies a sensitive action onto clicked, and
         # Button.event runs clicked. Prefer that, then the declared action.
@@ -2375,9 +2398,7 @@ init python:
                 return action
         # A game's own displayable may keep it under a click attribute.
         if widget is not None and not type(widget).__module__.startswith("renpy."):
-            attr = _renforge_custom_action_attr(widget)
-            if attr is not None:
-                return getattr(widget, attr, None)
+            return _renforge_custom_action_value(widget)
         return None
 
     def _renforge_with_focus_screen(focus, fn):
