@@ -57,6 +57,9 @@ versioning.
   one `renforge_launch` started on the player's saves, is refused with
   `SESSION_NOT_ISOLATED` before a slot is written, loaded, or listed, so
   these actions keep their promise of never touching the player's saves.
+  `renforge_session(action="launch")` is refused the same way, before
+  anything starts, when its saves folder in the state folder resolves
+  anywhere else (a link planted there).
 - `renforge_validate` (0.7.5) is in the `project` toolset.
 - Write receipts (0.7.4) for files in the state folder (captures, scene
   snapshots, the activity log's `files_touched_file` sidecar) are absolute
@@ -65,7 +68,10 @@ versioning.
   receipt and passes on the import's own failure codes; a missing slot is
   `NO_MATCHING_SAVE_SLOTS`. It copies the slot to where the running game
   keeps its saves; a running game whose saves are in a folder this server
-  did not create is refused with `SESSION_SAVES_ELSEWHERE`.
+  did not create is refused with `SESSION_SAVES_ELSEWHERE`. A running game
+  whose bridge does not answer (busy, or still starting) gets a retryable
+  error and nothing is copied, instead of the slot landing in a folder the
+  game does not read.
 - `renforge_autopilot` always launches isolated; `RENFORGE_ISOLATION=existing`
   gave it the player's saves, and it takes no `authorize`.
 - Tools that need a running game say so when none is: `code="NO_RUNNING_GAME"`
@@ -91,7 +97,8 @@ versioning.
   `RENFORGE_STATE_DIR` or `~/.local/state/renforge/projects/<name>-<hash>/`.
   Opening or launching a project no longer creates `<project>/.renforge`.
   On a case-insensitive volume every spelling of a project path shares one
-  state folder and one bridge lock. A Live Editor save, undo or rollback of
+  state folder, one bridge lock, one dashboard and one owned session, so a
+  game launched through one spelling is this server's own through another. A Live Editor save, undo or rollback of
   a game on another filesystem than the state folder (a second drive)
   stages its exchange files in `<project>/.renforge/editor-exchange/`
   instead, because the atomic exchange cannot cross filesystems, and removes
@@ -546,6 +553,13 @@ versioning.
   the engine widget.
 - Autopilot ends a run when the bridge refuses a choice and lists it under
   `choice_errors`, instead of counting the menu as explored.
+- A `save` or `load` slot that is a path rather than a slot name (absolute,
+  with a drive, a `/` or `\` separator, or `.`/`..`) is refused with
+  `SAVE_SLOT_INVALID` before the game is asked, in `renforge_saves`,
+  `renforge_session`, scenario steps and the dashboard. Ren'Py joins the
+  slot onto its save folder, so such a slot reached any folder; a
+  `renforge_session` save, which needs no `authorize`, could write into the
+  player's own saves.
 - Project scans (`renforge_scan_project`, `renforge_assets`,
   `renforge_find_references`, and the dashboard's script list, story map and
   translation strings) no longer walk into a folder under `game/` that is a
