@@ -52,13 +52,12 @@ from ..save_isolation import (
     launch_request_is_renforge_owned,
     launch_state_mode_error,
     list_host_slots,
-    location_is_renforge_owned,
-    path_in_session_root,
     reuse_keeps_isolation,
     SAVEDIR_COMPONENT,
     SAVES_DIRNAME,
     select_host_slots,
     selector_error,
+    storage_is_renforge_owned,
 )
 from ..sdk import get_or_install_sdk, require_supported_runtime
 from ..state import project_state_dir
@@ -459,8 +458,9 @@ def start_launch(
         if requirements is not None:
             started = task.requirements
             refused = _reuse_refusal(
-                # A starting launch with unknown requirements is assumed the worst.
-                exposed=(started or {}).get("exposed", _ALL_COMPONENTS),
+                # The starting launch is the game the request would get: what
+                # it may expose counts. Unknown requirements are the worst.
+                exposed=(started or {}).get("may_expose", _ALL_COMPONENTS),
                 isolated=bool(started and started.get("isolated")),
                 eval_running=not started or started.get("eval", True) is not False,
                 wanted=requirements,
@@ -656,7 +656,9 @@ def _external_session_isolation(client: Any) -> dict[str, Any]:
     """Where a game this process did not start keeps its saves and HOME.
 
     ``exposes_user_saves`` is false only when HOME and every active save
-    location sit inside a RenForge session root. Ren'Py also reads
+    location sit in RenForge's own folders (the state folder, where
+    ``renforge_session`` keeps its saves, or a session root) and none of them
+    reaches the player's storage anyway. Ren'Py also reads
     ``game/saves`` and ``config.extra_savedirs`` unless an isolated launch
     removed them, and either may hold the player's saves wherever it points,
     so anything else, including a path that cannot be resolved or a bridge
@@ -681,19 +683,19 @@ def _external_isolation_report(info: Mapping[str, Any]) -> dict[str, Any]:
 def _external_exposed_components(report: dict[str, Any]) -> frozenset[str]:
     """Components of an external game's storage it cannot vouch for.
 
-    HOME is isolated only when the bridge reports one inside a session root;
-    saves only when it lists save locations and every one is inside a session
-    root. Anything unreported or unresolvable counts as the player's.
+    HOME is isolated only when the bridge reports one in RenForge's own
+    folders; saves only when it lists save locations and every one is there
+    (:func:`storage_is_renforge_owned`). Anything unreported or unresolvable
+    counts as the player's.
     """
     exposed: set[str] = set()
-    home = report.get("home")
-    if not (isinstance(home, str) and home and path_in_session_root(home)):
+    if not storage_is_renforge_owned(report.get("home"), home=True):
         exposed.add(HOME_COMPONENT)
     locations = report.get("save_locations")
     if not (
         isinstance(locations, list)
         and locations
-        and all(isinstance(item, str) and item and path_in_session_root(item) for item in locations)
+        and all(storage_is_renforge_owned(item, home=False) for item in locations)
     ):
         exposed.add(SAVEDIR_COMPONENT)
     return frozenset(exposed)
@@ -727,27 +729,63 @@ _ALL_COMPONENTS: frozenset[str] = frozenset({SAVEDIR_COMPONENT, HOME_COMPONENT})
 def launch_requirements(
     project_path: str | Path,
     *,
+    warp: str | None = None,
     savedir: str | None = None,
     home: str | None = None,
     persistent: str | None = None,
     preferences: str | None = None,
     bridge_eval: bool | None = None,
 ) -> dict[str, Any]:
-    """What a launch request may be given.
+    """What a launch request may be given, and what a game it starts may expose.
 
-    ``exposed``: the storage components it leaves on the player's own; a
-    running game may expose no more (:func:`reuse_keeps_isolation`).
+    ``exposed``: the storage components it certainly leaves on the player's
+    own; a running game may expose no more (:func:`reuse_keeps_isolation`).
+    The narrow answer, so a request is never handed more of the player's
+    storage than it asked for.
+    ``may_expose``: the components a game started from it might leave on the
+    player's own (the wide answer); a request arriving while it starts is
+    judged against this.
     ``isolated``: it stays in RenForge's own folders and so needs no
     authorization; it may then get only a session that does too.
     ``eval``: its bridge may run code.
+
+    A ``warp`` relaunch with every knob auto is judged with the isolation it
+    inherits from the game this process owns (:func:`_inherit_replaced_isolation`).
     """
-    knobs = apply_launch_isolation_defaults(savedir=savedir, home=home, persistent=persistent,
-                                            preferences=preferences)
+    knobs = {"savedir": savedir, "home": home, "persistent": persistent, "preferences": preferences}
+    knobs = apply_launch_isolation_defaults(**_inherit_replaced_isolation(project_path, warp, knobs))
     return {
-        "exposed": launch_exposed_components(project_path=project_path, **knobs),
+        "exposed": launch_exposed_components(project_path=project_path, certain=True, **knobs),
+        "may_expose": launch_exposed_components(project_path=project_path, **knobs),
         "isolated": launch_request_is_renforge_owned(project_path=project_path, **knobs),
         "eval": bridge_eval_allowed() and bridge_eval is not False,
     }
+
+
+def _inherit_replaced_isolation(
+    project_path: str | Path, warp: str | None, knobs: Mapping[str, str | None]
+) -> dict[str, str | None]:
+    """The isolation knobs for a launch, after a relaunch inherits the replaced game's.
+
+    A jump/new_game/Warp relaunch with every knob auto keeps the isolation of
+    the game this process owns and replaces, component by component, instead
+    of falling back to the player's saves. A component the replaced game
+    certainly kept on the player's storage takes the server default, so
+    RENFORGE_ISOLATION=temporary still isolates it; any other component is
+    isolated. Only the certain answer may send a relaunch to the player's
+    storage: a component that merely might be the player's (another game's
+    ``game/saves``, a linked HOME) is isolated, never handed the real one.
+    """
+    knobs = dict(knobs)
+    replaced = _SESSIONS.get(_key(project_path)) if warp is not None else None
+    if replaced is None or not isolation_knobs_unset(*knobs.values()):
+        return knobs
+    exposed = _session_exposed_components(replaced, certain=True)
+    if exposed != _ALL_COMPONENTS:
+        configured = default_launch_value(None)
+        knobs["savedir"] = configured if SAVEDIR_COMPONENT in exposed else "temporary"
+        knobs["home"] = configured if HOME_COMPONENT in exposed else "temporary"
+    return knobs
 
 
 def _reuse_refusal(
@@ -793,19 +831,20 @@ def _reuse_refusal(
     return result
 
 
-def _session_exposed_components(session: Any) -> frozenset[str]:
-    """Which of an owned session's savedir / HOME are the player's own."""
+def _session_exposed_components(session: Any, *, certain: bool = False) -> frozenset[str]:
+    """Which of an owned session's savedir / HOME are the player's own (see ``_exposed_components``)."""
     isolation = getattr(session, "isolation", None)
     if isolation is None:
         # Without an isolation record the session's storage is unknown.
         return _ALL_COMPONENTS
-    return isolation.exposed_components(getattr(session, "project_root", None))
+    return isolation.exposed_components(getattr(session, "project_root", None), certain=certain)
 
 
 def _owned_session_facts(session: Any) -> dict[str, Any]:
     isolation = getattr(session, "isolation", None)
+    project_root = getattr(session, "project_root", None)
     return {"exposed": _session_exposed_components(session),
-            "isolated": isolation is not None and isolation_is_renforge_owned(isolation),
+            "isolated": isolation is not None and isolation_is_renforge_owned(isolation, project_root),
             "eval_running": getattr(session, "bridge_eval", True) is not False}
 
 
@@ -814,7 +853,7 @@ def _external_session_facts(client: BridgeClient) -> dict[str, Any]:
 
     ``isolation`` is :func:`_external_session_isolation`'s report. ``isolated``
     needs HOME and every reported save location (at least one) in RenForge's
-    own folders.
+    own folders, which is exactly when no component is exposed.
     """
     try:
         info = client.session_info()
@@ -822,14 +861,9 @@ def _external_session_facts(client: BridgeClient) -> dict[str, Any]:
         return {"isolation": {"exposes_user_saves": True}, "exposed": _ALL_COMPONENTS,
                 "isolated": False, "eval_running": True}
     report = _external_isolation_report(info)
-    home, locations = report["home"], report["save_locations"]
-    isolated = bool(
-        home and location_is_renforge_owned(home)
-        and locations
-        and all(isinstance(item, str) and item and location_is_renforge_owned(item) for item in locations)
-    )
-    return {"isolation": report, "exposed": _external_exposed_components(report),
-            "isolated": isolated, "eval_running": info.get("eval_enabled") is not False}
+    exposed = _external_exposed_components(report)
+    return {"isolation": report, "exposed": exposed,
+            "isolated": not exposed, "eval_running": info.get("eval_enabled") is not False}
 
 
 def launch_game(
@@ -902,18 +936,9 @@ def launch_game(
         "persistent": session_cfg.get("persistent", persistent),
         "preferences": session_cfg.get("preferences", preferences),
     }
-    replaced = _SESSIONS.get(_key(project.root)) if warp is not None else None
-    if replaced is not None and isolation_knobs_unset(*knobs.values()):
-        # A jump/new_game/Warp relaunch with every knob auto keeps the
-        # isolation of the game it replaces, component by component, instead
-        # of falling back to the player's saves. An exposed component takes
-        # the server default, so RENFORGE_ISOLATION=temporary still isolates
-        # it. It still gets a fresh session: imported slots go with the old one.
-        exposed = _session_exposed_components(replaced)
-        if exposed != {SAVEDIR_COMPONENT, HOME_COMPONENT}:
-            configured = default_launch_value(None)
-            knobs["savedir"] = configured if SAVEDIR_COMPONENT in exposed else "temporary"
-            knobs["home"] = configured if HOME_COMPONENT in exposed else "temporary"
+    # A relaunch with every knob auto keeps the replaced game's isolation. It
+    # still gets a fresh session: imported slots go with the old one.
+    knobs = _inherit_replaced_isolation(project.root, warp, knobs)
     isolation_defaults = apply_launch_isolation_defaults(**knobs)
     savedir = isolation_defaults["savedir"]
     home = isolation_defaults["home"]

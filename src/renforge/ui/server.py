@@ -680,7 +680,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             requirements=live.launch_requirements(
                 project_path,
                 **{field: launch_kwargs.get(field)
-                   for field in ("savedir", "home", "persistent", "preferences", "bridge_eval")},
+                   for field in ("warp", "savedir", "home", "persistent", "preferences", "bridge_eval")},
             ),
             language=launch_kwargs.get("language"),
         )

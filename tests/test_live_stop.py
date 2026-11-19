@@ -832,6 +832,138 @@ def test_reusing_an_external_game_checks_saves_and_home_separately(
         assert result["existing_exposes_user_saves"] is True
 
 
+def _linked_home(tmp_path: Path, host_home: Path) -> Path:
+    """A HOME whose Ren'Py save folder is a link into the host save tree."""
+    linked = tmp_path / "linked-home"
+    implied = linked / host_renpy_root().relative_to(host_home)
+    implied.parent.mkdir(parents=True, exist_ok=True)
+    host_renpy_root().mkdir(parents=True, exist_ok=True)
+    try:
+        implied.symlink_to(host_renpy_root(), target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+    return linked
+
+
+def _request_paths(tmp_path: Path, host_home: Path, knobs: dict) -> dict:
+    """Swap placeholder knob values for paths the wider "might be the player's" rule counts."""
+    other_case = host_renpy_root() / "demo"
+    other_case = host_home / str(other_case.relative_to(host_home)).swapcase()
+    paths = {
+        # Another game's own save folder: not this project's saves.
+        "OTHER_GAME_SAVES": str(tmp_path / "scratch" / "game" / "saves"),
+        # The host save tree spelled in another case.
+        "HOST_TREE_OTHER_CASE": str(other_case),
+    }
+    resolved = {key: paths.get(value, value) for key, value in knobs.items()}
+    if resolved.get("home") == "LINKED_HOME":
+        resolved["home"] = str(_linked_home(tmp_path, host_home))
+    return resolved
+
+
+# Requests whose savedir or HOME only might be the player's: they must not be
+# handed a running game that certainly uses the player's storage (review 1b).
+_MIGHT_BE_THE_PLAYERS = [
+    ({"savedir": "OTHER_GAME_SAVES"}, ("existing", "existing")),
+    ({"savedir": "HOST_TREE_OTHER_CASE"}, ("existing", "existing")),
+    ({"savedir": "temporary", "home": "LINKED_HOME"}, ("temporary", "existing")),
+]
+
+
+@pytest.mark.parametrize(("request_knobs", "running"), _MIGHT_BE_THE_PLAYERS)
+def test_a_request_that_might_reach_the_players_saves_is_not_handed_a_game_that_does(
+    tmp_path: Path, monkeypatch, request_knobs, running
+) -> None:
+    host_home = _host_home(tmp_path, monkeypatch)
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    savedir_mode, home_mode = running
+    session = _OwnedRunningSession(editor=False, isolation=_isolation(savedir_mode, home_mode=home_mode))
+    live._SESSIONS[key] = session
+    try:
+        result = live.launch_game(str(project), editor=False, **_request_paths(tmp_path, host_home, request_knobs))
+    finally:
+        live._SESSIONS.pop(key, None)
+
+    assert result["ok"] is False
+    assert result["code"] == "SESSION_ISOLATION_MISMATCH"
+    assert session.close_calls == 0
+
+
+@pytest.mark.parametrize(("request_knobs", "running"), _MIGHT_BE_THE_PLAYERS)
+def test_a_request_that_might_reach_the_players_saves_is_not_handed_an_external_game_that_does(
+    tmp_path: Path, monkeypatch, request_knobs, running
+) -> None:
+    host_home = _host_home(tmp_path, monkeypatch)
+    host_saves = host_renpy_root() / "demo"
+    session = tmp_path / "renforge-session-x"
+    for path in (host_saves, session / "saves", session / "home"):
+        path.mkdir(parents=True, exist_ok=True)
+    savedir = host_saves if running[0] == "existing" else session / "saves"
+    home = host_home if running[1] == "existing" else session / "home"
+    info = {"eval_enabled": True, "savedir": str(savedir), "home": str(home), "save_locations": [str(savedir)]}
+
+    result = _external_reuse(tmp_path, monkeypatch, _InfoClient(info),
+                             **_request_paths(tmp_path, host_home, request_knobs))
+
+    assert result["ok"] is False
+    assert result["code"] == "SESSION_ISOLATION_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    "request_knobs",
+    [
+        # What renforge_session launch asks for.
+        {"savedir": "STATE_SAVES", "home": "temporary"},
+        {"savedir": "temporary"},
+        {},
+    ],
+)
+def test_an_external_game_in_renforge_folders_is_not_the_players(tmp_path: Path, monkeypatch, request_knobs) -> None:
+    """A renforge_session game started by another process keeps its saves in the state folder."""
+    _host_home(tmp_path, monkeypatch)
+    project = tmp_path / "project"
+    state_saves = project_state_dir(project) / "saves"
+    session_home = tmp_path / "renforge-session-x" / "home"
+    for path in (state_saves, session_home):
+        path.mkdir(parents=True)
+    info = {"eval_enabled": True, "savedir": str(state_saves), "home": str(session_home),
+            "save_locations": [str(state_saves)]}
+    knobs = {key: str(state_saves) if value == "STATE_SAVES" else value for key, value in request_knobs.items()}
+
+    result = _external_reuse(tmp_path, monkeypatch, _InfoClient(info), **knobs)
+    status = live.launch_status(str(project))
+
+    assert result["ok"] is True and result["external"] is True
+    assert result["isolation"]["exposes_user_saves"] is False
+    assert status["isolated"] is True
+    assert status["isolation"]["exposes_user_saves"] is False
+
+
+def test_an_external_game_is_the_players_when_a_renforge_folder_links_into_their_saves(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A state-folder location that resolves into the host save tree is still the player's."""
+    _host_home(tmp_path, monkeypatch)
+    project = tmp_path / "project"
+    host_saves = host_renpy_root() / "demo"
+    host_saves.mkdir(parents=True)
+    state_saves = project_state_dir(project) / "saves"
+    state_saves.parent.mkdir(parents=True)
+    try:
+        state_saves.symlink_to(host_saves, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+    session_home = tmp_path / "renforge-session-x" / "home"
+    session_home.mkdir(parents=True)
+    info = {"eval_enabled": True, "savedir": str(state_saves), "home": str(session_home),
+            "save_locations": [str(state_saves)]}
+
+    result = _external_reuse(tmp_path, monkeypatch, _InfoClient(info), savedir="temporary")
+
+    assert result["code"] == "SESSION_ISOLATION_MISMATCH"
+
+
 def test_launch_rejects_editor_mode_for_unproven_external_bridge(tmp_path: Path, monkeypatch) -> None:
     project = _make_project(tmp_path)
     monkeypatch.setattr(
@@ -1397,3 +1529,76 @@ def test_an_explicit_savedir_on_a_warp_relaunch_is_honoured(tmp_path: Path, monk
     )
     assert knobs["savedir"] == "existing"
     assert knobs["home"] == "existing"
+
+
+def test_a_warp_relaunch_isolates_storage_that_only_might_be_the_players(tmp_path: Path, monkeypatch) -> None:
+    # Review 1b: the replaced game's savedir is another game's game/saves.
+    # Only storage that certainly is the player's falls back to the server
+    # default; the rest stays isolated, as upstream does.
+    knobs = _relaunch_knobs(
+        tmp_path,
+        monkeypatch,
+        _isolation(savedir_mode="path", home_mode="temporary", savedir=tmp_path / "scratch" / "game" / "saves"),
+    )
+    assert knobs == {"savedir": "temporary", "home": "temporary", "persistent": "empty", "preferences": "empty"}
+
+
+def test_a_warp_relaunch_does_not_hand_a_linked_home_the_players_home(tmp_path: Path, monkeypatch) -> None:
+    host_home = _host_home(tmp_path, monkeypatch)
+    linked = _linked_home(tmp_path, host_home)
+    knobs = _relaunch_knobs(
+        tmp_path, monkeypatch, _isolation(savedir_mode="temporary", home_mode="path", home=linked)
+    )
+    assert knobs == {"savedir": "temporary", "home": "temporary", "persistent": "empty", "preferences": "empty"}
+
+
+def test_a_relaunch_starting_from_an_isolated_game_is_recorded_as_isolated(tmp_path: Path) -> None:
+    """A jump replacing an isolated game starts isolated, so an isolated request waits for it."""
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    live._SESSIONS[key] = _OwnedRunningSession(editor=True, isolation=_isolation("temporary"))
+    release = threading.Event()
+
+    def slow_launch(_root, _cancel):
+        release.wait(5)
+        return {"ok": False, "ready": False, "error": "stopped by the test"}
+
+    try:
+        jump = live.launch_requirements(project, warp="game/script.rpy:1", savedir="auto", home="auto",
+                                        persistent="auto", preferences="auto")
+        assert jump["isolated"] is True and jump["may_expose"] == frozenset()
+        live.start_launch(str(project), slow_launch, wait_timeout=0, requirements=jump)
+        waiting = live.start_launch(str(project), slow_launch, wait_timeout=0,
+                                    requirements=live.launch_requirements(project, savedir="temporary"))
+        assert waiting["code"] == "LAUNCH_IN_PROGRESS"
+    finally:
+        release.set()
+        task = live._LAUNCHES.get(key)
+        if task is not None:
+            task.done_event.wait(5)
+        live._LAUNCHES.pop(key, None)
+        live._SESSIONS.pop(key, None)
+
+
+def test_a_starting_launch_counts_storage_that_might_be_the_players(tmp_path: Path) -> None:
+    """While it starts, a launch into another game's game/saves is not an isolated session."""
+    project = _make_project(tmp_path)
+    release = threading.Event()
+
+    def slow_launch(_root, _cancel):
+        release.wait(5)
+        return {"ok": False, "ready": False, "error": "stopped by the test"}
+
+    try:
+        starting = live.launch_requirements(project, savedir=str(tmp_path / "scratch" / "game" / "saves"),
+                                            home="temporary")
+        live.start_launch(str(project), slow_launch, wait_timeout=0, requirements=starting)
+        refused = live.start_launch(str(project), slow_launch, wait_timeout=0,
+                                    requirements=live.launch_requirements(project, savedir="temporary"))
+        assert refused["code"] == "SESSION_ISOLATION_MISMATCH"
+    finally:
+        release.set()
+        task = live._LAUNCHES.get(live._key(project))
+        if task is not None:
+            task.done_event.wait(5)
+        live._LAUNCHES.pop(live._key(project), None)

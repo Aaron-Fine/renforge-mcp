@@ -1915,3 +1915,26 @@ def test_another_games_save_folder_exposes_player_saves(tmp_path: Path, monkeypa
     scratch = tmp_path / "scratch" / "saves"
     scratch.mkdir(parents=True)
     assert launch_exposes_user_saves(savedir=str(scratch), home="temporary") is False
+
+
+def test_a_path_that_only_might_be_the_players_counts_only_in_the_wide_answer(
+    tmp_path: Path, monkeypatch, host_save_root: Path
+) -> None:
+    """The wide answer refuses more (running games, policy); the certain one hands out less (requests, relaunches)."""
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    project = tmp_path / "this"
+    other = tmp_path / "OtherGame" / "game" / "saves"
+    host = host_save_root / "demo"
+    for path in (other, host, project / "game" / "saves"):
+        path.mkdir(parents=True)
+    cases = {
+        str(other): ({"savedir"}, set()),
+        str(host): ({"savedir"}, {"savedir"}),
+        str(project / "game" / "saves"): ({"savedir"}, {"savedir"}),
+        "temporary": (set(), set()),
+        "existing": ({"savedir"}, {"savedir"}),
+    }
+    for savedir, (wide, certain) in cases.items():
+        knobs = {"savedir": savedir, "home": "temporary", "project_path": str(project)}
+        assert launch_exposed_components(**knobs) == wide, savedir
+        assert launch_exposed_components(certain=True, **knobs) == certain, savedir

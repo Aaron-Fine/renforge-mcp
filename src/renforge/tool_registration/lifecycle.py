@@ -235,7 +235,8 @@ def build_wrappers(context):
             )
 
         requirements = live.launch_requirements(
-            project_path, **{field: kwargs.get(field) for field in ("savedir", "home", "persistent", "preferences")})
+            project_path,
+            **{field: kwargs.get(field) for field in ("warp", "savedir", "home", "persistent", "preferences")})
         return live.start_launch(
             project_path,
             _launch,

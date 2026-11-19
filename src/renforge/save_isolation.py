@@ -236,14 +236,20 @@ class LaunchIsolation:
         """Whether this launch can read or write the player's saves or HOME."""
         return bool(self.exposed_components(project_path))
 
-    def exposed_components(self, project_path: str | Path | None = None) -> frozenset[str]:
-        """Which of ``savedir`` / ``home`` reach the player's own storage."""
+    def exposed_components(
+        self, project_path: str | Path | None = None, *, certain: bool = False
+    ) -> frozenset[str]:
+        """Which of ``savedir`` / ``home`` reach the player's own storage.
+
+        ``certain`` picks the narrow answer; see :func:`_exposed_components`.
+        """
         return _exposed_components(
             savedir_mode=self.savedir_mode,
             home_mode=self.home_mode,
             savedir=self.savedir,
             home=self.home,
             project_path=project_path,
+            certain=certain,
         )
 
     def command_args(self) -> list[str]:
@@ -383,8 +389,12 @@ def launch_exposed_components(
     preferences: str | None = None,
     project_path: str | Path | None = None,
     environ: Mapping[str, str] | None = None,
+    certain: bool = False,
 ) -> frozenset[str]:
-    """Which of ``savedir`` / ``home`` the resolved launch leaves on the player's storage."""
+    """Which of ``savedir`` / ``home`` the resolved launch leaves on the player's storage.
+
+    ``certain`` picks the narrow answer; see :func:`_exposed_components`.
+    """
     resolved = apply_launch_isolation_defaults(
         savedir=savedir,
         home=home,
@@ -399,6 +409,7 @@ def launch_exposed_components(
         savedir=resolved["savedir"],
         home=resolved["home"],
         project_path=project_path,
+        certain=certain,
     )
 
 
@@ -415,26 +426,70 @@ def _exposed_components(
     savedir: str | Path | None,
     home: str | Path | None,
     project_path: str | Path | None,
+    certain: bool = False,
 ) -> frozenset[str]:
-    """The one rule for which storage components reach the player's own.
+    """Which storage components reach the player's own, asked one of two ways.
 
-    ``savedir`` counts when it is the host Ren'Py save tree or any game's
-    ``game/saves``; ``home`` counts when it is the host HOME or a HOME whose
-    Ren'Py save folder resolves into the host tree. A launch exposes the
-    player's saves when either does.
+    An ``existing`` component always counts. A ``path`` component is where
+    the two answers differ, and each caller must take the one whose mistakes
+    err toward isolation:
+
+    - By default, a component counts when it *might* be the player's:
+      ``savedir`` in the host Ren'Py save tree (compared case-insensitively)
+      or in any game's ``game/saves``; ``home`` that is the host HOME or a
+      HOME whose Ren'Py save folder resolves into the host tree. Use it for
+      what a running game exposes, for the policy gate, for import
+      destinations, and for reports: counting more there refuses more.
+    - With ``certain=True``, a component counts only when it *certainly* is
+      the player's: ``savedir`` inside the host save tree or this project's
+      ``game/saves`` as the filesystem spells them, ``home`` that is the host
+      HOME (upstream RenForge's rule). Use it for what a launch request gives
+      up and for what a relaunch inherits: counting more there would hand a
+      request a game on the player's saves, or send a relaunch to them.
     """
+    def savedir_is_players(value: str | Path) -> bool:
+        if certain:
+            return _path_is_user_save_root(value, project_path)
+        return path_exposes_user_saves(value, project_path=project_path)
+
+    def home_is_players(value: str | Path) -> bool:
+        return _path_is_host_home_as_spelled(value) if certain else home_exposes_user_saves(value)
+
     exposed: set[str] = set()
     if savedir_mode == "existing" or (
-        savedir_mode == "path"
-        and savedir is not None
-        and path_exposes_user_saves(savedir, project_path=project_path)
+        savedir_mode == "path" and savedir is not None and savedir_is_players(savedir)
     ):
         exposed.add(SAVEDIR_COMPONENT)
     if home_mode == "existing" or (
-        home_mode == "path" and home is not None and home_exposes_user_saves(home)
+        home_mode == "path" and home is not None and home_is_players(home)
     ):
         exposed.add(HOME_COMPONENT)
     return frozenset(exposed)
+
+
+def _path_is_user_save_root(savedir: str | Path, project_path: str | Path | None) -> bool:
+    """*savedir* is inside the host save tree or this project's ``game/saves``, case as spelled."""
+    try:
+        path = Path(savedir).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    for root in user_save_roots(project_path):
+        try:
+            if path.is_relative_to(root.expanduser().resolve()):
+                return True
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return False
+
+
+def _path_is_host_home_as_spelled(value: str | Path) -> bool:
+    """*value* is the host HOME, compared with the platform's own case rule only."""
+    try:
+        path = Path(value).expanduser().resolve()
+        host = Path.home().expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return os.path.normcase(str(path)) == os.path.normcase(str(host))
 
 
 def reuse_keeps_isolation(
@@ -504,13 +559,37 @@ def location_is_renforge_owned(path: str | Path) -> bool:
     return path_in_session_root(resolved)
 
 
-def isolation_is_renforge_owned(isolation: LaunchIsolation) -> bool:
-    """Whether a running session keeps its saves and HOME in RenForge's own folders."""
+def isolation_is_renforge_owned(
+    isolation: LaunchIsolation, project_path: str | Path | None = None
+) -> bool:
+    """Whether a running session keeps its saves and HOME in RenForge's own folders.
+
+    The state folder and session roots count; a location there that still
+    reaches the player's storage (through a link) does not.
+    """
     if isolation.savedir_mode == "existing" or isolation.home_mode == "existing":
         return False
     if isolation.savedir is None or isolation.home is None:
         return False
+    if isolation.exposes_user_saves(project_path):
+        return False
     return location_is_renforge_owned(isolation.savedir) and location_is_renforge_owned(isolation.home)
+
+
+def storage_is_renforge_owned(
+    path: Any, *, home: bool, project_path: str | Path | None = None
+) -> bool:
+    """Whether a save location (or, with ``home=True``, a HOME) a game reports is RenForge's own.
+
+    It must be under the state folder or in a session root, and must not
+    reach the player's storage anyway. Anything else, or anything that is
+    not a usable path, counts as the player's.
+    """
+    if not (isinstance(path, str) and path) or not location_is_renforge_owned(path):
+        return False
+    if home:
+        return not home_exposes_user_saves(path)
+    return not path_exposes_user_saves(path, project_path=project_path)
 
 
 def launch_request_is_renforge_owned(
