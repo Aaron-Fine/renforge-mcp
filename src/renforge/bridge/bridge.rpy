@@ -4308,14 +4308,30 @@ init python:
 
 
     def _renforge_display_name(who):
-        # Character.name is the name drawn in the say window. The say callback
-        # receives the Character object, not that string.
+        """The name a speaker draws in the say window, or None.
+
+        Character.name is that name; the say callback receives the Character
+        object, not the string. A dynamic Character's name is an expression
+        (DynamicCharacter("player_name")), resolved the way the engine would
+        but without running game code; a name that cannot be read that way is
+        None rather than the expression text.
+        """
         if who is None:
             return None
         if isinstance(who, builtins.str):
             text = _renforge_render_say_text(who).strip()
             return text or None
         name = getattr(who, "name", None)
+        try:
+            dynamic = bool(getattr(who, "dynamic", False))
+        except Exception:
+            dynamic = False
+        if dynamic:
+            found, value = _renforge_store_expression(name)
+            if not found or not isinstance(value, builtins.str):
+                return None
+            text = _renforge_render_say_text(value).strip()
+            return text or None
         if isinstance(name, builtins.str):
             text = _renforge_render_say_text(name).strip()
             return text or None
@@ -4355,18 +4371,74 @@ init python:
         return "".join(parts)
 
 
+    def _renforge_store_expression(expr):
+        """Resolve a say ``who`` or dynamic-name expression without running game code.
+
+        The engine evaluates these with eval_who and py_eval. The bridge only
+        reads: a string literal (``"Mysterious voice"``) is its own value; a
+        name is looked up in the ``character`` namespace, then in the store,
+        the order eval_who uses; a dotted path follows instance fields and
+        dict keys. Calls, operators and properties are never evaluated.
+        Returns ``(found, value)``.
+        """
+        if not isinstance(expr, builtins.str) or not expr.strip():
+            return False, None
+        text = expr.strip()
+        import ast as _ast
+        try:
+            literal = _ast.literal_eval(text)
+        except Exception:
+            literal = None
+        if isinstance(literal, builtins.str):
+            return True, literal
+        parts = text.split(".")
+        if not builtins.all(part.isidentifier() for part in parts):
+            return False, None
+        value = None
+        found = False
+        try:
+            namespaces = renpy.python.store_dicts
+        except Exception:
+            namespaces = None
+        if len(parts) == 1 and namespaces is not None:
+            # `define character.e = Character(...)` lives in store.character.
+            try:
+                characters = namespaces.get("store.character")
+                value = characters.get(parts[0]) if characters is not None else None
+            except Exception:
+                value = None
+            found = value is not None
+        if not found:
+            try:
+                fields = vars(renpy.store)
+            except Exception:
+                return False, None
+            if parts[0] not in fields:
+                return False, None
+            value = fields[parts[0]]
+        for part in parts[1:]:
+            fields = getattr(value, "__dict__", None)
+            if isinstance(value, builtins.dict) and part in value:
+                value = value[part]
+            elif isinstance(fields, builtins.dict) and part in fields:
+                value = fields[part]
+            else:
+                return False, None
+        return True, value
+
+
     def _renforge_character_display_name(who_expr):
-        # ast.Say stores the who expression ("eileen"), not the display name.
+        """The display name for a say statement's who expression, or None.
+
+        ast.Say stores the expression (``e``, ``"Mysterious voice"``), not the
+        speaker, so it is resolved with _renforge_store_expression.
+        """
         if who_expr is None:
             return None
         if not isinstance(who_expr, builtins.str):
             return _renforge_display_name(who_expr)
-        ident = who_expr.strip()
-        if not ident or not ident.replace("_", "a").isalnum() or ident[0].isdigit():
-            return None
-        try:
-            character = getattr(renpy.store, ident, None)
-        except Exception:
+        found, character = _renforge_store_expression(who_expr)
+        if not found:
             return None
         return _renforge_display_name(character)
 
