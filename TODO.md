@@ -11,6 +11,9 @@
   preserve the bounded engine lease meanwhile.
 - Settings text polish remains deferred. A full Academy34 introductory-week
   playthrough remains unfinished and requires a renewed request.
+- Upstream follow-up from #125 (optional): on macOS the opt-in SDK isolation
+  test passes the raw temporary savedir (under the /var symlink) to
+  `import_host_slots`; route it through the public import path instead.
 
 The completed-work records below preserve validation history. The final nine-step
 section is a historical harness proposal, not the current implementation plan.
