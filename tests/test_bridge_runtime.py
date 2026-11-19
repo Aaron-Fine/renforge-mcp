@@ -3755,7 +3755,7 @@ def test_list_ui_elements_uses_owning_screen_for_named_textbutton_widget_id(runn
 
     renpy.get_screen = default_layer_lookup
     elements = running_bridge.client.list_ui_elements(screen="tools")
-    # Upstream's id is the bare widget name; observe's id is kept alongside.
+    # list_ui_elements keeps the bare widget name as id; control_id is observe's id.
     assert elements[0]["id"] == "rf_tools"
     assert elements[0]["control_id"] == "tools/rf_tools"
     _focus, element, error = running_bridge.globs["_renforge_resolve_ui_element"](
@@ -7231,7 +7231,7 @@ def test_a_subroutine_line_called_from_another_place_is_not_a_loop(running_bridg
 
 
 def test_a_short_pause_is_not_pending_forever_when_the_interaction_keeps_restarting(running_bridge, monkeypatch):
-    """A 1 s pause read as pending for the whole 30 s budget."""
+    """A 1 s pause stops reading as pending once its delay passes, though each restart resets interact_time."""
     renpy = running_bridge.renpy
 
     class PauseBehavior:

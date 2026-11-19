@@ -2594,8 +2594,8 @@ def test_a_launch_that_fails_before_spawning_removes_its_session_root(
 
 
 def test_a_reader_thread_that_cannot_start_still_tears_the_game_down(monkeypatch, tmp_path: Path) -> None:
-    # Between Popen and the startup wait, a failure used to skip
-    # _teardown_failed_launch and leave the game running with no owner.
+    # A failure between Popen and the startup wait still runs
+    # _teardown_failed_launch, so no game is left running with no owner.
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)
     process = _FakeProcess()

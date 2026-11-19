@@ -1681,7 +1681,7 @@ label start:
         viewport = next(item for item in snapshot['controls'] if item['role'] == 'viewport')
         assert viewport['bounds'] == {'x': 100, 'y': 80, 'width': 300, 'height': 50}, viewport
         listed = session.client.list_ui_elements()
-        # Upstream ids stay on list_ui_elements; control_id links each to observe.
+        # list_ui_elements keeps its own ids; control_id links each to observe.
         assert {item['control_id'] for item in listed} == {item['id'] for item in snapshot['controls']}
         assert session.client.select_choice(text='Repeat')['ok'] is False
         refused = session.client.select_choice(index=choices[-1]['index'], interaction=snapshot['interaction'], observation_id='stale')
