@@ -34,10 +34,10 @@ def validate_frame(frame: Mapping[str, Any], *, session_id: Any,
 _BUTTON_ROLES = {"button", "imagebutton", "textbutton", "hotspot", "imagemap"}
 _BAR_ROLES = {"bar", "slider"}
 _TEXT_ROLES = {"input"}
-_EMPTY_ROLES = {"viewport", "drag", "draggroup"}
 
 
 def normalize_role(role: Any) -> str:
+    """Map a bridge widget role to button, bar, input, drag, its own name, or ``unknown``."""
     raw = role.strip().casefold() if isinstance(role, str) else ""
     if raw in _BUTTON_ROLES or "button" in raw or "hotspot" in raw:
         return "button"
@@ -45,12 +45,13 @@ def normalize_role(role: Any) -> str:
         return "bar"
     if raw in _TEXT_ROLES:
         return "input"
-    if raw in _EMPTY_ROLES or raw.startswith("drag"):
-        return "drag" if raw.startswith("drag") else raw
+    if raw.startswith("drag"):
+        return "drag"
     return raw or "unknown"
 
 
 def operations_for(role: str) -> list[str]:
+    """Return what ``act`` can do with a control of this normalized role (empty for none)."""
     if role == "button":
         return ["click"]
     if role == "input":
@@ -63,6 +64,10 @@ def operations_for(role: str) -> list[str]:
 
 
 def image_basename(image_name: Any) -> str | None:
+    """Return an image's name without directories, or None when there is none.
+
+    A Ren'Py image name (tag and attributes) is joined with spaces.
+    """
     if isinstance(image_name, (list, tuple)):
         # A Ren'Py image name: tag and attributes, never a path.
         parts = [part.strip() for part in image_name if isinstance(part, str) and part.strip()]
@@ -87,20 +92,13 @@ def _screen_name(value: Any) -> str | None:
     return None
 
 
-def _menu_index(value: Any) -> int | None:
+def _int_or_none(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         return None
     return value
 
 
-def _widget_id(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
-
-
-def _action_text(value: Any) -> str | None:
+def _nonempty_str(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     text = value.strip()
@@ -121,11 +119,11 @@ def assign_control_ids(elements: list[Mapping[str, Any]]) -> list[dict[str, Any]
     for fallback, element in enumerate(elements):
         screen = _screen_name(element.get("screen"))
         role = normalize_role(element.get("role"))
-        widget_id = _widget_id(element.get("widget_id"))
-        menu_index = _menu_index(element.get("menu_index"))
-        drag_name = _widget_id(element.get("drag_name"))
+        widget_id = _nonempty_str(element.get("widget_id"))
+        menu_index = _int_or_none(element.get("menu_index"))
+        drag_name = _nonempty_str(element.get("drag_name"))
         image = image_basename(element.get("image_name"))
-        action = _action_text(element.get("action"))
+        action = _nonempty_str(element.get("action"))
         synthetic = False
         if widget_id:
             base = f"{screen}/{widget_id}" if screen else widget_id
@@ -143,7 +141,7 @@ def assign_control_ids(elements: list[Mapping[str, Any]]) -> list[dict[str, Any]
             base = f"{screen or 'screen'}/{image}"
             source = "image"
         else:
-            ordinal = _menu_index(element.get("ordinal"))
+            ordinal = _int_or_none(element.get("ordinal"))
             if ordinal is None:
                 ordinal = fallback
             base = f"{screen or 'screen'}/{role}/{ordinal}"
@@ -184,6 +182,7 @@ def _is_chrome(screen: str | None) -> bool:
 
 
 def normalize_say_dismiss(value: Any) -> str | None:
+    """Return ``dismiss``, else ``dismiss_hard_pause``, when the interaction listens for it, else None."""
     names: list[str] = []
     if isinstance(value, str):
         names = [value]
@@ -195,12 +194,6 @@ def normalize_say_dismiss(value: Any) -> str | None:
     if "dismiss_hard_pause" in found:
         return "dismiss_hard_pause"
     return None
-
-
-def _interaction(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value
 
 
 def _bool(value: Any, default: bool) -> bool:
@@ -348,7 +341,8 @@ def _screens(raw: Mapping[str, Any], overlay_screens: set[str]) -> list[dict[str
 def strip_text_tags(value: str) -> str:
     """Remove Ren'Py say tags, leaving the words the player would read.
 
-    ``{p}`` becomes a newline. ``{{`` and ``}}`` stay as literal braces.
+    ``{p}``, ``{p=N}`` and ``{vspace=N}`` become a newline and ``{space=N}`` a
+    space, so words never run together. ``{{`` and ``}}`` stay as literal braces.
     The injected bridge runs this same module, so host and game strip alike.
     """
     if not isinstance(value, str) or not value:
@@ -381,8 +375,12 @@ def strip_text_tags(value: str) -> str:
             tag = bool(probe) and probe.replace("_", "a").isalnum() and not probe[0].isdigit()
         if not tag:
             out.append(protected[start : end + 1])
-        elif body == "p":
+        elif body.startswith("/"):
+            pass
+        elif kind in ("p", "vspace"):
             out.append("\n")
+        elif kind == "space":
+            out.append(" ")
         index = end + 1
     return "".join(out).replace("\ue000", "{").replace("\ue001", "}").strip()
 
@@ -577,8 +575,9 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
             controls.extend(promoted)
             chrome = [control for control in chrome if control not in promoted]
             decisions = [control for control in controls if _is_decision(control)]
-    first_pause = _dialogue(raw) is None and raw.get("seen") is False
-    if say_dismiss == "dismiss" and not modal and (_dialogue(raw) is not None or first_pause):
+    dialogue = _dialogue(raw)
+    first_pause = dialogue is None and raw.get("seen") is False
+    if say_dismiss == "dismiss" and not modal and (dialogue is not None or first_pause):
         # Ren'Py ends this line on a plain click. Buttons on screens kept up
         # from earlier lines (a phone or codex HUD) are not what this line
         # waits for, so they stay controls rather than a choice. Screens that
@@ -623,7 +622,7 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "session_id": raw.get("session_id"),
         "observation_id": raw.get("observation_id"),
-        "interaction": _interaction(raw.get("interaction")),
+        "interaction": _int_or_none(raw.get("interaction")),
         "stable": stable,
         "unstable_reason": reason,
         "statement": _statement(raw),
@@ -634,7 +633,7 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
         "started_at_label": raw.get("started_at_label") if isinstance(raw.get("started_at_label"), str) else None,
         "start_label_error": raw.get("start_label_error") if isinstance(raw.get("start_label_error"), str) else None,
         "lifecycle": {"phase": phase, "ending": ending},
-        "dialogue": _dialogue(raw),
+        "dialogue": dialogue,
         "text_revealing": raw.get("text_revealing"),
         # Set while Ren'Py's exception screen is up: {"message", "traceback_file"}.
         "game_error": dict(raw["game_error"]) if isinstance(raw.get("game_error"), Mapping) else None,
@@ -643,7 +642,7 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
         "forward": forward,
         "controls": controls,
         "chrome": chrome,
-        "readout": _without_dialogue(_readout(raw), _dialogue(raw)),
+        "readout": _without_dialogue(_readout(raw), dialogue),
         "input_candidates": list(raw.get("input_candidates") or []),
         # Key bindings of the screens shown: a screen may continue only on a
         # key ("Press SPACE to continue"); `act` sends the given key/<name>.
@@ -690,7 +689,7 @@ def validate_act_payload(payload: Mapping[str, Any]) -> str | None:
     if payload.get("interaction") is None:
         if payload.get("observation_id") is None:
             return "stale"
-    elif _interaction(payload.get("interaction")) is None:
+    elif _int_or_none(payload.get("interaction")) is None:
         return "stale"
     has_id = isinstance(payload.get("id"), str) and bool(payload.get("id"))
     has_key = payload.get("key") is not None
@@ -725,16 +724,25 @@ def validate_act_payload(payload: Mapping[str, Any]) -> str | None:
 
 
 def guard_identity(snapshot: Mapping[str, Any], interaction: Any, *,
-                   session_id: str | None = None, observation_id: str | None = None) -> str | None:
+                   session_id: str | None = None, observation_id: str | None = None,
+                   allow_pause: bool = False) -> str | None:
+    """Return ``"stale"`` or ``"unstable"``, or None when the token still names this frame.
+
+    A given ``session_id`` or ``observation_id`` must match; ``observation_id``
+    alone (``interaction`` None) is enough, since it covers the interaction.
+    The frame must be stable; ``allow_pause`` also accepts a frame that is
+    unstable only because a short pause is pending.
+    """
     if session_id is not None and snapshot.get("session_id") != session_id:
         return "stale"
     if observation_id is not None and snapshot.get("observation_id") != observation_id:
         return "stale"
-    if snapshot.get("stable") is not True:
+    pausing = allow_pause and snapshot.get("unstable_reason") == "pause"
+    if snapshot.get("stable") is not True and not pausing:
         return "unstable"
     if interaction is None and observation_id is not None:
         return None
-    if _interaction(interaction) is None or snapshot.get("interaction") != interaction:
+    if _int_or_none(interaction) is None or snapshot.get("interaction") != interaction:
         return "stale"
     return None
 
@@ -794,9 +802,14 @@ def guard_act(
 
 def guard_dismiss(snapshot: Mapping[str, Any], interaction: Any, *,
                   session_id: str | None = None, observation_id: str | None = None,
-                  past_optional_controls: bool = False) -> str | None:
-    """Return a refusal, or None when ``queue_event('dismiss')`` is legal."""
-    refusal = guard_identity(snapshot, interaction, session_id=session_id, observation_id=observation_id)
+                  past_optional_controls: bool = False, allow_pause: bool = False) -> str | None:
+    """Return a refusal, or None when ``queue_event('dismiss')`` is legal.
+
+    ``allow_pause`` lets a line whose pause never ends (``{w=1.0}{nw}`` that
+    stays a pause) be clicked once; every other check still applies.
+    """
+    refusal = guard_identity(snapshot, interaction, session_id=session_id, observation_id=observation_id,
+                             allow_pause=allow_pause)
     if refusal:
         return refusal
     omitted = snapshot.get("omitted") or {}
@@ -811,9 +824,8 @@ def guard_dismiss(snapshot: Mapping[str, Any], interaction: Any, *,
     if past_optional_controls:
         # The line accepts a plain click; menus and inputs never do.
         return None
-    for control in snapshot.get("controls") or []:
-        if not isinstance(control, Mapping):
-            continue
-        if _is_decision(control):
-            return "not_dismiss"
+    # classify already weighed the controls (buttons on a HUD kept up from
+    # earlier lines do not hold a line), so the guard follows its verdict.
+    if snapshot.get("forward") != "dismiss":
+        return "not_dismiss"
     return None

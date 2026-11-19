@@ -7,14 +7,9 @@ import hashlib
 
 import pytest
 
-from renforge.observe import (
-    apply_screenshot,
-    classify,
-    crossed_transcript,
-    guard_act,
-    guard_dismiss,
-    run_advance_until,
-)
+from renforge.interaction import classify, crossed_transcript, guard_act, guard_dismiss
+from renforge.observe import apply_screenshot
+from renforge.progression import run_advance_until
 
 
 def _element(**overrides):
@@ -67,6 +62,14 @@ def test_dialogue_what_drops_text_tags():
 
     paragraph = classify(_raw(dialogue={"who": None, "what": "One{p}Two"}))
     assert paragraph["dialogue"]["what"] == "One\nTwo"
+
+
+def test_timed_paragraphs_and_spacing_tags_keep_words_apart():
+    from renforge.interaction import strip_text_tags
+    assert strip_text_tags("Hello.{p=1.0}World") == "Hello.\nWorld"
+    assert strip_text_tags("a{space=10}b") == "a b"
+    assert strip_text_tags("a{vspace=10}b") == "a\nb"
+    assert strip_text_tags("{i}a{/i}{w=0.5}b") == "ab"
 
     tags_only = classify(_raw(dialogue={"who": None, "what": "{w}{nw}"}))
     assert tags_only["dialogue"] is None
@@ -1077,13 +1080,41 @@ def test_settle_accepts_a_screen_that_keeps_changing_within_one_interaction():
     assert status == "ready" and result["unstable_reason"] == "pause"
 
 
+def test_settle_starts_a_new_run_when_the_screenshot_shows_a_new_interaction(monkeypatch):
+    """The old interaction's run of reads must not count for the next one."""
+    from renforge import progression
+    import time
+    monkeypatch.setattr(progression, "POLL_SECONDS", 0.001)
+    reads = []
+
+    def fetch(shot):
+        # Four changing reads of interaction 1, then interaction 2 changing on every read.
+        n = len(reads)
+        reads.append(n)
+        return _raw(interaction=1 if n < 4 else 2, observation_id="r%d" % n)
+
+    result, status, _error = progression.settle(fetch, time.monotonic() + 2, screenshot=True)
+    assert status == "ready" and result["interaction"] == 2
+    # A fresh interaction that never repeats needs a full run of plain reads plus the screenshot.
+    second = len(reads) - 4
+    assert second >= progression.SETTLE_SAME_INTERACTION + 1, second
+
+
 def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch):
     """A {w=1.0}{nw} line stayed a "pause" until act ran out of time."""
     import time
     from renforge import progression
     monkeypatch.setattr(progression, "STUCK_PAUSE_SECONDS", 0.05)
-    nudges = []
-    stuck = _raw(interaction=7, stable=False, unstable_reason="pause", say_dismiss="dismiss")
+    stuck = _raw(interaction=7, stable=False, unstable_reason="pause", say_dismiss="dismiss",
+                 session_id="s1", observation_id="o1")
+    verdicts = []
+
+    def nudge(interaction):
+        # The bridge's own verdict on the fresh frame, as dismiss_if computes it.
+        snapshot = classify(stuck)
+        verdicts.append(guard_dismiss(snapshot, interaction, session_id="s1", observation_id="o1",
+                                      allow_pause=True))
+        return {"ok": verdicts[-1] is None, "error": verdicts[-1]}
 
     class Client:
         def progression(self, *args, **kwargs):
@@ -1091,8 +1122,8 @@ def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch)
 
     progression.run_native_skip(Client(), lambda shot: stuck, max_steps=5,
                                 deadline=time.monotonic() + 0.3, total_deadline=time.monotonic() + 0.4,
-                                nudge=nudges.append)
-    assert nudges == [7]
+                                nudge=nudge)
+    assert verdicts == [None]
     # Without a way to click (no nudge), it only waits.
     progression.run_native_skip(Client(), lambda shot: stuck, max_steps=5,
                                 deadline=time.monotonic() + 0.1, total_deadline=time.monotonic() + 0.2)
@@ -1215,6 +1246,38 @@ def test_hud_buttons_kept_up_from_earlier_lines_do_not_hold_a_clickable_line():
     assert classify(_raw(elements=hud, screens=screens, dialogue=None))["forward"] == "choose"
 
 
+def test_the_dismiss_guard_agrees_with_classify_about_kept_up_hud_buttons():
+    """advance_until(mode="dismiss") spun until timeout: classify said dismiss, the guard refused."""
+    hud = [_element(screen="phone_button", action="Show('Phone')", text="Phone")]
+    screens = [{"name": "say", "layer": "screens", "modal": False},
+               {"name": "phone_button", "layer": "screens", "modal": False, "kept_up": True}]
+    frames = [_raw(interaction=1, elements=hud, screens=screens),
+              _raw(interaction=2, say_dismiss=None, elements=[_element(screen="choice", menu_index=0, text="Go")],
+                   screens=[{"name": "choice", "layer": "screens", "modal": True}])]
+    line = classify(frames[0])
+    assert line["forward"] == "dismiss"
+    assert guard_dismiss(line, 1) is None
+    # The same HUD shown with this moment still stops the line.
+    called = classify(_raw(elements=hud, screens=[dict(s, kept_up=False) for s in screens]))
+    assert guard_dismiss(called, 4) == "not_dismiss"
+
+    clock = _Clock()
+    index = {"i": 0}
+
+    def dismiss(interaction):
+        # The bridge's dismiss_if: classify a fresh frame, then guard it.
+        refusal = guard_dismiss(classify(frames[index["i"]]), interaction)
+        if refusal:
+            return {"ok": False, "error": refusal}
+        index["i"] += 1
+        return {"ok": True}
+
+    result = run_advance_until(lambda _shot: frames[index["i"]], dismiss, max_steps=5, timeout=2.0,
+                               sleep=clock.sleep, now=clock.now)
+    assert result["stop"] == "choose"
+    assert result["steps"] == 1
+
+
 def test_a_first_pause_with_only_hud_buttons_is_clicked_past():
     # `show text "Title Card"` then `pause`, under a kept-up HUD button.
     hud = [_element(screen="character_menu_button", action="ShowMenu('character_info_menu')")]
@@ -1272,6 +1335,25 @@ def test_a_scrolling_panel_beside_a_line_does_not_hold_it():
     # A slider bound to a value is input, so it still stops the line.
     slider = [_element(screen="stream", role="bar", text="volume")]
     assert classify(_raw(elements=slider, screens=screens))["forward"] == "choose"
+
+
+def test_dismiss_on_a_pending_pause_needs_the_explicit_pause_opt_in():
+    """Only the stuck-pause nudge may click a frame that is still a pause."""
+    pause = classify(_raw(interaction=7, stable=False, unstable_reason="pause",
+                          session_id="s1", observation_id="o1"))
+    assert guard_dismiss(pause, 7) == "unstable"
+    assert guard_dismiss(pause, 7, allow_pause=True) is None
+    assert guard_dismiss(pause, None, observation_id="o1", allow_pause=True) is None
+    # The opt-in skips only the stability check.
+    assert guard_dismiss(pause, 7, session_id="other", allow_pause=True) == "stale"
+    assert guard_dismiss(pause, 7, observation_id="other", allow_pause=True) == "stale"
+    assert guard_dismiss(pause, 8, allow_pause=True) == "stale"
+    hard = classify(_raw(stable=False, unstable_reason="pause", say_dismiss="dismiss_hard_pause"))
+    assert guard_dismiss(hard, 4, allow_pause=True) == "not_dismiss"
+    transition = classify(_raw(stable=False, unstable_reason="transition"))
+    assert guard_dismiss(transition, 4, allow_pause=True) == "unstable"
+    not_ready = classify(_raw(stable=False, unstable_reason="not_ready"))
+    assert guard_dismiss(not_ready, 4, allow_pause=True) == "unstable"
 
 
 def test_dismiss_past_optional_controls_still_refuses_menus_and_modals():

@@ -969,7 +969,7 @@ def test_observe_dismiss_guard_and_stale_act(running_bridge):
     """The bridge snapshot and the dismiss/act guards run against a fake interact."""
     import sys
 
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     renpy = running_bridge.renpy
     renpy.display.focus.focus_list[:] = []
@@ -1079,7 +1079,7 @@ def test_soft_pause_dismiss_unfocused_is_dismissable(running_bridge):
     """A pause SayBehavior keeps ``dismiss`` on dismiss_unfocused."""
     import sys
 
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     renpy = running_bridge.renpy
     renpy.display.focus.focus_list[:] = []
@@ -1146,7 +1146,7 @@ def test_input_outside_focus_list_is_typed_and_submitted(running_bridge):
     """renpy.input's Input never joins focus_list. act still types and submits it."""
     import sys
 
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     renpy = running_bridge.renpy
 
@@ -1219,7 +1219,7 @@ def test_act_text_replaces_a_prefilled_input(running_bridge):
     """VariableInputValue starts with a default. text replaces it instead of appending."""
     import sys
 
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     renpy = running_bridge.renpy
 
@@ -1335,7 +1335,7 @@ def test_overlay_input_does_not_stop_dismiss(running_bridge):
     """A text field on an overlay screen is chrome. Dismiss still advances the say."""
     import sys
 
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     renpy = running_bridge.renpy
 
@@ -1396,7 +1396,7 @@ def test_overlay_input_does_not_stop_dismiss(running_bridge):
 def test_dialogue_who_is_the_say_window_name_and_hides_when_the_window_does(running_bridge):
     import sys
 
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     renpy = running_bridge.renpy
 
@@ -1485,7 +1485,7 @@ def test_dialogue_who_is_the_say_window_name_and_hides_when_the_window_does(runn
 
 
 def test_unlabeled_button_action_includes_its_target(running_bridge):
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     renpy = running_bridge.renpy
 
@@ -1605,7 +1605,7 @@ def test_action_strings_name_setvariable_function_and_camper(running_bridge):
 
 
 def test_readout_skips_focus_control_text(running_bridge):
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     renpy = running_bridge.renpy
 
@@ -1670,7 +1670,7 @@ def test_readout_skips_focus_control_text(running_bridge):
 
 def test_viewport_content_is_readout_not_its_label(running_bridge):
     """A scrolling list (a phone task app) is text to read, not a control label."""
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     renpy = running_bridge.renpy
 
@@ -1754,7 +1754,7 @@ def test_viewport_content_is_readout_not_its_label(running_bridge):
 
 
 def test_say_tags_are_removed_before_the_snapshot(running_bridge):
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     renpy = running_bridge.renpy
 
@@ -1793,7 +1793,7 @@ def _arm_stable_interaction(running_bridge, generation=1):
 
 def test_act_runs_the_button_action_and_image_only_splits_siblings(running_bridge):
     """An image button is named by its action and activated by running it."""
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     renpy = running_bridge.renpy
 
@@ -1918,7 +1918,7 @@ def test_act_runs_the_button_action_and_image_only_splits_siblings(running_bridg
 
 def test_act_sets_adjustments_and_drops_a_named_drag(running_bridge):
     """Bars, viewports, and drags are driven through the objects Ren'Py already calls."""
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     renpy = running_bridge.renpy
 
@@ -6502,7 +6502,7 @@ def test_partial_occlusion_uses_a_proven_point_instead_of_the_center(running_bri
 
 
 def test_custom_input_candidates_keep_eligibility_unknown_and_block_dismiss(running_bridge):
-    from renforge.observe import classify
+    from renforge.interaction import classify
     renpy = running_bridge.renpy
 
     class CustomRegion:
@@ -6546,7 +6546,7 @@ def test_custom_input_candidates_keep_eligibility_unknown_and_block_dismiss(runn
 
 
 def test_one_pixel_custom_handler_is_a_key_listener_not_unclassified_input(running_bridge):
-    from renforge.observe import classify
+    from renforge.interaction import classify
     renpy = running_bridge.renpy
 
     class KeyListener:
@@ -6579,7 +6579,7 @@ def test_one_pixel_custom_handler_is_a_key_listener_not_unclassified_input(runni
 
 def test_custom_displayables_holding_renpy_actions_are_controls(running_bridge):
     """A game displayable with a Ren'Py Action in ``action`` is a button; interface actions are chrome."""
-    from renforge.observe import classify
+    from renforge.interaction import classify
     renpy = running_bridge.renpy
 
     class Action:
@@ -6641,7 +6641,7 @@ def test_custom_displayables_holding_renpy_actions_are_controls(running_bridge):
 
 def test_custom_displayables_keeping_actions_under_a_click_attribute_are_controls(running_bridge):
     """A game's Interactable keeps a list of Actions in ``click_action``."""
-    from renforge.observe import classify
+    from renforge.interaction import classify
     renpy = running_bridge.renpy
 
     class Action:
@@ -6737,7 +6737,7 @@ def test_modal_blocking_follows_the_engines_draw_order(running_bridge, path, mod
 
 
 def test_unfocused_menu_actions_are_sensitive_distinct_and_guarded(running_bridge):
-    from renforge.observe import classify
+    from renforge.interaction import classify
     renpy = running_bridge.renpy
     calls = []
 
@@ -6788,7 +6788,7 @@ def test_unfocused_menu_actions_are_sensitive_distinct_and_guarded(running_bridg
 
 def test_a_choice_the_screen_draws_without_an_action_is_disabled(running_bridge):
     """A choice screen draws a disabled=... item as `textbutton caption action None sensitive False`."""
-    from renforge.observe import classify
+    from renforge.interaction import classify
     renpy = running_bridge.renpy
     calls = []
 
@@ -6837,7 +6837,7 @@ def test_a_choice_the_screen_draws_without_an_action_is_disabled(running_bridge)
 
 def test_a_choice_button_that_wraps_its_item_in_a_function_is_the_item(running_bridge):
     """`textbutton "1. " + i.caption action Function(menu_choice_intercept, menu_item=i)`."""
-    from renforge.observe import classify
+    from renforge.interaction import classify
     renpy = running_bridge.renpy
     calls = []
 
@@ -6911,7 +6911,7 @@ def test_explain_writes_old_screen_parameters_as_source(running_bridge):
 
 def test_a_screen_key_bound_to_a_click_is_a_control(running_bridge):
     """A tutorial screen advances only on `key "mousedown_1"`."""
-    from renforge.observe import classify
+    from renforge.interaction import classify
     renpy = running_bridge.renpy
     calls = []
 
@@ -6990,7 +6990,7 @@ def test_a_canvas_that_blits_nothing_is_not_visible(running_bridge):
 
 def test_a_hiding_choice_screen_offers_no_menu_entries(running_bridge):
     """A lingering hide transform keeps the screen drawn, but it takes no input."""
-    from renforge.observe import classify
+    from renforge.interaction import classify
     renpy = running_bridge.renpy
 
     class ScreenDisplayable:

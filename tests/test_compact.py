@@ -51,3 +51,25 @@ def test_compact_observation_reduces_chrome_and_repeats():
     assert out["readout"] == [{"screen": "hud", "text": "Day 1"}]
     assert out["screens"] == [{"name": "hud", "layer": "screens"}]
     assert snapshot["dialogue"] is None  # the original is not mutated
+
+
+def test_play_results_compact_the_last_observation_too():
+    """A failed final settle leaves the last full snapshot under progress."""
+    from types import SimpleNamespace
+
+    from renforge.tool_registration import interaction
+
+    snapshot = {"label": "start", "controls": [_control()], "chrome": [], "omitted": {"unclassified": False}}
+    played = {"ok": False, "observation": None, "observation_status": "timeout",
+              "progress": {"stop": "timeout", "last_observation": snapshot}}
+    context = SimpleNamespace(
+        live=SimpleNamespace(play=lambda *args, **kwargs: dict(played)),
+        log_tool_call=lambda **kwargs: kwargs["fn"](*kwargs["args"], **kwargs["kwargs"]),
+        png_content=lambda data: data,
+    )
+    out = interaction.build_wrappers(context)["renforge_act"]("/tmp/game", "obs-1")
+
+    assert out["progress"]["last_observation"] == compact_observation(snapshot)
+    assert "occurrences" not in out["progress"]["last_observation"]["controls"][0]
+    assert out["progress"]["stop"] == "timeout"
+    assert snapshot["controls"][0]["occurrences"]  # the caller's snapshot is not mutated

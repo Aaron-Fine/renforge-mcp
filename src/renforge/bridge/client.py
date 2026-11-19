@@ -407,15 +407,19 @@ class BridgeClient:
         return self._normalize_error_reply(reply)
 
     def dismiss_if(self, *, interaction: int, session_id: str | None = None, observation_id: str | None = None,
-                   past_optional_controls: bool = False, deadline: float | None = None) -> dict:
+                   past_optional_controls: bool = False, allow_pause: bool = False,
+                   deadline: float | None = None) -> dict:
         """Post dismiss only when this interaction still listens for it.
 
         ``past_optional_controls`` dismisses a line even when buttons are shown
-        beside it, as a reader clicking the line would.
+        beside it, as a reader clicking the line would. ``allow_pause`` also
+        accepts a frame that is unstable only because a pause is pending.
         """
         payload: dict[str, Any] = {"interaction": interaction}
         if past_optional_controls:
             payload["past_optional_controls"] = True
+        if allow_pause:
+            payload["allow_pause"] = True
         if session_id is not None:
             payload["session_id"] = session_id
         if observation_id is not None:

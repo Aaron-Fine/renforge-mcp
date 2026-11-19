@@ -135,6 +135,26 @@ def test_system_mounts_are_read_only(mounted: sandbox.SandboxTestTree) -> None:
     assert result.returncode == 0, result.stderr
 
 
+def _poll(check, timeout: float = 10.0):
+    """Return ``check()`` once it is truthy, or its last value at the deadline."""
+    deadline = time.monotonic() + timeout
+    while True:
+        value = check()
+        if value or time.monotonic() >= deadline:
+            return value
+        time.sleep(0.05)
+
+
+def _sleepers(pids: set[int]) -> int:
+    count = 0
+    for pid in pids:
+        try:
+            count += Path(f"/proc/{pid}/comm").read_text().strip() == "sleep"
+        except OSError:
+            continue
+    return count
+
+
 def _namespace_members(namespace_ids: set[str]) -> set[int]:
     members: set[int] = set()
     for entry in Path("/proc").iterdir():
@@ -194,15 +214,16 @@ def test_guest_descendants_die_with_namespace(mounted: sandbox.SandboxTestTree) 
         ],
     )
     process = subprocess.Popen(command)
-    time.sleep(1)
-    namespaces = _descendant_namespaces(process.pid)
-    assert namespaces
-    assert _namespace_members(namespaces)
-
-    process.kill()
-    process.wait(timeout=10)
-    time.sleep(0.7)
-    assert not _namespace_members(namespaces)
+    try:
+        namespaces = _poll(lambda: _descendant_namespaces(process.pid))
+        assert namespaces
+        # All four sleeps, the setsid and orphaned ones included, before the kill.
+        assert _poll(lambda: _sleepers(_namespace_members(namespaces)) >= 4)
+    finally:
+        # Killing the guest's parent ends its namespace, even when an assert failed.
+        process.kill()
+        process.wait(timeout=10)
+    assert _poll(lambda: not _namespace_members(namespaces))
 
 
 def test_command_uses_only_read_only_system_binds(tree: sandbox.SandboxTestTree) -> None:

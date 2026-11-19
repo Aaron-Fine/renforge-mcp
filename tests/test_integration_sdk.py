@@ -839,7 +839,7 @@ screen renforge_sdk_modal_hide():
 def test_live_modal_hide_is_clickable_and_dismisses_its_screen(sdk, demo_copy: Path) -> None:
     """A modal image button stays clickable over a full-screen control, and Hide() runs in its screen."""
     from renforge.bridge.launcher import launch_with_bridge
-    from renforge.observe import classify
+    from renforge.interaction import classify
     from renforge.project import RenpyProject
 
     _add_modal_hide_fixture(demo_copy)
@@ -1606,7 +1606,8 @@ label start:
             if any(item['name'] == 'target' for item in session.client.get_state().get('screens', [])):
                 break
             time.sleep(0.1)
-        from renforge.observe import apply_screenshot, classify
+        from renforge.interaction import classify
+        from renforge.observe import apply_screenshot
         import renforge.util.images as images
         monkeypatch.setattr(images, 'MCP_PNG_MAX_BYTES', 512)
         raw, png = apply_screenshot(session.client.observe(screenshot=True))
@@ -1629,7 +1630,7 @@ label start:
 def test_live_custom_layer_scaled_scrolling_menu(sdk, tmp_path):
     from renforge.bridge.launcher import launch_with_bridge
     from renforge.project import RenpyProject
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     project = tmp_path / 'menu_geometry'
     (project / 'game').mkdir(parents=True)
@@ -1774,7 +1775,7 @@ label rf_room:
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
 def test_live_explain_reads_rpyc_only_game(sdk, tmp_path: Path) -> None:
     from renforge.bridge.launcher import launch_with_bridge
-    from renforge.observe import classify
+    from renforge.interaction import classify
     from renforge.project import RenpyProject
 
     project = tmp_path / "rpyc_only"

@@ -39,12 +39,19 @@ def build_wrappers(context):
         return [result, _png_content(png)] if isinstance(png, bytes) and png else result
 
     def _compact(result):
-        """Observations from the play tools are always compact."""
+        """Observations from the play tools are always compact, nested ones included."""
         if not isinstance(result, dict):
             return result
-        if isinstance(result.get("observation"), dict):
-            return dict(result, observation=compact_observation(result["observation"]))
-        return compact_observation(result)
+        if "observation" not in result and "progress" not in result:
+            return compact_observation(result)  # observe returns the snapshot itself
+        out = dict(result)
+        for key in ("observation", "last_observation"):
+            if isinstance(out.get(key), dict):
+                out[key] = compact_observation(out[key])
+        progress = out.get("progress")
+        if isinstance(progress, dict) and isinstance(progress.get("last_observation"), dict):
+            out["progress"] = dict(progress, last_observation=compact_observation(progress["last_observation"]))
+        return out
 
     def renforge_advance(project_path: str) -> dict:
         """Advance the current dialogue."""
