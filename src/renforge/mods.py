@@ -444,10 +444,15 @@ def _shadow_lint(project_root: str | Path) -> dict[str, Any]:
 
     Linting in place would compile ``.rpyc`` files and write ``game/cache``
     outside the mod. The shadow also never uses an SDK found in the project.
+    The SDK is the game's own engine version (``renforge.json`` pin, shipped
+    engine, ``script_version.txt``), as for any ``"stable"`` request, or the
+    stable SDK when the project names none.
     """
+    from .sdk import bundled_engine_version
     from .tools.validate import validate_project
 
-    result = validate_project(str(project_root))
+    version = bundled_engine_version(Path(project_root).expanduser().resolve()) or "stable"
+    result = validate_project(str(project_root), version=version)
     raw = "\n".join(part for part in (result.get("stdout"), result.get("stderr")) if part)
     out: dict[str, Any] = {
         "ok": result.get("ok") is True,

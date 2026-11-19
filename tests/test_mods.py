@@ -731,6 +731,57 @@ def test_lint_runs_on_a_shadow_copy_by_default(tmp_path, monkeypatch) -> None:
     assert [d["line"] for d in result["diagnostics"]] == [3]
 
 
+def _record_sdk_requests(monkeypatch) -> list:
+    """Stop the shadow lint at SDK selection and record what it asked for."""
+    from renforge.editor.exceptions import EditorError
+    from renforge.tools import validate
+
+    calls = []
+
+    def fake_sdk(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise EditorError("SDK_STOP", "test stops at SDK selection", {})
+
+    monkeypatch.setattr(validate, "get_or_install_sdk", fake_sdk)
+    return calls
+
+
+def test_lint_uses_the_engine_pinned_in_renforge_json(tmp_path, monkeypatch) -> None:
+    # A mod is linted by the engine the game runs, like renforge_validate's
+    # "stable" default promises, not by whatever the stable SDK is today.
+    root = _project(tmp_path)
+    (root / "renforge.json").write_text('{"renpy_version": "8.1.3"}', encoding="utf-8")
+    mods.write_file(root, "hud", "main.rpy", "label hud:\n    return\n")
+    calls = _record_sdk_requests(monkeypatch)
+
+    mods.lint(root, "hud")
+
+    # No project_root: an SDK found inside the project is project-controlled code.
+    assert calls == [(("8.1.3",), {})]
+
+
+def test_lint_uses_the_engine_the_game_ships(tmp_path, monkeypatch) -> None:
+    root = _project(tmp_path)
+    (root / "renpy").mkdir()
+    (root / "renpy" / "vc_version.py").write_text("version = '8.0.3.22090809'\n", encoding="utf-8")
+    mods.write_file(root, "hud", "main.rpy", "label hud:\n    return\n")
+    calls = _record_sdk_requests(monkeypatch)
+
+    mods.lint(root, "hud")
+
+    assert calls == [(("8.0.3",), {})]
+
+
+def test_lint_of_an_unpinned_project_uses_the_stable_sdk(tmp_path, monkeypatch) -> None:
+    root = _project(tmp_path)
+    mods.write_file(root, "hud", "main.rpy", "label hud:\n    return\n")
+    calls = _record_sdk_requests(monkeypatch)
+
+    mods.lint(root, "hud")
+
+    assert calls == [(("stable",), {})]
+
+
 def test_reload_returns_a_compact_observation_like_the_play_tools(tmp_path, monkeypatch) -> None:
     raw = {
         "ok": True,
