@@ -388,7 +388,7 @@ def _install_reload(monkeypatch, fake: _Reload) -> None:
 
 
 def test_reload_polls_until_stable_and_reports_clean_errors(tmp_path, monkeypatch) -> None:
-    observation = {"ok": True, "stable": True, "dialogue": None}
+    observation = {"ok": True, "stable": True, "dialogue": "Hello"}
     fake = _Reload(
         observations=[{"ok": True, "stable": False}, observation],
         error_replies=[
@@ -708,3 +708,20 @@ def test_lint_runs_on_a_shadow_copy_by_default(tmp_path, monkeypatch) -> None:
 
     assert seen == [str(root)]
     assert [d["line"] for d in result["diagnostics"]] == [3]
+
+
+def test_reload_returns_a_compact_observation_like_the_play_tools(tmp_path, monkeypatch) -> None:
+    raw = {
+        "ok": True,
+        "stable": True,
+        "observation_id": "o1",
+        "dialogue": None,
+        "keys": [],
+        "frame": {"width": 1280, "session_id": "s"},
+    }
+    fake = _Reload(observations=[raw], error_replies=[{"ok": True, "events": []}, {"ok": True, "events": []}])
+    _install_reload(monkeypatch, fake)
+
+    result = mod_tools.mod(str(tmp_path), "reload")
+
+    assert result["observation"] == {"ok": True, "stable": True, "observation_id": "o1", "frame": {"width": 1280}}

@@ -21,7 +21,8 @@ def build_wrappers(context):
         """Write, test, or remove a mod under `game/mods/<name>/`.
 
         Mod files are code the game runs, so `write` is open-world and
-        requires authorize=true when RENFORGE_POLICY=enforce.
+        `reload` is destructive (like reload_script); both require
+        authorize=true when RENFORGE_POLICY=enforce.
         """
         return _log_tool_call(
             name="renforge_mod",
