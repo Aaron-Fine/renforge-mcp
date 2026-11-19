@@ -589,8 +589,12 @@ def _isolation_result(session: Any) -> dict[str, Any]:
     return result
 
 
-def _project_relative_path(project_path: str | Path, path: str | Path) -> str:
-    """Return a project-relative POSIX path, or an absolute POSIX path outside."""
+def project_relative_path(project_path: str | Path, path: str | Path) -> str:
+    """Return a project-relative POSIX path, or an absolute POSIX path outside.
+
+    Write receipts (``files_touched``) name files this way. A relative *path*
+    is taken relative to the project root.
+    """
     project_root = Path(project_path).expanduser().resolve()
     candidate = Path(path).expanduser()
     if not candidate.is_absolute():
@@ -2438,6 +2442,11 @@ def _import_into_owned_session(
 
 
 def list_choices(project_path: str) -> dict:
+    """List the choices of the menu the game is showing now.
+
+    They are the visible controls backed by the active Ren'Py menu's
+    ``items``, whatever the menu screen is called (custom and NVL included).
+    """
     return _with_client(project_path, lambda client: {
         "ok": True, "choices": client.list_menu_choices()})
 
@@ -2445,6 +2454,13 @@ def list_choices(project_path: str) -> dict:
 def select_choice(project_path: str, text: str | None = None, index: int | None = None,
                   *, interaction: int | None = None, session_id: str | None = None,
                   observation_id: str | None = None) -> dict:
+    """Select one choice of the current menu by its ``text`` or listed ``index``.
+
+    ``interaction``, ``session_id`` and ``observation_id`` (from an
+    observation) make the selection refuse with ``stale`` when the game has
+    moved on since. A caption that more than one control shares needs its
+    ``index``. A refusal comes back as ``ok`` false with the bridge's reason.
+    """
     guards = {key: value for key, value in dict(interaction=interaction, session_id=session_id,
               observation_id=observation_id).items() if value is not None}
     return _with_client(project_path, lambda c: c.select_choice(text=text, index=index, **guards))
@@ -3611,7 +3627,7 @@ def run_scenario(
         "failed": failed,
         "duration_ms": duration_ms,
         "files_touched": [
-            _project_relative_path(project_path, path) for path in capture_paths
+            project_relative_path(project_path, path) for path in capture_paths
         ],
         "steps": results,
     }
@@ -3827,7 +3843,7 @@ def scene_tree(
         if save_as:
             saved_path = _save_scene_snapshot(project_path, save_as, reply)
             reply["saved_as"] = saved_path
-            reply["files_touched"] = [_project_relative_path(project_path, saved_path)]
+            reply["files_touched"] = [project_relative_path(project_path, saved_path)]
         if diff_against:
             before = _load_scene_snapshot(project_path, diff_against, max_nodes=max_nodes)
             if before is None:

@@ -6,6 +6,8 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from ..tools.live import project_relative_path
+
 TOOL_NAMES = (
     "renforge_diff_screenshots",
     "renforge_scene_tree",
@@ -355,10 +357,8 @@ def build_wrappers(context):
             with Image.open(BytesIO(png)) as image:
                 size = {"width": image.width, "height": image.height}
             # Captures live in RenForge's state folder, normally outside the
-            # project; the receipt then names the absolute path (#116 rules).
-            from ..tools.live import _project_relative_path
-
-            relative_path = _project_relative_path(project_root, target)
+            # project, so relative_path is then the absolute path.
+            relative_path = project_relative_path(project_root, target)
             return {"ok": True, "name": name, "path": str(target),
                     "relative_path": relative_path,
                     "files_touched": [relative_path],

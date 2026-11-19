@@ -8,6 +8,11 @@ MCP_PNG_MAX_BYTES = 384 * 1024
 
 
 def bounded_png(png: bytes) -> tuple[bytes, dict]:
+    """Return *png*, scaled down and re-encoded when it is over ``MCP_PNG_MAX_BYTES``,
+    with its ``width``/``height``, the original size, and whether it was ``scaled``.
+
+    PIL raises ``OSError`` for an oversized image that does not decode.
+    """
     metadata = {}
     if len(png) >= 24 and png[:8] == b"\x89PNG\r\n\x1a\n":
         width, height = struct.unpack(">II", png[16:24])
