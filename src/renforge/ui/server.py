@@ -5,6 +5,7 @@ import base64
 import os
 from contextlib import asynccontextmanager
 import json
+import math
 import string
 import threading
 import webbrowser
@@ -22,20 +23,18 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from .. import session_registry
 from ..bridge.launcher import normalize_language
-from ..launch_env import LaunchError
-from ..tools import live
-from ..tools import project_ops
+from ..launch_env import AUDIO_STRATEGIES, LAUNCHABLE_DISPLAY_STRATEGIES, LaunchError
 from ..lint import run_lint
-from ..interaction import _real_number
-from ..launch_env import AUDIO_STRATEGIES, DISPLAY_STRATEGIES
 from ..policy import CONTROL_ACTIONS
 from ..save_isolation import STATE_MODE_TOKENS, launch_state_mode_error
+from ..state import project_state_dir
+from ..tools import live
+from ..tools import project_ops
 from .activity import read_recent_activity, tail_activity
 from .graph import build_story_map, resolve_game_file_path, resolve_warp_target
 from .errors import error_response
 from .poller import poll_bridge
 from .ws import WebSocketHub, build_ws_envelope
-from ..state import project_state_dir
 
 
 def _renforge_version() -> str:
@@ -746,7 +745,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 status_code=400,
                 details={"version": version},
             )
-        for field, allowed in (("display", DISPLAY_STRATEGIES), ("audio", AUDIO_STRATEGIES)):
+        for field, allowed in (("display", LAUNCHABLE_DISPLAY_STRATEGIES), ("audio", AUDIO_STRATEGIES)):
             value = payload.get(field, "auto")
             if not isinstance(value, str) or value.strip().casefold() not in allowed:
                 return error_response(
@@ -764,7 +763,9 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 details={"cleanup_on_stop": cleanup_on_stop},
             )
         timeout = payload.get("timeout")
-        if timeout is not None and not _real_number(timeout):
+        if timeout is not None and (
+            isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout)
+        ):
             return error_response(
                 code="launch_timeout_invalid",
                 error="timeout must be a number",
