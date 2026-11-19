@@ -52,8 +52,9 @@ versioning.
 - `renforge_act` on an id the screen does not list adds a `message` and the
   current observation to `error="missing"`.
 - `renforge_info` lists the server's `toolsets` and, when `play` is listed,
-  the play loop's steps; it leaves out the Live Editor block when the `editor`
-  toolset is not listed. The server instructions likewise name only the
+  the play loop's steps; it leaves out the Live Editor block unless both the
+  `editor` and `live` toolsets are listed, since its workflow launches with
+  `renforge_launch`. The server instructions likewise name only the
   listed tools, and say what each `forward` value asks of the agent.
 - The `renforge_observe` description leads with `forward` and what to call
   next. It said the PNG's SHA-256 is `frame_id` (it is `frame_hash`) and that
