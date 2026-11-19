@@ -182,6 +182,9 @@ own folders (the state folder or a session root, by what the game's bridge
 reports); a game started some other way on the player's saves, or in a
 folder outside RenForge's, is refused with `code="SESSION_NOT_ISOLATED"`
 before any slot is touched or listed. Use `renforge_saves` for such a game.
+A game whose bridge does not answer (busy, or the connection dropped) gets
+the ordinary error instead, so the call can be retried, and a failed `list`
+carries no `player_slots` or `player_slots_hidden`.
 
 All bridge launch paths, including the low-level Python launcher, resolve
 isolation the same way. One disposable session root owns saves, multipersistent data,

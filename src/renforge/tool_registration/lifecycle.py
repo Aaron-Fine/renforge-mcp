@@ -506,7 +506,9 @@ def build_wrappers(context):
             result = live.saves(project_path, action, slot=slot, renforge_owned_only=True)
             if action == "load" and isinstance(result, dict) and result.get("ok"):
                 result = _after_load(result)
-            if action == "list" and isinstance(result, dict):
+            # A failed list (refused, or no game) lists nothing, so it says
+            # nothing about anyone's slots either.
+            if action == "list" and isinstance(result, dict) and result.get("ok"):
                 save_name = result.pop("save_directory", None)
                 if _may_read_player_saves():
                     result["player_slots"] = _player_slots(save_name)

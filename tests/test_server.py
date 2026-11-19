@@ -385,8 +385,11 @@ def test_session_saves_never_act_on_a_game_using_the_players_saves(tmp_path, mon
     for args in ({"action": "save", "slot": "x"}, {"action": "load", "slot": "x", "authorize": True},
                  {"action": "list"}):
         text = asyncio.run(_call(**args))
-        assert json.loads(text)["code"] == "SESSION_NOT_ISOLATED", args
+        refused = json.loads(text)
+        assert refused["code"] == "SESSION_NOT_ISOLATED", args
         assert "player-slot" not in text
+        # A refusal lists nothing, so it says nothing about anyone's slots.
+        assert "player_slots" not in refused and "player_slots_hidden" not in refused
     assert client.calls == []
 
     # The same game with its saves in the state folder and a session HOME is the session's own.
@@ -406,6 +409,43 @@ def test_session_saves_never_act_on_a_game_using_the_players_saves(tmp_path, mon
         assert "session's own" in listed["player_slots_hidden"] and "player_slots" not in listed
     assert json.loads(asyncio.run(_call(action="save", slot="x")))["ok"] is True
     assert client.calls == ["list", "save"]
+
+
+class _UnansweringSessionClient(_SessionSavesClient):
+    """A bridge whose session_info fails: busy main thread, or a bridge without the command."""
+
+    def __init__(self, error: str) -> None:
+        super().__init__({})
+        self.error = error
+
+    def session_info(self) -> dict:
+        from renforge.bridge.client import BridgeError
+
+        raise BridgeError(f"bridge error on 'session_info': {self.error}")
+
+
+@pytest.mark.parametrize("action", ["save", "load", "list"])
+def test_session_saves_pass_a_busy_bridge_through_as_a_retryable_error(tmp_path, monkeypatch, action) -> None:
+    """A busy game is not proof of the player's saves; telling the agent to relaunch would lose play state."""
+    from renforge.tools import live
+
+    (tmp_path / "game").mkdir()
+    busy = _UnansweringSessionClient("timeout_waiting_for_main_thread")
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: busy))
+    slot = None if action == "list" else "x"
+
+    result = live.saves(str(tmp_path), action, slot=slot, renforge_owned_only=True)
+
+    assert result["ok"] is False
+    assert result.get("code") != "SESSION_NOT_ISOLATED"
+    assert "timeout_waiting_for_main_thread" in result["error"]
+    assert busy.calls == []
+
+    # A bridge that has no session_info cannot say where it saves: refused.
+    old = _UnansweringSessionClient("unknown_command: session_info")
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: old))
+    assert live.saves(str(tmp_path), action, slot=slot, renforge_owned_only=True)["code"] == "SESSION_NOT_ISOLATED"
+    assert old.calls == []
 
 
 def test_live_tools_error_cleanly_without_a_running_game(tmp_path) -> None:

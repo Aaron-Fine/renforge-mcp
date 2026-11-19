@@ -860,6 +860,11 @@ def _external_session_facts(client: BridgeClient) -> dict[str, Any]:
     except Exception:
         return {"isolation": {"exposes_user_saves": True}, "exposed": _ALL_COMPONENTS,
                 "isolated": False, "eval_running": True}
+    return _session_facts_from_info(info)
+
+
+def _session_facts_from_info(info: Mapping[str, Any]) -> dict[str, Any]:
+    """:func:`_external_session_facts` for a ``session_info`` reply the bridge gave."""
     report = _external_isolation_report(info)
     exposed = _external_exposed_components(report)
     return {"isolation": report, "exposed": exposed,
@@ -2137,7 +2142,19 @@ def _owned_only(
     def guarded(client: BridgeClient) -> dict:
         # Asked of the same bridge the action then uses, so a game started
         # elsewhere (another server, the dashboard) is judged by what it reports.
-        if not _external_session_facts(client)["isolated"]:
+        try:
+            info = client.session_info()
+        except BridgeError as exc:
+            # A bridge that has no session_info cannot say where it saves, so it
+            # is refused. Any other failure (a busy main thread, a dropped
+            # connection) proves nothing about the storage: it propagates as the
+            # ordinary, retryable error instead of advice to relaunch.
+            if "unknown_command" not in str(exc) and "unknown command" not in str(exc):
+                raise
+            isolated = False
+        else:
+            isolated = _session_facts_from_info(info)["isolated"]
+        if not isolated:
             return {"ok": False, "code": "SESSION_NOT_ISOLATED",
                     "message": SESSION_NOT_ISOLATED_MESSAGE, "error": SESSION_NOT_ISOLATED_MESSAGE, **refusal}
         return act(client)
@@ -2254,8 +2271,10 @@ def saves(
 
     ``renforge_owned_only`` (``renforge_session``): ``save``, ``load`` and
     ``list`` act only on a game whose saves and HOME are in RenForge's own
-    folders, by what its bridge reports; any other game is refused with
-    ``SESSION_NOT_ISOLATED`` before the slot is touched.
+    folders, by what its bridge reports; any other game, or one whose bridge
+    has no ``session_info``, is refused with ``SESSION_NOT_ISOLATED`` before
+    the slot is touched. A bridge that fails to answer (busy, disconnected)
+    gives the ordinary error, which the caller may retry.
     """
     error = saves_argument_error(
         action,
