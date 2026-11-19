@@ -7396,18 +7396,14 @@ init python:
 
 
     def _renforge_kinetic_kind(node):
-        if node is None:
-            return None
-        try:
-            name = node.__class__.__name__
-        except Exception:
-            return None
-        if name == "Bar":
-            return "bar"
-        if name == "Viewport":
-            return "viewport"
-        if name == "Drag":
-            return "drag"
+        """``"bar"``, ``"viewport"`` or ``"drag"`` for those engine widgets, else None.
+
+        Subclasses (VPGrid, a game's own Bar or Drag) count as their base
+        class, as ``_renforge_is_engine_widget`` decides elsewhere in observe.
+        """
+        for name, kind in (("Bar", "bar"), ("Viewport", "viewport"), ("Drag", "drag")):
+            if _renforge_is_engine_widget(node, name):
+                return kind
         return None
 
 

@@ -182,3 +182,43 @@ def test_a_semantic_click_on_an_unsettled_frame_is_refused_with_the_observation(
     assert refused.get("ok") is False and refused.get("error") == "unstable", refused
     assert refused["observation"]["unstable_reason"] == "transition"
     assert runs == []
+
+
+# --- kinetic controls: engine widget subclasses ------------------------------
+
+
+def _engine_kinetic_classes(renpy, monkeypatch):
+    """Stand-ins for Ren'Py's Bar, Viewport and Drag, with a subclass of each."""
+    classes = {name: type(name, (), {}) for name in ("Bar", "Viewport", "Drag")}
+    monkeypatch.setattr(renpy.display.behavior, "Bar", classes["Bar"], raising=False)
+    monkeypatch.setattr(renpy.display, "viewport", types.SimpleNamespace(Viewport=classes["Viewport"]), raising=False)
+    monkeypatch.setattr(renpy.display, "dragdrop", types.SimpleNamespace(Drag=classes["Drag"]), raising=False)
+    return {
+        "bar": type("VolumeSlider", (classes["Bar"],), {}),
+        "viewport": type("VPGrid", (classes["Viewport"],), {}),
+        "drag": type("Card", (classes["Drag"],), {}),
+    }
+
+
+def test_kinetic_kind_treats_engine_subclasses_like_their_base(running_bridge, monkeypatch):
+    subclasses = _engine_kinetic_classes(running_bridge.renpy, monkeypatch)
+    kind = running_bridge.globs["_renforge_kinetic_kind"]
+
+    assert {name: kind(cls()) for name, cls in subclasses.items()} == {name: name for name in subclasses}
+    # A game's own class is not a kinetic control because of its name alone,
+    assert kind(type("Slider", (), {})()) is None
+    # but a class named like the engine's still is where the engine class is unknown.
+    assert kind(type("Viewport", (), {})()) == "viewport"
+    assert kind(None) is None
+
+
+def test_observe_lists_an_unfocused_engine_subclass_as_its_kind(running_bridge, monkeypatch):
+    from renforge.interaction import classify
+
+    subclasses = _engine_kinetic_classes(running_bridge.renpy, monkeypatch)
+    grid = subclasses["viewport"]()
+    _custom_widget_scene(running_bridge, [grid])
+
+    raw = running_bridge.client.observe(screenshot=False)
+    assert [element["role"] for element in raw["elements"]] == ["viewport"], raw["elements"]
+    assert classify(raw)["omitted"]["unclassified"] is False
