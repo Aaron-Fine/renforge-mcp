@@ -3241,6 +3241,15 @@ init python:
         return result
 
     def _renforge_h_select_choice(payload):
+        """Choose one listed control with text, by ``text`` or by ``index``.
+
+        Text matches exactly (ignoring case) first, then as a substring; an
+        index counts the controls that have text. More than one match is
+        refused as ambiguous, and a disabled or covered control is refused.
+        When the caller sends interaction/session/observation ids, a stale
+        observation is refused. A semantic control (a menu item, a known
+        action) runs its action; anything else is clicked at its center.
+        """
         payload = payload or {}
         raw, pairs = _renforge_observe_raw(False, with_pairs=True, include_readout=False)
         contract = _renforge_runtime.interaction
@@ -3293,6 +3302,11 @@ init python:
 
     # Scene inspection shares control discovery and completed render geometry.
     _RENFORGE_SCENE_MAX_NODES = 4000
+    # observe: controls listed (and menu entries read), scene nodes walked,
+    # and custom event handlers reported as input candidates.
+    _RENFORGE_OBSERVE_MAX_CONTROLS = 400
+    _RENFORGE_OBSERVE_MAX_NODES = 5000
+    _RENFORGE_OBSERVE_MAX_CANDIDATES = 64
     _RENFORGE_SCENE_MAX_DEPTH = 48
     _RENFORGE_SCENE_MAX_TEXT_CHARS = 4096
     _RENFORGE_SCENE_MAX_ID_CHARS = 256
@@ -3356,8 +3370,7 @@ init python:
         node.update(geometry)
         bounds = geometry["bounds"]
         node["bounds_available"] = bounds is not None
-        node["center"] = ({"x": bounds["x"] + bounds["width"] // 2,
-                           "y": bounds["y"] + bounds["height"] // 2} if bounds else None)
+        node["center"] = _renforge_bounds_center(bounds)
         if text is not None:
             node["text"] = text
         if action is not None:
@@ -3713,6 +3726,12 @@ init python:
 
 
     def _renforge_h_scene_tree(payload):
+        """The scene as nodes: controls first, then each layer's displayables.
+
+        Filters (layers, types, screen, ids), detail level and the max_depth,
+        max_nodes and max_text_chars limits come from the payload; what the
+        limits cut is counted under ``omitted``.
+        """
         payload = payload or {}
         detail = str(payload.get("detail") or "semantic").casefold()
         if detail not in ("semantic", "layout", "raw"):
@@ -3752,10 +3771,13 @@ init python:
         inventory = _renforge_scene_inventory()
         counters["_inventory"] = inventory
         # Controls and other nodes share the same completed frame geometry.
+        # Input candidates are judged against every control, not only the
+        # ones max_nodes leaves room to list.
         try:
-            focusables = _renforge_focusable_elements(max_nodes + 1, max_text_chars, inventory)
+            controls = _renforge_focusable_elements(None, max_text_chars, inventory)
         except Exception:
-            focusables = []
+            controls = []
+        focusables = controls[:max_nodes + 1]
         if len(focusables) > max_nodes:
             counters["_omitted_max_nodes"] += len(focusables) - max_nodes
             for _focus, element in focusables[:max_nodes]:
@@ -3837,7 +3859,7 @@ init python:
                     nodes.append(node)
                     _renforge_scene_descend_children(d, layer, screen_name, node["zorder"], seen, nodes, counters, 0)
 
-        input_candidates, _unclassified = _renforge_input_candidates(inventory, focusables)
+        input_candidates, _unclassified = _renforge_input_candidates(inventory, controls)
         _renforge_scene_unique_ids(nodes, max_text_chars)
         _renforge_scene_finalize(nodes, include)
 
@@ -3906,16 +3928,36 @@ init python:
             },
         }
 
+    _RENFORGE_ENGINE_WIDGETS = (("dragdrop", "Drag", "drag"), ("viewport", "Viewport", "viewport"),
+                                ("behavior", "Input", "input"), ("behavior", "Bar", "bar"),
+                                ("behavior", "Button", "button"))
+
     def _renforge_engine_role(widget):
         """The role Ren'Py's own widget classes give, subclasses included."""
         display = getattr(renpy, "display", None)
-        for module, name, role in (("dragdrop", "Drag", "drag"), ("viewport", "Viewport", "viewport"),
-                                   ("behavior", "Input", "input"), ("behavior", "Bar", "bar"),
-                                   ("behavior", "Button", "button")):
+        for module, name, role in _RENFORGE_ENGINE_WIDGETS:
             cls = getattr(getattr(display, module, None), name, None)
             if isinstance(cls, type) and isinstance(widget, cls):
                 return role
         return None
+
+    def _renforge_is_engine_widget(widget, name):
+        """Whether ``widget`` is Ren'Py's ``name`` widget (Drag, Viewport, Input,
+        Bar, Button), a subclass such as VPGrid included.
+
+        A widget whose class has exactly that name also counts, as before, for
+        runtimes where the engine class cannot be resolved.
+        """
+        if widget is None:
+            return False
+        module = next((module for module, known, _role in _RENFORGE_ENGINE_WIDGETS if known == name), None)
+        cls = getattr(getattr(getattr(renpy, "display", None), module, None), name, None) if module else None
+        try:
+            if isinstance(cls, type) and isinstance(widget, cls):
+                return True
+            return widget.__class__.__name__ == name
+        except Exception:
+            return False
 
     def _renforge_observe_role(focus, widget):
         # Ren'Py's classes first; names only for displayables that are not
@@ -3982,7 +4024,7 @@ init python:
         filename = getattr(node, "filename", None)
         if isinstance(filename, str) and filename.strip():
             return filename.strip()
-        # A DynamicImage's name is its template ("[player_skin]_avatar_idle");
+        # A DynamicImage's name is its template ("[outfit]_portrait");
         # the image it resolved to is what is drawn.
         if node.__class__.__name__ == "DynamicImage":
             for attr in ("raw_target", "target"):
@@ -4002,7 +4044,7 @@ init python:
         if _renforge_observe_is_sequence(name):
             parts = [part for part in name if isinstance(part, str) and part.strip()]
             if parts:
-                # An image name is a tag and attributes ("lorbook naughtydn"),
+                # An image name is a tag and attributes ("eileen happy"),
                 # written as Ren'Py writes it, not a path.
                 return " ".join(parts)
         child = getattr(node, "child", None)
@@ -4053,7 +4095,7 @@ init python:
         widgets = getattr(getattr(focus, "screen", None), "widgets", None)
         if isinstance(widgets, builtins.dict):
             for index, (name, candidate) in enumerate(widgets.items()):
-                if index >= 400:
+                if index >= _RENFORGE_OBSERVE_MAX_CONTROLS:
                     break
                 if (isinstance(name, builtins.str) and name.strip()
                         and candidate is not None and any(candidate is item for item in candidates)):
@@ -4110,7 +4152,7 @@ init python:
 
 
     def _renforge_observe_object_token(value):
-        # A camper is an object. fileName is the badge stem; name is the fallback.
+        # An object argument is named by its fileName field, else its name.
         for attr in ("fileName", "name"):
             try:
                 field = getattr(value, attr)
@@ -4240,11 +4282,8 @@ init python:
         if widget is None:
             return None
         attrs = ("action", "clicked")
-        try:
-            if widget.__class__.__name__ == "Drag":
-                attrs = ("dragged", "clicked", "action")
-        except Exception:
-            attrs = ("action", "clicked")
+        if _renforge_is_engine_widget(widget, "Drag"):
+            attrs = ("dragged", "clicked", "action")
         for attr in attrs:
             value = getattr(widget, attr, None)
             if value is None:
@@ -4339,11 +4378,7 @@ init python:
     def _renforge_observe_adjustment(widget):
         if widget is None:
             return None
-        try:
-            name = widget.__class__.__name__
-        except Exception:
-            name = ""
-        if name == "Viewport":
+        if _renforge_is_engine_widget(widget, "Viewport"):
             axes = {}
             horizontal = _renforge_observe_axis(getattr(widget, "xadjustment", None))
             vertical = _renforge_observe_axis(getattr(widget, "yadjustment", None))
@@ -4356,12 +4391,7 @@ init python:
 
 
     def _renforge_observe_drag_name(widget):
-        if widget is None:
-            return None
-        try:
-            if widget.__class__.__name__ != "Drag":
-                return None
-        except Exception:
+        if not _renforge_is_engine_widget(widget, "Drag"):
             return None
         name = getattr(widget, "drag_name", None)
         if isinstance(name, builtins.str) and name.strip():
@@ -4370,12 +4400,7 @@ init python:
 
 
     def _renforge_observe_drag_image(widget):
-        if widget is None:
-            return None
-        try:
-            if widget.__class__.__name__ != "Drag":
-                return None
-        except Exception:
+        if not _renforge_is_engine_widget(widget, "Drag"):
             return None
         return _renforge_displayable_filename(getattr(widget, "child", None))
 
@@ -4405,14 +4430,30 @@ init python:
 
 
     def _renforge_display_name(who):
-        # Character.name is the name drawn in the say window. The say callback
-        # receives the Character object, not that string.
+        """The name a speaker draws in the say window, or None.
+
+        Character.name is that name; the say callback receives the Character
+        object, not the string. A dynamic Character's name is an expression
+        (DynamicCharacter("player_name")), resolved the way the engine would
+        but without running game code; a name that cannot be read that way is
+        None rather than the expression text.
+        """
         if who is None:
             return None
         if isinstance(who, builtins.str):
             text = _renforge_render_say_text(who).strip()
             return text or None
         name = getattr(who, "name", None)
+        try:
+            dynamic = bool(getattr(who, "dynamic", False))
+        except Exception:
+            dynamic = False
+        if dynamic:
+            found, value = _renforge_store_expression(name)
+            if not found or not isinstance(value, builtins.str):
+                return None
+            text = _renforge_render_say_text(value).strip()
+            return text or None
         if isinstance(name, builtins.str):
             text = _renforge_render_say_text(name).strip()
             return text or None
@@ -4452,18 +4493,74 @@ init python:
         return "".join(parts)
 
 
+    def _renforge_store_expression(expr):
+        """Resolve a say ``who`` or dynamic-name expression without running game code.
+
+        The engine evaluates these with eval_who and py_eval. The bridge only
+        reads: a string literal (``"Mysterious voice"``) is its own value; a
+        name is looked up in the ``character`` namespace, then in the store,
+        the order eval_who uses; a dotted path follows instance fields and
+        dict keys. Calls, operators and properties are never evaluated.
+        Returns ``(found, value)``.
+        """
+        if not isinstance(expr, builtins.str) or not expr.strip():
+            return False, None
+        text = expr.strip()
+        import ast as _ast
+        try:
+            literal = _ast.literal_eval(text)
+        except Exception:
+            literal = None
+        if isinstance(literal, builtins.str):
+            return True, literal
+        parts = text.split(".")
+        if not builtins.all(part.isidentifier() for part in parts):
+            return False, None
+        value = None
+        found = False
+        try:
+            namespaces = renpy.python.store_dicts
+        except Exception:
+            namespaces = None
+        if len(parts) == 1 and namespaces is not None:
+            # `define character.e = Character(...)` lives in store.character.
+            try:
+                characters = namespaces.get("store.character")
+                value = characters.get(parts[0]) if characters is not None else None
+            except Exception:
+                value = None
+            found = value is not None
+        if not found:
+            try:
+                fields = vars(renpy.store)
+            except Exception:
+                return False, None
+            if parts[0] not in fields:
+                return False, None
+            value = fields[parts[0]]
+        for part in parts[1:]:
+            fields = getattr(value, "__dict__", None)
+            if isinstance(value, builtins.dict) and part in value:
+                value = value[part]
+            elif isinstance(fields, builtins.dict) and part in fields:
+                value = fields[part]
+            else:
+                return False, None
+        return True, value
+
+
     def _renforge_character_display_name(who_expr):
-        # ast.Say stores the who expression ("eileen"), not the display name.
+        """The display name for a say statement's who expression, or None.
+
+        ast.Say stores the expression (``e``, ``"Mysterious voice"``), not the
+        speaker, so it is resolved with _renforge_store_expression.
+        """
         if who_expr is None:
             return None
         if not isinstance(who_expr, builtins.str):
             return _renforge_display_name(who_expr)
-        ident = who_expr.strip()
-        if not ident or not ident.replace("_", "a").isalnum() or ident[0].isdigit():
-            return None
-        try:
-            character = getattr(renpy.store, ident, None)
-        except Exception:
+        found, character = _renforge_store_expression(who_expr)
+        if not found:
             return None
         return _renforge_display_name(character)
 
@@ -4478,10 +4575,8 @@ init python:
 
 
     def _renforge_is_input_displayable(node):
-        try:
-            return node.__class__.__name__ == "Input"
-        except Exception:
-            return False
+        """Whether ``node`` is Ren'Py's Input, a subclass included."""
+        return _renforge_is_engine_widget(node, "Input")
 
 
     def _renforge_input_prompt(screen_node, widget):
@@ -4489,7 +4584,7 @@ init python:
         if isinstance(scope, builtins.dict):
             prompt = scope.get("prompt")
             if isinstance(prompt, builtins.str) and prompt.strip():
-                # As drawn: "[mc_nick]" substituted, text tags removed.
+                # As drawn: "[player_name]" substituted, text tags removed.
                 return _renforge_strip_say_tags(_renforge_render_say_text(prompt)).strip() or None
         return None
 
@@ -4548,10 +4643,7 @@ init python:
             }
             if bounds is not None:
                 record["bounds"] = bounds
-                record["center"] = {
-                    "x": bounds["x"] + bounds["width"] // 2,
-                    "y": bounds["y"] + bounds["height"] // 2,
-                }
+                record["center"] = _renforge_bounds_center(bounds)
             records.append((widget, record))
         return records
 
@@ -4559,7 +4651,25 @@ init python:
     def _renforge_strip_say_tags(value):
         return _renforge_runtime.interaction.strip_text_tags(value)
 
+    def _renforge_say_is_stale(bridge):
+        """Whether the stored line belongs to an earlier interaction than this one.
+
+        The say callbacks set ``say_stale_from``; before any line it is unset
+        and nothing counts as stale.
+        """
+        stale_from = getattr(bridge, "say_stale_from", None) if bridge is not None else None
+        if not isinstance(stale_from, builtins.int):
+            return False
+        return int(getattr(bridge, "observe_generation", 0) or 0) >= stale_from
+
     def _renforge_observe_dialogue(screen_nodes, say_dismiss):
+        """The current line as {"who", "what"}, or None when there is none.
+
+        A say screen's scope (or its rendered who/what widgets) wins. Without
+        one, the line the say callbacks stored is used while its statement
+        is still this interaction's, which also covers NVL and custom say
+        screens; a hard pause shows no dialogue.
+        """
         # last_say survives the say window. Publish it only while this
         # interaction is still that line, or while a say screen is showing.
         scoped_who = None
@@ -4619,6 +4729,11 @@ init python:
             who = _renforge_display_name(scoped_who) if scoped_who_set else speaker_from_store()
             what = scoped_what
         else:
+            # No say screen carries the line. The stored line is still this
+            # interaction's dialogue only while its say statement runs; a soft
+            # pause after it also dismisses with "dismiss".
+            if _renforge_say_is_stale(bridge):
+                return None
             # Character callbacks on 8.3+ receive ``what``. 8.0–8.2 call the
             # same hook without it, while the statement still stores the line
             # on ``_last_say_what``. Prefer the callback copy when it exists.
@@ -4658,7 +4773,7 @@ init python:
                 continue
             index = 0
             for item_number, item in enumerate(items):
-                if item_number >= 400 or len(entries) >= 400:
+                if item_number >= _RENFORGE_OBSERVE_MAX_CONTROLS or len(entries) >= _RENFORGE_OBSERVE_MAX_CONTROLS:
                     inventory["menu_truncated"] = True
                     break
                 action = getattr(item, "action", None)
@@ -4695,6 +4810,10 @@ init python:
     ))
 
 
+    # The screens ShowMenu opens as Ren'Py's game menu (None is its default
+    # screen). interaction._GAME_MENU_SCREENS is a different list: screens a
+    # player is on whose buttons stay chrome, so it adds main_menu,
+    # navigation, confirm and yesno_prompt, which are not ShowMenu targets.
     _RENFORGE_GAME_MENU_SCREENS = frozenset((
         None, "game_menu", "save", "load", "preferences", "history", "help", "about",
     ))
@@ -4735,7 +4854,7 @@ init python:
             return False
         # Showing or hiding a screen beside an interface action is that
         # button's own indicator: a fast-forward button that runs
-        # Show("fastHide") with Skip(). Skip only turns sensitive while
+        # Show("skip_indicator") with Skip(). Skip only turns sensitive while
         # skipping is allowed, so as a decision it stopped progression (which
         # allows skipping) at once.
         if any(type(action).__name__ in _RENFORGE_CHROME_ACTIONS and _renforge_engine_class(type(action))
@@ -4807,8 +4926,7 @@ init python:
         """A Function action handed the menu item or its action as an argument.
 
         A choice screen may route each item through its own callback
-        (``action Function(menu_choice_intercept,
-        menu_item=i)``); that button is the item.
+        (``action Function(on_choice, item=i)``); that button is the item.
         """
         for action in _renforge_action_list(container):
             args = getattr(action, "args", None)
@@ -4822,8 +4940,217 @@ init python:
         return False
 
 
+    def _renforge_focus_clone(focus, widget, screen, **extra):
+        """A focus stand-in for ``widget`` on ``screen`` with ``focus``'s rectangle."""
+        return types.SimpleNamespace(widget=widget, screen=screen,
+            x=getattr(focus, "x", None), y=getattr(focus, "y", None),
+            w=getattr(focus, "w", None), h=getattr(focus, "h", None), **extra)
+
+
+    def _renforge_bounds_center(bounds):
+        """The center point of ``{"x", "y", "width", "height"}`` bounds, or None."""
+        if not bounds:
+            return None
+        return {"x": bounds["x"] + bounds["width"] // 2, "y": bounds["y"] + bounds["height"] // 2}
+
+
+    def _renforge_safe_sensitive(sensitivity, action):
+        """Ren'Py's is_sensitive for ``action``; True when there is none or it raises."""
+        if not callable(sensitivity):
+            return True
+        try:
+            return bool(sensitivity(action))
+        except Exception:
+            return True
+
+
+    def _renforge_focus_list_records():
+        """(focus, record) for Ren'Py's focus list: the controls it can focus."""
+        for ordinal, focus in enumerate(getattr(getattr(renpy.display, "focus", None), "focus_list", ())):
+            widget = getattr(focus, "widget", None)
+            if widget is None:
+                continue
+            values = [getattr(focus, key, None) for key in ("x", "y", "w", "h")]
+            bounds = None
+            if all(value is not None for value in values):
+                try:
+                    x, y, w, h = [int(value) for value in values]
+                    if w <= 0 or h <= 0:
+                        continue
+                    bounds = {"x": x, "y": y, "width": w, "height": h}
+                except (TypeError, ValueError, OverflowError):
+                    pass
+            role = _renforge_observe_role(focus, widget)
+            if bounds is None and not _renforge_observe_operations(_renforge_observe_normalize_role(role)):
+                continue
+            name = _renforge_screen_name(focus)
+            # A viewport scrolls content; that content is readout, not its label.
+            is_viewport = _renforge_observe_normalize_role(role) == "viewport"
+            yield focus, {
+                "screen": name, "role": role,
+                "text": None if is_viewport else (_renforge_focus_text(widget) or None),
+                "enabled": bool(_renforge_focus_enabled(focus, widget)),
+                "clickable": True, "covered": False, "visible": True,
+                "image_name": _renforge_observe_image_name(widget) or _renforge_observe_drag_image(widget),
+                "menu_index": None, "ordinal": ordinal,
+                "action": _renforge_observe_action_class(widget), "bounds": bounds,
+            }
+
+
+    def _renforge_unfocused_button_records(inventory, seen_widgets):
+        """(focus, record) for drawn Buttons the focus list left out.
+
+        Ren'Py leaves a Button out of the focus list when it has no action
+        (insensitive) or a modal screen hides it. ``ordinal`` is set by the
+        caller; ``seen_widgets`` is read as the caller fills it.
+        """
+        button_type = getattr(getattr(renpy.display, "behavior", None), "Button", None)
+        if not isinstance(button_type, type):
+            return
+        for widget, layer, name, screen, _parents in inventory["nodes"]:
+            if id(widget) in seen_widgets or not isinstance(widget, button_type):
+                continue
+            geometry = _renforge_widget_geometry(widget, inventory)
+            if geometry["visible"] is not True:
+                continue
+            focus = types.SimpleNamespace(widget=widget, screen=screen)
+            yield focus, {"screen": name, "layer": layer, "role": "button",
+                "text": _renforge_focus_text(widget) or None,
+                "enabled": (getattr(widget, "clicked", None) is not None
+                            and bool(_renforge_focus_enabled(focus, widget))),
+                "clickable": True, "covered": False,
+                "image_name": _renforge_observe_image_name(widget),
+                "menu_index": None, "ordinal": None,
+                "action": _renforge_observe_action_class(widget), **geometry}
+
+
+    def _renforge_custom_action_records(inventory, seen_widgets):
+        """(focus, record) for a game's own displayables that hold Ren'Py Actions.
+
+        Such a widget keeps them in ``action`` (or one ``*click*`` attribute,
+        such as ``click_action``) and follows the engine's button convention:
+        running the action is the click.
+        """
+        action_type = getattr(getattr(renpy, "ui", None), "Action", None)
+        if not isinstance(action_type, type):
+            return
+        sensitivity = getattr(getattr(renpy.display, "behavior", None), "is_sensitive", None)
+        for widget, layer, name, screen, _parents in inventory["nodes"]:
+            if id(widget) in seen_widgets or type(widget).__module__.startswith("renpy."):
+                continue
+            attr = _renforge_custom_action_attr(widget)
+            if attr is None:
+                continue
+            value = getattr(widget, attr, None)
+            actions = _renforge_action_list(value)
+            if not all(isinstance(item, action_type) for item in actions):
+                continue
+            geometry = _renforge_widget_geometry(widget, inventory)
+            if geometry["visible"] is not True:
+                continue
+            # As with Ren'Py buttons, no action means insensitive.
+            enabled = bool(actions) and _renforge_safe_sensitive(sensitivity, value)
+            yield types.SimpleNamespace(widget=widget, screen=screen), {
+                "screen": name, "layer": layer, "role": "button",
+                "text": _renforge_focus_text(widget) or None,
+                "enabled": enabled, "clickable": enabled, "covered": False,
+                "semantic": True,
+                "image_name": _renforge_observe_image_name(widget),
+                "menu_index": None, "ordinal": None,
+                "action": _renforge_observe_format_action(value) if value is not None else None,
+                **geometry}
+
+
+    def _renforge_click_anywhere_records(inventory, seen_widgets):
+        """(focus, record) for a screen's left-click key bindings.
+
+        A screen's `key "mousedown_1" action ...` makes a click anywhere its
+        control (a tutorial screen that advances only so). Act's key/
+        pseudo-controls press keyboard keys, so a left-click binding is listed
+        as a control that runs its action.
+        """
+        behavior = getattr(renpy.display, "behavior", None)
+        keymap_type = getattr(behavior, "Keymap", None)
+        if not isinstance(keymap_type, type):
+            return
+        sensitivity = getattr(behavior, "is_sensitive", None)
+        for widget, layer, name, screen, _parents in inventory["nodes"]:
+            if screen is None or id(widget) in seen_widgets or not isinstance(widget, keymap_type):
+                continue
+            bindings = getattr(widget, "keymap", None)
+            if not isinstance(bindings, builtins.dict):
+                continue
+            for binding in ("mousedown_1", "mouseup_1"):
+                action = bindings.get(binding)
+                if action is None:
+                    continue
+                enabled = _renforge_safe_sensitive(sensitivity, action)
+                yield types.SimpleNamespace(widget=widget, screen=screen, action=action), {
+                    "screen": name, "layer": layer, "role": "button",
+                    "text": "click anywhere (%s)" % binding,
+                    "enabled": enabled, "clickable": enabled, "covered": False,
+                    "semantic": True, "visible": True,
+                    "bounds": None, "bounds_reason": "a key binding: a click anywhere on the screen",
+                    "image_name": None, "menu_index": None, "ordinal": None,
+                    "action": _renforge_observe_format_action(action)}
+                break
+
+
+    def _renforge_add_unmatched_menu_entries(pairs, unmatched, inventory):
+        """Add menu entries no control matched to ``pairs``.
+
+        A choice outside the focus list (clipped, or in a transformed
+        viewport) usually still has its button in the screen's tree; that
+        button gives the entry its source line. A button drawn with no action
+        is the entry, disabled.
+        """
+        menu_buttons = builtins.dict()
+        if unmatched:
+            owners = builtins.set(id(entry[0]) for entry in unmatched)
+            for node, _layer, _name, screen_node, _parents in inventory["nodes"]:
+                if id(screen_node) in owners and (getattr(node, "action", None) is not None
+                                                  or getattr(node, "clicked", None) is not None):
+                    menu_buttons.setdefault(id(screen_node), builtins.list()).append(node)
+        sensitivity = getattr(getattr(renpy.display, "behavior", None), "is_sensitive", None)
+        for owner, index, caption, action in unmatched:
+            enabled = _renforge_safe_sensitive(sensitivity, action)
+            name = _renforge_observe_screen_node_name(owner)
+            button = next((node for node in menu_buttons.get(id(owner), ())
+                           if _renforge_action_contains(getattr(node, "action", None)
+                                                        or getattr(node, "clicked", None), action)), None)
+            if button is None:
+                # A choice screen can draw an item as a button with no action
+                # (`textbutton i.caption action None sensitive False` for
+                # disabled=...). That button is the item: it cannot be chosen.
+                drawn = next((pair for pair in pairs
+                              if getattr(pair[0], "screen", None) is owner
+                              and getattr(getattr(pair[0], "widget", None), "clicked", 0) is None
+                              and pair[1].get("text") == caption), None)
+                if drawn is not None:
+                    drawn[1].update({"menu_index": index, "semantic": True, "enabled": False,
+                                     "clickable": False, "operations": ["click"]})
+                    pairs[pairs.index(drawn)] = (_renforge_focus_clone(
+                        drawn[0], drawn[0].widget, owner, action=action, menu_action=action), drawn[1])
+                    continue
+            focus = types.SimpleNamespace(widget=None, screen=owner, action=action, menu_action=action)
+            pairs.append((focus, {"screen": name, "layer": getattr(owner, "layer", None),
+                "role": "button", "type": "button", "text": caption,
+                "enabled": enabled, "clickable": enabled, "covered": False,
+                "visible": None, "bounds": None, "bounds_reason": "menu entry has no focus rectangle",
+                "semantic": True, "menu_index": index, "ordinal": len(pairs),
+                "action": action.__class__.__name__, "operations": ["click"],
+                "source": _renforge_source_location(button) if button is not None else None,
+                "coordinate_space": "logical"}))
+
+
     def _renforge_observe_focus_pairs(inventory=None):
-        """Collect current controls once; legacy listings are views of these pairs."""
+        """Collect current controls once; legacy listings are views of these pairs.
+
+        Returns ``(pairs, truncated)``: ``(focus, record)`` for the focus list,
+        inputs, bars/viewports/drags, unfocused Buttons, a game's own action
+        widgets, click-anywhere key bindings and unmatched menu entries, in
+        that order, capped at _RENFORGE_OBSERVE_MAX_CONTROLS.
+        """
         if inventory is None:
             inventory = _renforge_scene_inventory()
         pairs = []
@@ -4839,22 +5166,18 @@ init python:
             if context:
                 record["layer"] = context[0]
                 if getattr(focus, "screen", None) is None:
-                    focus = types.SimpleNamespace(widget=widget, screen=context[2],
-                        x=getattr(focus, "x", None), y=getattr(focus, "y", None),
-                        w=getattr(focus, "w", None), h=getattr(focus, "h", None))
+                    focus = _renforge_focus_clone(focus, widget, context[2])
             screen = getattr(focus, "screen", None)
+            value = _renforge_focus_action_value(focus) if menu else None
             for entry_number, (owner, index, caption, action) in enumerate(menu):
                 if owner is not screen:
                     continue
-                value = _renforge_focus_action_value(focus)
                 if _renforge_action_contains(value, action):
                     matched_menu.add(entry_number)
                     record["menu_index"] = index
                     record["text"] = caption
                     record["semantic"] = True
-                    focus = types.SimpleNamespace(widget=widget, screen=owner, action=action,
-                        menu_action=action, x=getattr(focus, "x", None), y=getattr(focus, "y", None),
-                        w=getattr(focus, "w", None), h=getattr(focus, "h", None))
+                    focus = _renforge_focus_clone(focus, widget, owner, action=action, menu_action=action)
                     break
                 if _renforge_action_wraps(value, action):
                     # The item, but a click runs the game's own callback.
@@ -4888,176 +5211,31 @@ init python:
                         and _renforge_focus_action_value(focus) is not None):
                     record["semantic"] = True
             if record.get("bounds"):
-                bounds = record["bounds"]
-                record["center"] = {"x": bounds["x"] + bounds["width"] // 2,
-                                    "y": bounds["y"] + bounds["height"] // 2}
+                record["center"] = _renforge_bounds_center(record["bounds"])
             pairs.append((focus, record))
 
-        for ordinal, focus in enumerate(getattr(getattr(renpy.display, "focus", None), "focus_list", ())):
-            if len(pairs) >= 400:
+        for focus, record in _renforge_focus_list_records():
+            if len(pairs) >= _RENFORGE_OBSERVE_MAX_CONTROLS:
                 focus_truncated = True
                 break
-            widget = getattr(focus, "widget", None)
-            if widget is None:
-                continue
-            values = [getattr(focus, key, None) for key in ("x", "y", "w", "h")]
-            bounds = None
-            if all(value is not None for value in values):
-                try:
-                    x, y, w, h = [int(value) for value in values]
-                    if w <= 0 or h <= 0:
-                        continue
-                    bounds = {"x": x, "y": y, "width": w, "height": h}
-                except (TypeError, ValueError, OverflowError):
-                    pass
-            role = _renforge_observe_role(focus, widget)
-            if bounds is None and not _renforge_observe_operations(_renforge_observe_normalize_role(role)):
-                continue
-            name = _renforge_screen_name(focus)
-            # A viewport scrolls content; that content is readout, not its label.
-            is_viewport = _renforge_observe_normalize_role(role) == "viewport"
-            add(focus, {
-                "screen": name, "role": role,
-                "text": None if is_viewport else (_renforge_focus_text(widget) or None),
-                "enabled": bool(_renforge_focus_enabled(focus, widget)),
-                "clickable": True, "covered": False, "visible": True,
-                "image_name": _renforge_observe_image_name(widget) or _renforge_observe_drag_image(widget),
-                "menu_index": None, "ordinal": ordinal,
-                "action": _renforge_observe_action_class(widget), "bounds": bounds,
-            })
+            add(focus, record)
         for widget, record in _renforge_observe_input_records(seen_widgets, inventory):
             add(types.SimpleNamespace(widget=widget, screen=contexts.get(id(widget), (None, None, None))[2]), record)
         for focus, record in _renforge_observe_kinetic_records(seen_widgets, inventory):
             add(focus, record)
-        behavior = getattr(renpy.display, "behavior", None)
-        button_type = getattr(behavior, "Button", None)
-        if isinstance(button_type, type):
-            for widget, layer, name, screen, _parents in inventory["nodes"]:
-                if id(widget) in seen_widgets or not isinstance(widget, button_type):
-                    continue
-                geometry = _renforge_widget_geometry(widget, inventory)
-                if geometry["visible"] is not True:
-                    continue
-                # Ren'Py leaves a Button out of the focus list when it has no
-                # action (insensitive) or a modal screen hides it.
-                focus = types.SimpleNamespace(widget=widget, screen=screen)
-                add(focus, {"screen": name, "layer": layer, "role": "button",
-                    "text": _renforge_focus_text(widget) or None,
-                    "enabled": (getattr(widget, "clicked", None) is not None
-                                and bool(_renforge_focus_enabled(focus, widget))),
-                    "clickable": True, "covered": False,
-                    "image_name": _renforge_observe_image_name(widget),
-                    "menu_index": None, "ordinal": len(pairs),
-                    "action": _renforge_observe_action_class(widget), **geometry})
-        # A game's own displayable that holds Ren'Py Actions in ``action`` (or
-        # one ``*click*`` attribute, such as ``click_action``) follows the
-        # engine's button convention: running the action is the click.
-        action_type = getattr(getattr(renpy, "ui", None), "Action", None)
-        sensitivity = getattr(behavior, "is_sensitive", None)
-        if isinstance(action_type, type):
-            for widget, layer, name, screen, _parents in inventory["nodes"]:
-                if id(widget) in seen_widgets or type(widget).__module__.startswith("renpy."):
-                    continue
-                attr = _renforge_custom_action_attr(widget)
-                if attr is None:
-                    continue
-                value = getattr(widget, attr, None)
-                actions = _renforge_action_list(value)
-                if not all(isinstance(item, action_type) for item in actions):
-                    continue
-                geometry = _renforge_widget_geometry(widget, inventory)
-                if geometry["visible"] is not True:
-                    continue
-                # As with Ren'Py buttons, no action means insensitive.
-                try:
-                    enabled = bool(actions) and (bool(sensitivity(value)) if callable(sensitivity) else True)
-                except Exception:
-                    enabled = True
-                add(types.SimpleNamespace(widget=widget, screen=screen), {
-                    "screen": name, "layer": layer, "role": "button",
-                    "text": _renforge_focus_text(widget) or None,
-                    "enabled": enabled, "clickable": enabled, "covered": False,
-                    "semantic": True,
-                    "image_name": _renforge_observe_image_name(widget),
-                    "menu_index": None, "ordinal": len(pairs),
-                    "action": _renforge_observe_format_action(value) if value is not None else None,
-                    **geometry})
-        # A screen's `key "mousedown_1" action ...` makes a click anywhere its
-        # control (a tutorial screen that advances only so). Act's
-        # key/ pseudo-controls press keyboard keys, so a left-click binding is
-        # listed as a control that runs its action.
-        keymap_type = getattr(behavior, "Keymap", None)
-        if isinstance(keymap_type, type):
-            for widget, layer, name, screen, _parents in inventory["nodes"]:
-                if screen is None or id(widget) in seen_widgets or not isinstance(widget, keymap_type):
-                    continue
-                bindings = getattr(widget, "keymap", None)
-                if not isinstance(bindings, builtins.dict):
-                    continue
-                for binding in ("mousedown_1", "mouseup_1"):
-                    action = bindings.get(binding)
-                    if action is None:
-                        continue
-                    try:
-                        enabled = bool(sensitivity(action)) if callable(sensitivity) else True
-                    except Exception:
-                        enabled = True
-                    add(types.SimpleNamespace(widget=widget, screen=screen, action=action), {
-                        "screen": name, "layer": layer, "role": "button",
-                        "text": "click anywhere (%s)" % binding,
-                        "enabled": enabled, "clickable": enabled, "covered": False,
-                        "semantic": True, "visible": True,
-                        "bounds": None, "bounds_reason": "a key binding: a click anywhere on the screen",
-                        "image_name": None, "menu_index": None, "ordinal": len(pairs),
-                        "action": _renforge_observe_format_action(action)})
-                    break
+        # The generators read seen_widgets lazily, so each sees the widgets
+        # every earlier collector added.
+        for collect in (_renforge_unfocused_button_records, _renforge_custom_action_records,
+                        _renforge_click_anywhere_records):
+            for focus, record in collect(inventory, seen_widgets):
+                record["ordinal"] = len(pairs)
+                add(focus, record)
         unmatched = [entry for number, entry in enumerate(menu) if number not in matched_menu]
-        # A choice outside the focus list (clipped, or in a transformed
-        # viewport) usually still has its button in the screen's tree; that
-        # button gives the entry its source line.
-        menu_buttons = builtins.dict()
-        if unmatched:
-            owners = builtins.set(id(entry[0]) for entry in unmatched)
-            for node, _layer, _name, screen_node, _parents in inventory["nodes"]:
-                if id(screen_node) in owners and (getattr(node, "action", None) is not None
-                                                  or getattr(node, "clicked", None) is not None):
-                    menu_buttons.setdefault(id(screen_node), builtins.list()).append(node)
-        for owner, index, caption, action in unmatched:
-            sensitivity = getattr(behavior, "is_sensitive", None)
-            enabled = bool(sensitivity(action)) if callable(sensitivity) else True
-            name = _renforge_observe_screen_node_name(owner)
-            button = next((node for node in menu_buttons.get(id(owner), ())
-                           if _renforge_action_contains(getattr(node, "action", None)
-                                                        or getattr(node, "clicked", None), action)), None)
-            if button is None:
-                # A choice screen can draw an item as a button with no action
-                # (`textbutton i.caption action None sensitive False` for
-                # disabled=...). That button is the item: it cannot be chosen.
-                drawn = next((pair for pair in pairs
-                              if getattr(pair[0], "screen", None) is owner
-                              and getattr(getattr(pair[0], "widget", None), "clicked", 0) is None
-                              and pair[1].get("text") == caption), None)
-                if drawn is not None:
-                    widget = drawn[0].widget
-                    drawn[1].update({"menu_index": index, "semantic": True, "enabled": False,
-                                     "clickable": False, "operations": ["click"]})
-                    pairs[pairs.index(drawn)] = (types.SimpleNamespace(
-                        widget=widget, screen=owner, action=action, menu_action=action,
-                        x=getattr(drawn[0], "x", None), y=getattr(drawn[0], "y", None),
-                        w=getattr(drawn[0], "w", None), h=getattr(drawn[0], "h", None)), drawn[1])
-                    continue
-            focus = types.SimpleNamespace(widget=None, screen=owner, action=action, menu_action=action)
-            pairs.append((focus, {"screen": name, "layer": getattr(owner, "layer", None),
-                "role": "button", "type": "button", "text": caption,
-                "enabled": enabled, "clickable": enabled, "covered": False,
-                "visible": None, "bounds": None, "bounds_reason": "menu entry has no focus rectangle",
-                "semantic": True, "menu_index": index, "ordinal": len(pairs),
-                "action": action.__class__.__name__, "operations": ["click"],
-                "source": _renforge_source_location(button) if button is not None else None,
-                "coordinate_space": "logical"}))
+        _renforge_add_unmatched_menu_entries(pairs, unmatched, inventory)
         _renforge_mark_coverage(pairs, inventory)
-        truncated = focus_truncated or len(pairs) > 400 or inventory.get("menu_truncated", False) or inventory["geometry"]["truncated"]
-        pairs = pairs[:400]
+        truncated = (focus_truncated or len(pairs) > _RENFORGE_OBSERVE_MAX_CONTROLS
+                     or inventory.get("menu_truncated", False) or inventory["geometry"]["truncated"])
+        pairs = pairs[:_RENFORGE_OBSERVE_MAX_CONTROLS]
         assigned = _renforge_runtime.interaction.assign_control_ids([record for _focus, record in pairs])
         for (_focus, record), identified in zip(pairs, assigned):
             record.update(identified)
@@ -5141,7 +5319,7 @@ init python:
         return roots
 
 
-    def _renforge_render_geometry(max_nodes=5000):
+    def _renforge_render_geometry(max_nodes=_RENFORGE_OBSERVE_MAX_NODES):
         """Read completed render occurrences without invoking displayable.render.
 
         Plain builtins are used throughout: store literals are rollback-tracked
@@ -5317,12 +5495,18 @@ init python:
 
 
     def _renforge_scene_inventory():
+        """Walk every layer's displayables once for one observe or scene_tree.
+
+        Returns ``nodes`` as (node, layer, screen name, screen node, parent
+        ids), ``named`` screen widget ids, ``truncated`` and the completed
+        render ``geometry``. Screens that are hiding are skipped.
+        """
         # Plain builtins: store literals are rollback-tracked and slow here.
         nodes = builtins.list()
         seen = builtins.set()
         named = builtins.dict()
         stack = builtins.list((root, layer, None, None, ()) for layer, root in reversed(_renforge_scene_roots()))
-        while stack and len(nodes) < 5000:
+        while stack and len(nodes) < _RENFORGE_OBSERVE_MAX_NODES:
             node, layer, screen_name, screen_node, parents = stack.pop()
             if node is None or id(node) in seen or getattr(node, "hiding", False):
                 continue
@@ -5361,7 +5545,53 @@ init python:
         return builtins.dict(nodes=nodes, named=named, truncated=bool(stack), geometry=_renforge_render_geometry())
 
 
+    def _renforge_screen_key(node):
+        """A shown screen's key in screen_first_seen.
+
+        The name guards against a freed screen's id being reused by another.
+        """
+        return (id(node), _renforge_observe_screen_node_name(node))
+
+    def _renforge_screen_first_seen(node, layer, known, generation):
+        """The generation a screen first appeared in, from ``known`` stamps.
+
+        An unknown screen is new with ``generation``, except one a loaded save
+        restored (by name, rebuilt before the first interaction), which was
+        shown before the save: -1.
+        """
+        key = _renforge_screen_key(node)
+        if key in known:
+            return known[key]
+        bridge = _renforge_runtime.bridge
+        restored_at, restored = getattr(bridge, "restored_screens", None) or (None, ())
+        if generation == restored_at and (key[1], layer) in restored:
+            return -1
+        return generation
+
+    def _renforge_stamp_screens():
+        """Stamp each shown screen with the interaction it first appeared in.
+
+        Runs from the start-interaction hook, so a screen shown during an
+        interaction nobody observed still counts as kept up at the next one.
+        Screens no longer on a layer are dropped, so their ids are forgotten.
+        """
+        bridge = _renforge_runtime.bridge
+        if bridge is None:
+            return
+        generation = getattr(bridge, "observe_generation", 0)
+        known = getattr(bridge, "screen_first_seen", None) or {}
+        stamped = builtins.dict()
+        for layer, node in _renforge_scene_roots():
+            if node.__class__.__name__ == "ScreenDisplayable":
+                stamped[_renforge_screen_key(node)] = _renforge_screen_first_seen(node, layer, known, generation)
+        bridge.screen_first_seen = stamped
+
     def _renforge_collect_interaction(inventory=None):
+        """Screens, say dismiss events and truncation for one observe.
+
+        Returns ``(screens, say_dismiss, truncated, screen_nodes)``; each screen
+        record says whether it was kept up from an earlier interaction.
+        """
         if inventory is None:
             inventory = _renforge_scene_inventory()
         screens = []
@@ -5379,24 +5609,27 @@ init python:
         # The interaction each shown screen object first appeared in. One
         # Ren'Py still shows from an earlier interaction, and that is not
         # this interaction's own (say, menu, call screen), was kept up across
-        # lines: a HUD such as a phone or codex button.
+        # lines: a HUD such as a phone or codex button. The start-interaction
+        # hook stamps screens (_renforge_stamp_screens); observe adds only a
+        # screen an action showed after this interaction started.
         bridge = _renforge_runtime.bridge
         generation = getattr(bridge, "observe_generation", 0) if bridge is not None else 0
-        before = getattr(bridge, "screen_first_seen", None) or {}
-        restored_at, restored = getattr(bridge, "restored_screens", None) or (None, ())
+        known = getattr(bridge, "screen_first_seen", None) or {}
         first_seen = {}
+        added = {}
         for node, layer in zip(screen_nodes, layers):
-            if id(node) in before:
-                first_seen[id(node)] = before[id(node)]
-            elif generation == restored_at and (_renforge_observe_screen_node_name(node), layer) in restored:
-                first_seen[id(node)] = -1
-            else:
-                first_seen[id(node)] = generation
-        if bridge is not None:
-            bridge.screen_first_seen = first_seen
+            key = _renforge_screen_key(node)
+            first_seen[key] = _renforge_screen_first_seen(node, layer, known, generation)
+            if key not in known:
+                added[key] = first_seen[key]
+        if bridge is not None and added:
+            merged = builtins.dict(known)
+            merged.update(added)
+            bridge.screen_first_seen = merged
         seen_screens = {}
         for node, layer in zip(screen_nodes, layers):
-            kept_up = (getattr(node, "transient", None) is False and first_seen[id(node)] < generation)
+            kept_up = (getattr(node, "transient", None) is False
+                       and first_seen[_renforge_screen_key(node)] < generation)
             _renforge_observe_record_screen(node, layer, screens, seen_screens, kept_up)
         say_dismiss = _renforge_runtime.interaction.normalize_say_dismiss(dismiss)
         return screens, say_dismiss, inventory["truncated"], screen_nodes
@@ -5405,7 +5638,7 @@ init python:
         """Keep the restored-screen hook in config.after_load_callbacks.
 
         A game may assign its own list during init, after the bridge added
-        the hook (``config.after_load_callbacks = [after_load_setup_custom]``).
+        the hook (``config.after_load_callbacks = [after_load_setup]``).
         """
         after_load = getattr(renpy.config, "after_load_callbacks", None)
         if isinstance(after_load, builtins.list) and not any(
@@ -5432,7 +5665,7 @@ init python:
             for entry in entries:
                 node = getattr(entry, "displayable", None)
                 if node.__class__.__name__ == "ScreenDisplayable":
-                    first_seen[id(node)] = -1
+                    first_seen[_renforge_screen_key(node)] = -1
                     names.add((_renforge_observe_screen_node_name(node), layer))
         bridge.screen_first_seen = first_seen
         # Ren'Py can rebuild a restored screen before the first interaction
@@ -5652,9 +5885,11 @@ init python:
         return True, None
 
 
-    def _renforge_game_lifecycle():
-        # Use engine context flags, never game-defined screen/label names.
-        bridge = _renforge_runtime.bridge
+    def _renforge_engine_main_menu():
+        """True at the engine's main menu, False in gameplay, None when unknown.
+
+        Reads engine context flags, never game-defined screen or label names.
+        """
         try:
             context = renpy.context()
             main_menu = getattr(context, "_main_menu", None)
@@ -5662,13 +5897,29 @@ init python:
                 main_menu = getattr(renpy.store, "main_menu", None)
         except Exception:
             main_menu = None
-        if not isinstance(main_menu, bool):
+        return main_menu if isinstance(main_menu, bool) else None
+
+    def _renforge_commit_ending():
+        """Confirm a pending script return as the ending once the main menu is up.
+
+        Called from the start-interaction hook, so the ``ending`` event fires
+        once whether or not anything observes, and before the player can
+        start a new game. Observe only reads the result.
+        """
+        bridge = _renforge_runtime.bridge
+        if bridge is None or bridge.pending_ending is None or _renforge_engine_main_menu() is not True:
+            return
+        bridge.ending_counter += 1
+        bridge.ending = dict(bridge.pending_ending, id=bridge.ending_counter)
+        bridge.pending_ending = None
+        bridge.push_event("ending", bridge.ending)
+
+    def _renforge_game_lifecycle():
+        """The game's phase (playing, main_menu, ended, unknown) and its ending; a pure read."""
+        bridge = _renforge_runtime.bridge
+        main_menu = _renforge_engine_main_menu()
+        if main_menu is None:
             return {"phase": "unknown", "ending": None}
-        if main_menu and bridge is not None and bridge.pending_ending is not None:
-            bridge.ending_counter += 1
-            bridge.ending = dict(bridge.pending_ending, id=bridge.ending_counter)
-            bridge.pending_ending = None
-            bridge.push_event("ending", bridge.ending)
         ending = bridge.ending if main_menu and bridge is not None else None
         return {"phase": "ended" if ending else "main_menu" if main_menu else "playing",
                 "ending": ending}
@@ -5700,7 +5951,7 @@ init python:
                            bounds.get("width", 0) * bounds.get("height", 0) <= 1)
             relevant = geometry["visible"] is not False and not blocked and pointer
             unclassified = unclassified or relevant
-            if len(candidates) >= 64:
+            if len(candidates) >= _RENFORGE_OBSERVE_MAX_CANDIDATES:
                 unclassified = True
                 break
             if geometry["visible"] is False or not pointer:
@@ -5718,12 +5969,17 @@ init python:
 
 
     def _renforge_observe_raw(screenshot, with_pairs=False, include_readout=True):
+        """The bridge's observation of the current interaction, before classification.
+
+        Reads stability, statement, label, lifecycle, dialogue, screens,
+        controls, readout, input candidates and key bindings; changes no game
+        state. ``with_pairs`` also returns the (focus, record) pairs that act
+        and select_choice use.
+        """
         bridge = _renforge_runtime.bridge
         interaction = 0
-        label = None
         if bridge is not None:
             interaction = int(getattr(bridge, "observe_generation", 0) or 0)
-            label = bridge.current_label if isinstance(bridge.current_label, str) else None
         stable, reason = _renforge_observe_stability()
         inventory = _renforge_scene_inventory()
         screens, say_dismiss, walk_truncated, screen_nodes = _renforge_collect_interaction(inventory)
@@ -8809,8 +9065,18 @@ init python:
             if event == "begin":
                 bridge.say_id += 1
                 bridge.say_recorded = False
+                # last_say stays this interaction's dialogue until the line
+                # is over; say_stale_from is the first generation that is not.
+                bridge.say_stale_from = None
             if event == "end":
                 bridge.say_ended_generation = bridge.observe_generation
+                # A line shown with interact=False (a menu's caption) stays up
+                # for the next interaction; any other line ends with this one.
+                held = kwargs.get("interact", True) is False
+                bridge.say_stale_from = bridge.observe_generation + (2 if held else 1)
+            if event == "interact_done" and kwargs.get("exception"):
+                # Rollback or an error left the line without its "end".
+                bridge.say_stale_from = bridge.observe_generation + 1
             if event in ("begin", "show") and what and not bridge.say_recorded:
                 bridge.say_recorded = True
                 previous_say = bridge.last_say
@@ -8869,6 +9135,8 @@ init python:
                 if operation["steps"] >= operation["max_steps"]:
                     _renforge_progress_finish("max_steps")
             bridge.observe_generation = int(getattr(bridge, "observe_generation", 0)) + 1
+            _renforge_stamp_screens()
+            _renforge_commit_ending()
             if not getattr(bridge, "transitions_applied", False):
                 # Preferences exist by the first interaction. The launcher asks
                 # for this only when the session's preferences are isolated.
