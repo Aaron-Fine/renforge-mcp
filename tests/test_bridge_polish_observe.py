@@ -433,3 +433,30 @@ def test_scene_tree_max_nodes_does_not_turn_controls_into_input_candidates(runni
 
     assert running_bridge.client.scene_tree()["input_candidates"] == []
     assert running_bridge.client.scene_tree(max_nodes=2)["input_candidates"] == []
+
+
+# --- unmatched menu entries ----------------------------------------------------
+
+
+def test_menu_entry_whose_sensitivity_raises_does_not_break_observe(running_bridge):
+    """Like the other collectors, a raising get_sensitive leaves the entry enabled."""
+    renpy = running_bridge.renpy
+
+    class Choose:
+        pass
+
+    choice = ScreenDisplayable("choice", True)
+    choice.scope = {"items": [types.SimpleNamespace(caption="Left", action=Choose())]}
+    _show_screens(renpy, choice)
+
+    def is_sensitive(action):
+        raise RuntimeError("a game action's get_sensitive failed")
+
+    renpy.display.behavior.is_sensitive = is_sensitive
+    renpy.config.start_interact_callbacks[0]()
+
+    reply = running_bridge.client.observe(screenshot=False)
+
+    assert reply.get("error") is None, reply
+    entry = next(element for element in reply["elements"] if element.get("menu_index") == 0)
+    assert entry["text"] == "Left" and entry["enabled"] is True
