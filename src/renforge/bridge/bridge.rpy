@@ -2657,26 +2657,28 @@ init python:
         return result
 
     def _renforge_hit_stack(x, y):
-        """Return the focus a click would hit, plus other rectangles at the point."""
+        """Return the focus a click would hit, plus other rectangles at the point.
+
+        ``topmost`` is what Ren'Py's own hit test names. When the engine says
+        the point hits nothing (a transparent part of a masked button), there
+        is no receiver and the rectangles there are all ``underneath``. Only
+        without a completed render does the topmost rectangle stand in.
+        """
         elements = _renforge_focusable_elements()
         hit = _renforge_render_hit(x, y)
         hits = [(focus, element) for focus, element in elements
                 if element.get("covered") is not True
                 and _renforge_bounds_contain(element.get("bounds") or {}, x, y)]
-        topmost = hits[-1][1] if hits else None
+        topmost = hits[-1][1] if hits and hit == "unavailable" else None
         if hit == "modal":
-            topmost = None
             hits = []
         elif isinstance(hit, tuple) and hit[0] == "displayable":
+            topmost = hits[-1][1] if hits else None
             for focus, element in elements:
                 if getattr(focus, "widget", None) is hit[1]:
                     topmost = element
                     break
-        underneath = []
-        if topmost is not None:
-            for _focus, element in reversed(hits):
-                if element is not topmost:
-                    underneath.append(element)
+        underneath = [element for _focus, element in reversed(hits) if element is not topmost]
         result = {
             "ok": True,
             "x": x,
@@ -2686,11 +2688,7 @@ init python:
             "underneath": underneath,
         }
         if topmost is not None and underneath:
-            result["warning"] = (
-                "The intended button is covered by another interactive displayable."
-                if False
-                else "Multiple interactive displayables overlap this point."
-            )
+            result["warning"] = "Multiple interactive displayables overlap this point."
         return result
 
     def _renforge_h_hit_test(payload):

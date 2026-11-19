@@ -172,3 +172,32 @@ def test_selected_follows_is_selected_on_engines_without_a_style_prefix(running_
 
     assert focus_text(OlderButton(False)) == "Save selected"
     assert focus_text(OlderButton(True)) == "Save"
+
+
+# --- hit tests ---------------------------------------------------------------
+
+
+def _one_button_elements(running_bridge, monkeypatch, hit):
+    globs = running_bridge.globs
+    focus = _FakeFocus("Go", 10, 10, 100, 20)
+    element = {"id": "go", "text": "Go", "covered": None, "clickable": False,
+               "bounds": {"x": 10, "y": 10, "width": 100, "height": 20}}
+    monkeypatch.setitem(globs, "_renforge_focusable_elements", lambda *a, **k: [(focus, element)])
+    monkeypatch.setitem(globs, "_renforge_render_hit", lambda x, y: hit)
+    return element
+
+
+def test_hit_test_reports_no_receiver_when_the_engine_hits_nothing(running_bridge, monkeypatch):
+    """A transparent part of a masked button, or a gap no render focuses."""
+    _one_button_elements(running_bridge, monkeypatch, "none")
+    hit = running_bridge.client.hit_test(60, 20)
+    assert hit["ok"] is True
+    assert hit["topmost"] is None
+    assert [element["id"] for element in hit["underneath"]] == ["go"]
+
+
+def test_hit_test_falls_back_to_rectangles_without_a_render(running_bridge, monkeypatch):
+    _one_button_elements(running_bridge, monkeypatch, "unavailable")
+    hit = running_bridge.client.hit_test(60, 20)
+    assert hit["topmost"]["id"] == "go"
+    assert hit["underneath"] == []
