@@ -9,12 +9,11 @@ stays the source of truth via ``lint``.
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from typing import Any
 
-from .util.files import read_text_nofollow, resolves_inside
+from .util.files import read_text_nofollow, resolves_inside, walk_nofollow
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".tga", ".bmp"}
 AUDIO_EXTS = {".ogg", ".opus", ".mp3", ".wav", ".flac", ".m4a", ".aac", ".mp2", ".wma"}
@@ -33,7 +32,7 @@ def _game_dir(project_path: str | Path) -> Path:
 
 
 def _iter_rpy(game: Path):
-    for root, _dirs, files in os.walk(game):
+    for root, _dirs, files in walk_nofollow(game):
         for name in files:
             path = Path(root) / name
             # A linked .rpy could point anywhere; its strings would be reported.
@@ -65,7 +64,7 @@ def analyze_assets(project_path: str | Path) -> dict[str, Any]:
 
     # 1. Asset files on disk (relative to game/, posix-style).
     disk_files: list[str] = []
-    for root, _dirs, files in os.walk(game):
+    for root, _dirs, files in walk_nofollow(game):
         for name in files:
             if Path(name).suffix.lower() in ASSET_EXTS:
                 rel = (Path(root) / name).relative_to(game).as_posix()

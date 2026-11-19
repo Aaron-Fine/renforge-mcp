@@ -15,7 +15,7 @@ from typing import Any
 from .project import RenpyProject
 from .save_isolation import renpy_tool_environment
 from .sdk import RenpySdk
-from .util.files import read_text_nofollow, resolves_inside
+from .util.files import read_text_nofollow, resolves_inside, walk_nofollow
 from .util.subprocess import run_command
 
 _TL_DIR = "tl"
@@ -171,7 +171,8 @@ def list_translation_strings(project_path: str | Path, language: str) -> list[di
     )
     
     # scan for any .rpy files under the language directory
-    for rpy_file in sorted(tl_dir.glob("**/*.rpy")):
+    rpy_files = (Path(folder) / name for folder, _dirs, names in walk_nofollow(tl_dir) for name in names)
+    for rpy_file in sorted(path for path in rpy_files if path.suffix == ".rpy"):
         try:
             content = read_text_nofollow(rpy_file)
         except Exception:

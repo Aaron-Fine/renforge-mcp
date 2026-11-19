@@ -30,6 +30,7 @@ from ..save_isolation import STATE_MODE_TOKENS, launch_state_mode_error
 from ..state import project_state_dir
 from ..tools import live
 from ..tools import project_ops
+from ..util.files import walk_nofollow
 from .activity import read_recent_activity, tail_activity
 from .graph import build_story_map, resolve_game_file_path, resolve_warp_target
 from .errors import error_response
@@ -213,9 +214,10 @@ def _list_script_files(project_root: Path) -> dict[str, Any]:
         return {"ok": True, "files": []}
     try:
         files = sorted(
-            "game/" + path.relative_to(game_root).as_posix()
-            for path in game_root.rglob("*.rpy")
-            if path.is_file()
+            "game/" + (Path(folder) / name).relative_to(game_root).as_posix()
+            for folder, _dirs, names in walk_nofollow(game_root)
+            for name in names
+            if name.endswith(".rpy") and (Path(folder) / name).is_file()
         )
     except OSError:
         return {"ok": False, "error": "could not list project scripts", "files": []}

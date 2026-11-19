@@ -11,6 +11,7 @@ from ..project import RenpyProject
 from ..sdk import get_or_install_sdk
 from ..scanner import scan_project
 from ..state import project_state_dir
+from ..util.files import walk_nofollow
 
 
 _STORY_MAP_CACHE: dict[Path, tuple[tuple[Any, ...], dict[str, Any]]] = {}
@@ -97,7 +98,8 @@ def _story_map_signature(project_root: Path) -> tuple[tuple[Any, ...], tuple[int
     game_root = project_root / "game"
     entries: list[tuple[str, int, int]] = []
     if game_root.exists():
-        for file_path in sorted(game_root.rglob("*.rpy")):
+        scripts = (Path(folder) / name for folder, _dirs, names in walk_nofollow(game_root) for name in names)
+        for file_path in sorted(path for path in scripts if path.suffix == ".rpy"):
             try:
                 stats = file_path.stat()
             except OSError:
