@@ -153,6 +153,55 @@ def test_enforce_denies_open_world_and_destructive_without_authorize(monkeypatch
     assert default_launch.risk == RISK_DESTRUCTIVE
 
 
+@pytest.mark.parametrize("isolation_env, params, risk", [
+    # The rule the launch tool descriptions state (tool_definitions._LAUNCH_POLICY).
+    (None, {}, RISK_DESTRUCTIVE),
+    (None, {"savedir": "auto", "home": "auto"}, RISK_DESTRUCTIVE),
+    (None, {"savedir": "temporary"}, RISK_MUTATING),
+    (None, {"savedir": "temporary", "home": "temporary"}, RISK_MUTATING),
+    (None, {"savedir": "temporary", "home": "existing"}, RISK_DESTRUCTIVE),
+    (None, {"savedir": "STATE/saves"}, RISK_DESTRUCTIVE),
+    (None, {"savedir": "STATE/saves", "home": "temporary"}, RISK_MUTATING),
+    (None, {"savedir": "STATE/saves", "home": "STATE/home"}, RISK_MUTATING),
+    ("temporary", {}, RISK_MUTATING),
+    ("temporary", {"savedir": "STATE/saves"}, RISK_MUTATING),
+    ("temporary", {"savedir": "existing"}, RISK_DESTRUCTIVE),
+])
+@pytest.mark.parametrize("tool", ["renforge_launch", "renforge_jump", "renforge_new_game"])
+def test_launch_policy_matches_the_rule_the_descriptions_state(
+    tmp_path, monkeypatch, isolation_env, params, risk, tool
+) -> None:
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    if isolation_env is not None:
+        monkeypatch.setenv("RENFORGE_ISOLATION", isolation_env)
+    knobs = {key: value.replace("STATE", str(tmp_path / "state" / "projects" / "p")) for key, value in params.items()}
+
+    decision = evaluate(tool, {"target": "start", **knobs} if tool == "renforge_jump" else knobs)
+
+    assert decision.risk == risk
+    assert decision.allowed is (risk == RISK_MUTATING)
+
+
+@pytest.mark.parametrize("tool, params", [
+    ("renforge_launch", {}),
+    ("renforge_jump", {"target": "start"}),
+    ("renforge_new_game", {}),
+    ("renforge_launch", {"savedir": "existing"}),
+])
+def test_a_denied_launch_points_to_an_isolated_launch_first(monkeypatch, tool, params) -> None:
+    """With isolation opt-in, the common denial is a launch with no knobs; most agents want isolation."""
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    decision = evaluate(tool, params)
+
+    assert decision.allowed is False
+    assert "no savedir" in decision.reason
+    assert 'savedir="temporary"' in decision.next_step
+    assert decision.next_step.index('savedir="temporary"') < decision.next_step.index("authorize=true")
+    # Other destructive operations keep the generic advice.
+    assert 'savedir="temporary"' not in evaluate("renforge_control", {"action": "quit"}).next_step
+
+
 def test_enforce_allows_authorized_and_allowlisted_calls(monkeypatch) -> None:
     monkeypatch.setenv("RENFORGE_POLICY", "enforce")
     authorized = evaluate("renforge_eval", {"expr": "1+1", "authorize": True})

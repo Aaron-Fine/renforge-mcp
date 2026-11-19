@@ -279,9 +279,12 @@ def build_wrappers(context):
         as before; pass savedir='temporary' (or set RENFORGE_ISOLATION=temporary
         server-wide) to isolate saves, persistent data, preferences, and HOME in
         a disposable session folder. The ready payload includes ``session_id``
-        and an ``isolation`` object. A launch that keeps the user's saves or
-        HOME, or writes to a folder outside RenForge's own, requires
-        authorize=true when RENFORGE_POLICY=enforce. timeout controls the
+        and an ``isolation`` object. Under RENFORGE_POLICY=enforce a launch
+        needs authorize=true unless its saves and HOME both stay in
+        RenForge's own folders (savedir='temporary' with home omitted or
+        'temporary', or state-folder paths), so by default one with no
+        isolation knobs needs it; pass savedir='temporary' instead. The rule
+        is stated once in tool_definitions._LAUNCH_POLICY. timeout controls the
         background startup deadline, not the MCP call (default 180 s, or
         RENFORGE_STARTUP_TIMEOUT).
         ``language`` sets ``RENPY_LANGUAGE`` for a fresh game process. Ren'Py
@@ -358,8 +361,10 @@ def build_wrappers(context):
     ) -> dict:
         """Restart at a label or file:line; poll launch status when still starting.
 
-        Isolation knobs match ``renforge_launch``. Exposing the user save tree
-        requires authorize=true when RENFORGE_POLICY=enforce.
+        Isolation knobs and the RENFORGE_POLICY=enforce rule match
+        ``renforge_launch``; the policy judges these knobs, not the game
+        being replaced, so with no knobs this needs authorize=true unless
+        RENFORGE_ISOLATION=temporary. Pass savedir='temporary' instead.
         """
         from ..navigation import resolve_warp_target
 
@@ -407,8 +412,10 @@ def build_wrappers(context):
     ) -> dict:
         """Start at the ``start`` label; poll launch status when still starting.
 
-        Isolation knobs match ``renforge_launch``. Exposing the user save tree
-        requires authorize=true when RENFORGE_POLICY=enforce.
+        Isolation knobs and the RENFORGE_POLICY=enforce rule match
+        ``renforge_launch``; the policy judges these knobs, not the game
+        being replaced, so with no knobs this needs authorize=true unless
+        RENFORGE_ISOLATION=temporary. Pass savedir='temporary' instead.
         """
         from ..navigation import resolve_warp_target
 

@@ -16,10 +16,14 @@ versioning.
   (the shared temp dir is not RenForge's), since the game writes its saves,
   persistent data, and config there. With isolation opt-in (0.7.6), that
   includes a launch that passes none of the isolation options unless
-  `RENFORGE_ISOLATION=temporary`; pass `savedir=temporary` to launch without
-  `authorize`. `renforge_launch`, `renforge_jump` and `renforge_new_game`
-  keep their `authorize` parameter for this. The policy reads the path the
-  launch uses, stripped and expanded.
+  `RENFORGE_ISOLATION=temporary`, and a `savedir` path with `home` omitted
+  (it keeps the player's HOME); pass `savedir=temporary` to launch without
+  `authorize`. A `renforge_jump` or `renforge_new_game` is judged by its own
+  arguments, so one with no isolation options needs `authorize` even when it
+  would inherit an isolated game's isolation. `renforge_launch`,
+  `renforge_jump` and `renforge_new_game` keep their `authorize` parameter
+  for this, and a denied launch's `next_step` names `savedir="temporary"`
+  first. The policy reads the path the launch uses, stripped and expanded.
 - A launch reuses a running game only when it matches the request. On top
   of 0.7.6's per-component check, it is refused with
   `SESSION_ISOLATION_MISMATCH` when a launch that needs no authorization
@@ -34,9 +38,19 @@ versioning.
   that cannot is assumed to match neither, and one that answers without
   `eval_enabled` (an upstream bridge) is assumed to run code. A game this
   server did not start counts as in RenForge's own folders only when its
-  HOME and every save location it reports are. Launches through the dashboard
+  HOME and every save location it reports are (the state folder, where
+  `renforge_session` keeps its saves, or a session root) and none of them
+  resolves into the player's save tree; a `renforge_session` game started by
+  another server is reused and reported as isolated. Launches through the dashboard
   pass the calling server's `bridge_eval`, so a play-only server's game
   refuses eval even when the dashboard's own toolsets allow it.
+- The fork's wider "might be the player's" test (any game's `game/saves`,
+  host paths compared case-insensitively, a HOME whose Ren'Py folder links
+  into the host tree) applies to what a running game exposes, the policy
+  gate, import destinations, and reports. What a launch request gives up,
+  and what a `renforge_jump`, `renforge_new_game`, or Warp relaunch inherits
+  from the game it replaces, use 0.7.6's narrower test, so neither hands out
+  more of the player's storage than 0.7.6 does for the same arguments.
 - `renforge_session` `save`, `load`, and `list` act only on a game whose
   saves and HOME are in RenForge's own folders (the state folder or a
   session root, by what its bridge reports). Any other running game, such as

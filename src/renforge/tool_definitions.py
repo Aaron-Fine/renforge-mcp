@@ -86,11 +86,28 @@ _ISOLATION_PARAMETERS = {
     ),
 }
 
+# The one statement of when policy.evaluate calls a launch destructive
+# (_classify_launch); keep it, the authorize text and docs/POLICY.md in step.
+_LAUNCH_POLICY = (
+    "Under `RENFORGE_POLICY=enforce` this call needs `authorize=true` unless the game's saves and HOME both stay in "
+    "RenForge's own folders once `RENFORGE_ISOLATION` fills in omitted options: `savedir=temporary` with `home` "
+    "omitted or `temporary`, or `savedir`/`home` paths inside the RenForge state folder. Omitted (or `auto`) options "
+    "mean the user's saves and HOME unless `RENFORGE_ISOLATION=temporary`, so by default a call with no isolation "
+    "options needs `authorize=true`, and so does a `savedir` path with `home` omitted (it keeps the user's HOME). "
+    "Pass `savedir=temporary` to stay isolated without `authorize`. "
+)
+
+_RELAUNCH_POLICY = _LAUNCH_POLICY + (
+    "The policy judges the request, not the game it replaces, so this holds even when a call with no isolation "
+    "options would inherit an isolated game's isolation. "
+)
+
 _LAUNCH_AUTHORIZE = (
     "Pass `authorize=true` when `RENFORGE_POLICY=enforce` and the game would keep its saves or HOME outside RenForge's "
-    "own folders: the default (no isolation knob, unless `RENFORGE_ISOLATION=temporary`), `savedir` or `home` set to "
-    "`existing`, a host save or HOME path, or any other path outside the RenForge state folder, the shared temp dir "
-    "included. Isolated launches (`savedir=temporary` with `home` omitted or `temporary`) do not need this."
+    "own folders: no isolation options (unless `RENFORGE_ISOLATION=temporary`), `savedir` or `home` set to "
+    "`existing`, a `savedir` path with `home` omitted, a host save or HOME path, or any other path outside the "
+    "RenForge state folder, the shared temp dir included. Isolated launches (`savedir=temporary` with `home` omitted "
+    "or `temporary`) do not need this; prefer them."
 )
 
 _ISOLATION_PARAMETER_SCHEMAS = {
@@ -305,8 +322,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and "
             "publish authenticated ownership/bridge metadata under `<state>/control/`, where `<state>` is this project's RenForge "
             "folder outside the game (`RENFORGE_STATE_DIR` or `~/.local/state/renforge`, then `projects/<name>-<hash>`). `renforge_stop` removes only owned "
-            "session artifacts. A launch that keeps the user's saves or HOME (the default unless `RENFORGE_ISOLATION=temporary`), "
-            "or writes to any path outside the RenForge state folder, requires `authorize=true` when `RENFORGE_POLICY=enforce`. "
+            "session artifacts. " + _LAUNCH_POLICY +
             "Copy selected host slots into an isolated session with `renforge_saves(action=\"import\")` instead of "
             "bind-mounting the user tree."
         ),
@@ -387,7 +403,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "Restart into a specific label/file position and keep interacting in a fresh game session. If needed, this may "
             "download and cache the required SDK before restart. Isolation matches `renforge_launch` (opt in with "
             "`savedir=temporary`). With every isolation knob omitted or `auto`, a relaunch that replaces an isolated game this server (or its dashboard) owns stays isolated; it still gets a fresh session, so slots imported into the old one are not carried over. "
-            "Under `RENFORGE_POLICY=enforce` the policy judges the request, not the game it replaces: anything but `savedir=temporary` (or a path in the RenForge state folder) requires `authorize=true`. "
+            + _RELAUNCH_POLICY +
             "Use for deterministic positioning before scripted checks."
         ),
         annotations=_ann(
@@ -409,7 +425,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         description=(
             "Restart at `start` and begin a new story progression. This may download and cache the required SDK before the "
             "fresh launch. Isolation matches `renforge_launch` (opt in with `savedir=temporary`). With every isolation knob omitted or `auto`, a relaunch that replaces an isolated game this server (or its dashboard) owns stays isolated; it still gets a fresh session, so slots imported into the old one are not carried over. "
-            "Under `RENFORGE_POLICY=enforce` the policy judges the request, not the game it replaces: anything but `savedir=temporary` (or a path in the RenForge state folder) requires `authorize=true`. "
+            + _RELAUNCH_POLICY +
             "Prefer this for clean scenario entry rather than reusing unstable runtime state."
         ),
         annotations=_ann(

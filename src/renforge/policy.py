@@ -122,6 +122,22 @@ _REASONS = {
     RISK_MALFORMED: "The requested operation could not be classified from the supplied parameters.",
 }
 
+# A launch is destructive when it reaches the player's storage or a folder
+# outside RenForge's own. With isolation opt-in the common case is a launch
+# with no knobs, and most agents want an isolated session, so say that first.
+_LAUNCH_REASON = (
+    "This launch can read and write the user's Ren'Py saves or HOME, or writes saves and settings "
+    "into a folder outside RenForge's own. A launch with no savedir (or savedir=auto) uses the "
+    "user's saves and HOME unless RENFORGE_ISOLATION=temporary; so do savedir=existing and "
+    "home=existing. A jump/new_game with no knobs is judged the same way, whatever game it replaces."
+)
+_LAUNCH_NEXT_STEP = (
+    'Pass savedir="temporary" (with home omitted or "temporary") to launch an isolated session, '
+    "which needs no authorization. To use the user's saves or the folder you named, retry with "
+    "authorize=true, add this operation to RENFORGE_POLICY_ALLOW, or set RENFORGE_POLICY=off for "
+    "trusted local automation."
+)
+
 _NEXT_STEPS = {
     RISK_DESTRUCTIVE: (
         "Retry with authorize=true, add this operation to RENFORGE_POLICY_ALLOW, "
@@ -308,6 +324,8 @@ def evaluate(
         risk,
         "No authorization is required for this operation.",
     )
+    if risk == RISK_DESTRUCTIVE and operation in _LAUNCH_TOOLS:
+        reason, next_step = _LAUNCH_REASON, _LAUNCH_NEXT_STEP
     if resolved.mode == MODE_OFF:
         return PolicyDecision(
             operation=operation,

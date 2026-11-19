@@ -77,8 +77,12 @@ def _instructions(toolsets: list[str]) -> str:
         )
     parts.append(
         "RENFORGE_POLICY defaults to off; when set to enforce, destructive and "
-        "open-world operations (eval, quit, load, reload_script, mod writes, and "
-        "matching scenario steps) require authorize=true or an allowlist."
+        "open-world operations (eval, quit, load, reload_script, mod writes, "
+        "reading the player's saves, matching scenario steps, and any launch, "
+        "jump or new_game whose saves and HOME are not both in RenForge's own "
+        "folders, which by default includes one with no isolation options) require "
+        "authorize=true or an allowlist. Pass savedir=\"temporary\" to launch, jump "
+        "or start a new game isolated without authorize."
     )
     return " ".join(parts)
 
