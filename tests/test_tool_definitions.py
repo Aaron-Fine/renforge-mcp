@@ -36,7 +36,7 @@ def test_tool_definitions_cover_all_registered_tools_and_parameters() -> None:
 
     expected = set(TOOL_DEFINITIONS)
     assert set(registered) == expected
-    assert len(registered) == 60
+    assert len(registered) == 61
 
     for name, definition in TOOL_DEFINITIONS.items():
         tool = registered[name]
@@ -88,6 +88,7 @@ def test_emitted_tool_schemas_encode_options_limits_and_required_relationships()
     assert launch["savedir"]["default"] == "auto"
     assert launch["home"]["default"] == "auto"
     assert launch["timeout"]["minimum"] == 0
+    assert launch["language"]["maxLength"] == 64
 
     compact = schemas["renforge_game_state_compact"]["properties"]
     assert compact["state_profile"]["enum"] == ["minimal", "interaction", "debug", "full"]
@@ -338,6 +339,7 @@ def test_tool_annotations_are_conservative_for_conditional_and_sdk_side_effects(
     }
 
     sdk_backed_tools = {
+        "renforge_validate",
         "renforge_launch",
         "renforge_jump",
         "renforge_new_game",
@@ -404,11 +406,12 @@ def test_catalog_states_exact_runtime_and_filesystem_contracts() -> None:
     assert "user's normal" in launch.parameters["savedir"].lower()
     assert "`existing`" in launch.parameters["savedir"]
     assert "renforge_isolation" in launch.parameters["savedir"].lower()
-    assert "authorize=true" in launch.parameters["savedir"]
+    assert "`temporary` isolates" in launch.parameters["savedir"]
     assert "private directory" in launch.parameters["home"].lower()
     assert "preference" in launch.parameters["preferences"].lower()
     assert "only" in launch.parameters["cleanup_on_stop"].lower()
     assert "disposable session directory" in launch.parameters["cleanup_on_stop"].lower()
+    # The fork keeps the launch gate: leaving RenForge's own folders needs authorize.
     assert "authorize=true" in launch.parameters["authorize"]
     assert "session_id" in launch.description
     assert "isolation" in launch.description.lower()
@@ -417,7 +420,15 @@ def test_catalog_states_exact_runtime_and_filesystem_contracts() -> None:
     assert "savedir" in jump.parameters
     assert "authorize" in jump.parameters
     assert "temporary" in jump.description.lower()
+    assert "savedir=temporary" in definitions["renforge_new_game"].description
     assert "authorize=true" in definitions["renforge_new_game"].description
+    language = launch.parameters["language"].lower()
+    assert "renpy_language" in language
+    assert "preferences.language" in language
+    assert "stored preference" in language
+    assert "savedir='temporary'" in language
+    assert "session only" not in language
+    assert "already-running" in language
 
     launch_status = definitions["renforge_launch_status"].description.lower()
     for status in ("idle", "starting", "ready", "failed", "closing", "closed"):
@@ -614,3 +625,33 @@ def test_get_var_description_does_not_promise_zero_user_code() -> None:
         "destructiveHint": True,
         "openWorldHint": True,
     }
+
+
+def test_validate_tool_documents_the_clean_shadow_contract() -> None:
+    definition = TOOL_DEFINITIONS["renforge_validate"]
+    description = definition.description.lower()
+
+    assert "clean shadow" in description
+    assert "no live session artifacts" in description
+    assert "staged bytes" in description
+    assert "never publishes staged or copied bytes" in description
+    assert "does not sandbox arbitrary writes" in description
+    assert "skipped_links" in description
+    assert "zero-byte placeholder" in description
+    assert "degraded=true" in description
+    assert "renforge_shadow_max_files" in description
+    assert "renforge_shadow_max_bytes" in description
+    assert "renforge_shadow_max_dirs" in description
+    assert "timeout or truncated" in description
+    assert "--error-code" in description
+    assert definition.annotations == {
+        "readOnlyHint": False,
+        "idempotentHint": False,
+        "destructiveHint": False,
+        "openWorldHint": True,
+    }
+    assert "only" in definition.parameters["checks"].lower()
+    assert "project-relative" in definition.parameters["staged"].lower()
+    assert "game-relative" in definition.parameters["staged"].lower()
+    assert "shadow_path" in definition.parameters["keep_shadow"]
+    assert definition.parameter_schemas["timeout"] == {"minimum": 0, "maximum": 600}

@@ -21,13 +21,15 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from .. import session_registry
+from ..bridge.launcher import normalize_language
+from ..launch_env import LaunchError
 from ..tools import live
 from ..tools import project_ops
 from ..lint import run_lint
 from ..interaction import _real_number
 from ..launch_env import AUDIO_STRATEGIES, DISPLAY_STRATEGIES
 from ..policy import CONTROL_ACTIONS
-from ..save_isolation import STATE_MODE_TOKENS
+from ..save_isolation import STATE_MODE_TOKENS, launch_state_mode_error
 from .activity import read_recent_activity, tail_activity
 from .graph import build_story_map, resolve_game_file_path, resolve_warp_target
 from .errors import error_response
@@ -680,6 +682,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 **{field: launch_kwargs.get(field)
                    for field in ("savedir", "home", "persistent", "preferences", "bridge_eval")},
             ),
+            language=launch_kwargs.get("language"),
         )
 
     def _isolation_option_error(payload: dict[str, Any]):
@@ -696,7 +699,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 details={"savedir": savedir},
             )
         if persistent is not None and (
-            not isinstance(persistent, str) or persistent.strip() not in STATE_MODE_TOKENS
+            not isinstance(persistent, str) or persistent.strip().lower() not in STATE_MODE_TOKENS
         ):
             return error_response(
                 code="launch_persistent_invalid",
@@ -712,13 +715,29 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 details={"home": home},
             )
         if preferences is not None and (
-            not isinstance(preferences, str) or preferences.strip() not in STATE_MODE_TOKENS
+            not isinstance(preferences, str) or preferences.strip().lower() not in STATE_MODE_TOKENS
         ):
             return error_response(
                 code="launch_preferences_invalid",
                 error="preferences must be 'auto', 'existing', or 'empty'",
                 status_code=400,
                 details={"preferences": preferences},
+            )
+        # Each field is valid on its own; some pairs are not (empty state
+        # needs a temporary savedir). Refuse those before any SDK work.
+        combined = launch_state_mode_error(
+            savedir=savedir, home=home, persistent=persistent, preferences=preferences
+        )
+        if combined is not None:
+            return error_response(
+                code="launch_state_mode_conflict",
+                error=combined,
+                status_code=400,
+                details={
+                    "savedir": savedir,
+                    "persistent": persistent,
+                    "preferences": preferences,
+                },
             )
         return None
 
@@ -844,6 +863,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
         preferences = payload.get("preferences")
         cleanup_on_stop = payload.get("cleanup_on_stop", True)
         timeout = payload.get("timeout")
+        language = payload.get("language")
         start_label = payload.get("start_label")
         bridge_eval = payload.get("bridge_eval")
         if bridge_eval is not None and not isinstance(bridge_eval, bool):
@@ -879,6 +899,16 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
         option_error = _launch_option_error(payload)
         if option_error is not None:
             return option_error
+        if language is not None:
+            try:
+                language = normalize_language(language)
+            except LaunchError as exc:
+                return error_response(
+                    code="launch_language_invalid",
+                    error=exc.message,
+                    status_code=400,
+                    details={"language": payload.get("language")},
+                )
         result = await asyncio.to_thread(
             _start_live_launch,
             version=version,
@@ -894,6 +924,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             preferences=preferences,
             start_label=start_label,
             bridge_eval=bridge_eval,
+            language=language,
         )
         return JSONResponse(result)
 
@@ -907,6 +938,22 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
         if not await _check_token(request):
             return _unauthorized(request)
         result = await asyncio.to_thread(live.stop_game, str(runtime.root))
+        return JSONResponse(result)
+
+    async def saves_import(request: Request):
+        if not await _check_token(request):
+            return _unauthorized(request)
+        payload = _as_dict(await _read_json(request))
+        # live.saves validates the selectors (types and lengths) and answers a
+        # malformed one with SAVE_IMPORT_INVALID, the code the caller relays.
+        result = await asyncio.to_thread(
+            live.saves,
+            str(runtime.root),
+            "import",
+            slot=payload.get("slot"),
+            slots=payload.get("slots"),
+            pattern=payload.get("pattern"),
+        )
         return JSONResponse(result)
 
     async def select_choice(request: Request):
@@ -1032,6 +1079,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
         Route("/api/live/launch", launch, methods=["POST"]),
         Route("/api/live/status", launch_status, methods=["GET"]),
         Route("/api/live/stop", stop, methods=["POST"]),
+        Route("/api/live/saves/import", saves_import, methods=["POST"]),
         Route("/api/select-choice", select_choice, methods=["POST"]),
         Route("/api/eval", eval_route, methods=["POST"]),
         Route("/api/set-var", set_var, methods=["POST"]),

@@ -13,6 +13,8 @@ from urllib.request import Request, urlopen
 from .session_registry import dashboard_connection
 
 _HTTP_TIMEOUT_SECONDS = 45.0
+# An import copies whole save files while holding the session open.
+_IMPORT_TIMEOUT_SECONDS = 300.0
 
 
 def _dashboard_failure(
@@ -39,6 +41,7 @@ def _request(
     operation: str,
     method: str = "POST",
     body: dict[str, Any] | None = None,
+    timeout: float = _HTTP_TIMEOUT_SECONDS,
 ) -> dict[str, Any] | None:
     """Talk to the matching dashboard.
 
@@ -69,7 +72,7 @@ def _request(
     request = Request(endpoint, data=data, headers=headers, method=method.upper())
     try:
         # The URL is the dashboard RenForge registered for this project.
-        with urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:  # nosec B310
+        with urlopen(request, timeout=timeout) as response:  # nosec B310
             raw = response.read().decode("utf-8")
             payload = json.loads(raw) if raw.strip() else {}
     except HTTPError as exc:
@@ -98,7 +101,10 @@ def _request(
         )
     payload.setdefault("via", "dashboard")
     if payload.get("ok") is False:
-        payload.setdefault("ready", False)
+        if operation != "saves_import":
+            # Launch-shaped answers report readiness; an import answer has
+            # its own shape and codes, relayed as the dashboard gave them.
+            payload.setdefault("ready", False)
         payload.setdefault("code", "DASHBOARD_REQUEST_FAILED")
         payload.setdefault("operation", operation)
     return payload
@@ -119,6 +125,7 @@ def launch_game(
     home: str | None = None,
     preferences: str | None = None,
     start_label: str | None = None,
+    language: str | None = None,
 ) -> dict[str, Any] | None:
     """Launch through the matching dashboard, or return ``None`` when none is registered."""
     from .toolsets import bridge_eval_allowed
@@ -141,6 +148,8 @@ def launch_game(
         body["timeout"] = timeout
     if start_label:
         body["start_label"] = start_label
+    if language is not None:
+        body["language"] = language
     return _request(
         project_path,
         "api/live/launch",
@@ -171,4 +180,22 @@ def stop_game(project_path: str) -> dict[str, Any] | None:
     )
 
 
-__all__ = ["launch_game", "launch_status", "stop_game"]
+def import_saves(
+    project_path: str,
+    *,
+    slot: str | None = None,
+    slots: list[str] | None = None,
+    pattern: str | None = None,
+) -> dict[str, Any] | None:
+    """Import host saves through the dashboard that owns the session, or ``None``."""
+    return _request(
+        project_path,
+        "api/live/saves/import",
+        operation="saves_import",
+        method="POST",
+        body={"slot": slot, "slots": slots, "pattern": pattern},
+        timeout=_IMPORT_TIMEOUT_SECONDS,
+    )
+
+
+__all__ = ["import_saves", "launch_game", "launch_status", "stop_game"]

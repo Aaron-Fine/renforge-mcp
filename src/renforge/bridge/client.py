@@ -205,6 +205,20 @@ class BridgeClient:
     def ping(self) -> dict:
         return self.request("ping")
 
+    def session_info(self) -> dict:
+        """``eval_enabled``, ``savedir``, ``home``, and every active ``save_locations`` entry.
+
+        A bridge that does not report ``eval_enabled`` (one that predates it)
+        is assumed to run code.
+        """
+        reply = self._checked("session_info")
+        return {
+            "eval_enabled": reply.get("eval_enabled") is not False,
+            "savedir": reply.get("savedir"),
+            "home": reply.get("home"),
+            "save_locations": reply.get("save_locations"),
+        }
+
     def get_state(
         self,
         include: list[str] | tuple[str, ...] | None = None,
@@ -280,12 +294,6 @@ class BridgeClient:
         if variables:
             payload["variables"] = list(variables)
         return self.request("explain", payload)
-
-    def session_info(self) -> dict:
-        """``eval_enabled``, ``savedir``, and ``home`` of the running game's bridge."""
-        reply = self._checked("session_info")
-        return {"eval_enabled": reply.get("eval_enabled") is True, "savedir": reply.get("savedir"),
-                "home": reply.get("home")}
 
     def eval_expr(self, expr: str) -> Any:
         return self._checked("eval", {"expr": expr})["value"]

@@ -73,6 +73,8 @@ def test_run_scenario_failure_collects_diagnostics(monkeypatch, tmp_path):
     assert result["ok"] is False
     assert result["failed_step"] == 0
     assert "diagnostics" in result["steps"][0] or "screenshot" in result
+    # Captures live in the project's RenForge state folder, outside the project.
+    assert result["files_touched"] == [(project_state_dir(tmp_path) / "captures" / "scenario-failure-step-0.png").as_posix()]
 
 
 def test_run_scenario_capture_rejects_parent_traversal(monkeypatch, tmp_path):
@@ -127,6 +129,8 @@ def test_run_scenario_capture_overwrites_only_named_file_in_capture_directory(
 
     assert result["ok"] is True
     assert result["steps"][0]["path"] == str(target)
+    # Captures live in the project's RenForge state folder, outside the project.
+    assert result["files_touched"] == [(project_state_dir(tmp_path) / "captures" / "frame.png").as_posix()]
     assert target.read_bytes() == b"new"
     assert sibling.read_bytes() == b"keep"
 

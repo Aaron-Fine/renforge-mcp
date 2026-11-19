@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from renforge.bridge.client import BridgeError
+from renforge.save_isolation import LaunchIsolation, host_renpy_root
 from renforge.tools import live
 from renforge.state import control_dir, project_state_dir
 
@@ -136,17 +138,30 @@ class _RunningProcess:
 _SESSION_ROOT = Path(tempfile.gettempdir()) / "renforge-session-test"
 
 
-def _isolation(savedir_mode: str = "temporary", *, savedir: Path | None = None, home: Path | None = None):
-    from renforge.save_isolation import LaunchIsolation
-
-    if savedir_mode == "existing":
-        return LaunchIsolation(savedir_mode="existing", home_mode="existing", persistent_mode="existing",
-                               preferences_mode="existing", savedir=None, home=None, session_root=None,
-                               cleanup=False)
-    return LaunchIsolation(savedir_mode=savedir_mode, home_mode="temporary" if home is None else "path",
-                           persistent_mode="existing", preferences_mode="existing",
-                           savedir=savedir or _SESSION_ROOT / "saves", home=home or _SESSION_ROOT / "home",
-                           session_root=_SESSION_ROOT, cleanup=False)
+def _isolation(
+    savedir_mode: str = "temporary",
+    *,
+    home_mode: str | None = None,
+    savedir: Path | None = None,
+    home: Path | None = None,
+) -> LaunchIsolation:
+    """An owned session's isolation record; isolated components live in a session root."""
+    if home_mode is None:
+        home_mode = "existing" if savedir_mode == "existing" else ("path" if home is not None else "temporary")
+    if savedir is None and savedir_mode in ("temporary", "path"):
+        savedir = _SESSION_ROOT / "saves"
+    if home is None and home_mode in ("temporary", "path"):
+        home = _SESSION_ROOT / "home"
+    return LaunchIsolation(
+        savedir_mode=savedir_mode,
+        home_mode=home_mode,
+        persistent_mode="empty" if savedir_mode == "temporary" else "existing",
+        preferences_mode="empty" if savedir_mode == "temporary" else "existing",
+        savedir=savedir,
+        home=home,
+        session_root=_SESSION_ROOT if savedir_mode == "temporary" or home_mode == "temporary" else None,
+        cleanup=False,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -157,11 +172,12 @@ def _never_launch_a_real_game(monkeypatch):
 
 
 class _OwnedRunningSession:
-    def __init__(self, *, editor: bool = False, isolation=None, bridge_eval: bool = True) -> None:
+    def __init__(self, *, editor: bool = False, isolation: LaunchIsolation | None = None,
+                 bridge_eval: bool = True) -> None:
         self.editor = editor
+        self.isolation = isolation or _isolation()
         self.client = _StateClient()
         self.process = _RunningProcess()
-        self.isolation = isolation
         self.bridge_eval = bridge_eval
         self.close_calls = 0
         self.closed = False
@@ -212,7 +228,11 @@ def _wait_for_launch_status(
 
 def test_stop_game_without_bridge_is_noop(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
-    assert live.stop_game(str(project)) == {"ok": True, "was_running": False}
+    assert live.stop_game(str(project)) == {
+        "ok": True,
+        "was_running": False,
+        "files_deleted": [],
+    }
 
 
 def test_stop_game_issues_authenticated_quit_when_bridge_alive(
@@ -225,7 +245,7 @@ def test_stop_game_issues_authenticated_quit_when_bridge_alive(
 
     result = live.stop_game(str(project))
 
-    assert result == {"ok": True, "was_running": True}
+    assert result == {"ok": True, "was_running": True, "files_deleted": []}
     assert client.control_calls == ["quit"]
 
 
@@ -246,7 +266,7 @@ def test_stop_game_ignores_legacy_bridge_metadata_without_live_client(
 
     result = live.stop_game(str(project))
 
-    assert result == {"ok": True, "was_running": False}
+    assert result == {"ok": True, "was_running": False, "files_deleted": []}
     assert (project_state_dir(project) / "bridge.json").exists()
     assert (project / "game" / "renforge_bridge.rpy").exists()
     assert (project / "game" / "renforge_bridge.rpyc").exists()
@@ -351,6 +371,182 @@ def test_launch_reuses_a_game_started_by_the_dashboard(tmp_path: Path, monkeypat
     assert "cannot be proven for an external session" in result["message"]
 
 
+class _InfoClient(_StateClient):
+    def __init__(self, info: dict | None) -> None:
+        self._info = info
+
+    def session_info(self) -> dict:
+        if self._info is None:
+            raise BridgeError("bridge error on 'session_info': unknown command")
+        return dict(self._info)
+
+
+def _host_home(tmp_path: Path, monkeypatch) -> Path:
+    # tmp_path stands in for the temp dir, so tmp_path/renforge-session-* is a
+    # session root and anything else under it is not.
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    host_home = tmp_path / "host-home"
+    host_home.mkdir()
+    monkeypatch.setenv("HOME", str(host_home))
+    monkeypatch.setenv("USERPROFILE", str(host_home))
+    monkeypatch.setenv("APPDATA", str(host_home / "AppData" / "Roaming"))
+    return host_home
+
+
+def _external_reuse(tmp_path: Path, monkeypatch, client, **launch_kwargs) -> dict:
+    project = _make_project(tmp_path)
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    monkeypatch.setattr(
+        live.BridgeClient,
+        "from_project",
+        classmethod(lambda cls, root, **_kwargs: client),
+    )
+    monkeypatch.setattr(
+        live,
+        "get_or_install_sdk",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not relaunch")),
+    )
+    return live.launch_game(str(project), editor=False, **launch_kwargs)
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        None,  # an older bridge that cannot say where it saves
+        {"savedir": None, "home": None},
+        {"savedir": "SESSION_SAVES", "home": "HOST_HOME", "save_locations": ["SESSION_SAVES"]},
+        {"savedir": "HOST_SAVES", "home": "SESSION_HOME", "save_locations": ["HOST_SAVES"]},
+        # config.extra_savedirs pointing anywhere outside the session root may
+        # hold the player's saves, even somewhere RenForge does not recognize.
+        {"savedir": "SESSION_SAVES", "home": "SESSION_HOME", "save_locations": ["SESSION_SAVES", "ELSEWHERE"]},
+        # The shared temp dir itself is not a session root.
+        {"savedir": "SESSION_SAVES", "home": "SESSION_HOME", "save_locations": ["TEMP_ROOT"]},
+        # A path that cannot be resolved is unknown, so it is not safe.
+        {"savedir": "SESSION_SAVES", "home": "SESSION_HOME", "save_locations": ["SESSION_SAVES", "bad\0path"]},
+        {"savedir": "SESSION_SAVES", "home": "bad\0path", "save_locations": ["SESSION_SAVES"]},
+    ],
+)
+def test_an_isolated_launch_is_not_handed_an_external_game_it_cannot_vouch_for(
+    tmp_path: Path, monkeypatch, info
+) -> None:
+    host_home = _host_home(tmp_path, monkeypatch)
+    host_saves = host_renpy_root() / "demo"
+    session = tmp_path / "renforge-session-x"
+    for path in (host_saves, session / "saves", session / "home"):
+        path.mkdir(parents=True)
+    if info is not None:
+        mapping = {
+            "SESSION_SAVES": str(session / "saves"),
+            "SESSION_HOME": str(session / "home"),
+            "HOST_HOME": str(host_home),
+            "HOST_SAVES": str(host_saves),
+            "ELSEWHERE": str(tmp_path / "Documents" / "OtherSaves"),
+            "TEMP_ROOT": str(tmp_path),
+        }
+
+        def resolve(value):
+            if isinstance(value, list):
+                return [mapping.get(item, item) for item in value]
+            return mapping.get(value, value)
+
+        info = {key: resolve(value) for key, value in info.items()}
+
+    result = _external_reuse(tmp_path, monkeypatch, _InfoClient(info), savedir="temporary")
+
+    assert result["ok"] is False
+    assert result["code"] == "SESSION_ISOLATION_MISMATCH"
+    assert result["existing_exposes_user_saves"] is True
+
+
+def test_an_isolated_launch_reuses_an_isolated_external_game(tmp_path: Path, monkeypatch) -> None:
+    _host_home(tmp_path, monkeypatch)
+    session = tmp_path / "renforge-session-x"
+    for path in (session / "saves", session / "home"):
+        path.mkdir(parents=True)
+    client = _InfoClient({
+        "savedir": str(session / "saves"),
+        "home": str(session / "home"),
+        "save_locations": [str(session / "saves")],
+    })
+
+    result = _external_reuse(tmp_path, monkeypatch, client, savedir="temporary")
+
+    assert result["ok"] is True
+    assert result["external"] is True
+    assert result["current_label"] == "dashboard_scene"
+    assert result["isolation"] == {
+        "savedir": str(session / "saves"),
+        "home": str(session / "home"),
+        "save_locations": [str(session / "saves")],
+        "exposes_user_saves": False,
+    }
+
+
+def test_an_isolated_launch_refuses_an_external_game_that_also_uses_game_saves(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The reported savedir is private, but Ren'Py still writes to every
+    # registered location, and this game kept the project's game/saves.
+    _host_home(tmp_path, monkeypatch)
+    session = tmp_path / "renforge-session-x"
+    for path in (session / "saves", session / "home"):
+        path.mkdir(parents=True)
+    project_saves = tmp_path / "project" / "game" / "saves"  # _make_project's layout
+    client = _InfoClient({
+        "savedir": str(session / "saves"),
+        "home": str(session / "home"),
+        "save_locations": [str(session / "saves"), str(project_saves)],
+    })
+
+    result = _external_reuse(
+        tmp_path, monkeypatch, client, savedir="temporary", language="japanese"
+    )
+
+    assert result["ok"] is False
+    assert result["code"] == "SESSION_ISOLATION_MISMATCH"
+    assert result["requested_language"] == "japanese"
+    assert result["language_applied"] is False
+
+
+def test_launch_status_reports_an_external_games_storage(tmp_path: Path, monkeypatch) -> None:
+    project = _make_project(tmp_path)
+    monkeypatch.setattr(
+        live.BridgeClient,
+        "from_project",
+        classmethod(lambda cls, root, **_kwargs: _InfoClient(None)),
+    )
+
+    status = live.launch_status(str(project))
+
+    assert status["external"] is True
+    assert status["isolation"] == {"exposes_user_saves": True}
+
+
+@pytest.mark.parametrize(
+    ("savedir", "field"),
+    [("existing", "persistent"), ("existing", "preferences")],
+)
+def test_reuse_cannot_accept_state_modes_a_fresh_launch_rejects(
+    tmp_path: Path, monkeypatch, savedir: str, field: str
+) -> None:
+    result = _external_reuse(
+        tmp_path, monkeypatch, _InfoClient(None), savedir=savedir, **{field: "empty"}
+    )
+
+    assert result["ok"] is False
+    assert result["code"] == "LAUNCH_STATE_MODE_CONFLICT"
+    assert "savedir='temporary'" in result["error"]
+
+
+def test_a_default_launch_still_reuses_any_external_game(tmp_path: Path, monkeypatch) -> None:
+    # Without isolation the launch uses the player's saves anyway, so there is
+    # nothing to protect, and an older bridge stays reusable.
+    result = _external_reuse(tmp_path, monkeypatch, _InfoClient(None))
+
+    assert result["ok"] is True
+    assert result["external"] is True
+
+
 def test_launch_reuses_owned_session_only_when_editor_mode_matches(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     key = live._key(project)
@@ -367,12 +563,17 @@ def test_launch_reuses_owned_session_only_when_editor_mode_matches(tmp_path: Pat
     assert session.close_calls == 0
 
     matched = live.launch_game(str(project), editor=True)
-    assert {key: matched[key] for key in ("ok", "already_running", "ready", "current_label", "editor")} == {
+    assert {k: matched[k] for k in (
+        "ok", "already_running", "ready", "current_label", "editor",
+        "requested_language", "active_language",
+    )} == {
         "ok": True,
         "already_running": True,
         "ready": True,
         "current_label": "dashboard_scene",
         "editor": True,
+        "requested_language": None,
+        "active_language": None,
     }
     assert matched["isolation"]["exposes_user_saves"] is False
     assert live._SESSIONS[key] is session
@@ -381,13 +582,13 @@ def test_launch_reuses_owned_session_only_when_editor_mode_matches(tmp_path: Pat
 
 
 def test_an_isolated_launch_never_reuses_a_session_on_the_players_saves(tmp_path: Path) -> None:
-    """A default launch is mutating; handing back a savedir=existing session would skip authorize."""
+    """An isolated launch is mutating; handing back a savedir=existing session would skip authorize."""
     project = _make_project(tmp_path)
     key = live._key(project)
     session = _OwnedRunningSession(editor=True, isolation=_isolation("existing"))
     live._SESSIONS[key] = session
     try:
-        refused = live.launch_game(str(project))
+        refused = live.launch_game(str(project), savedir="temporary")
         assert refused["ok"] is False
         assert refused["code"] == "SESSION_ISOLATION_MISMATCH"
         assert session.close_calls == 0
@@ -411,13 +612,16 @@ def test_a_play_only_server_never_reuses_a_bridge_that_runs_code(tmp_path: Path,
 
 
 def test_an_isolated_launch_never_reuses_a_session_authorized_onto_a_foreign_folder(tmp_path: Path) -> None:
-    """savedir=<another app's folder> needed authorize; a default launch must not inherit it."""
+    """savedir=<another app's folder> needed authorize; an isolated launch must not inherit it.
+
+    The per-component rule alone would allow it: that folder is not the player's.
+    """
     project = _make_project(tmp_path)
     key = live._key(project)
     foreign = tmp_path / "Documents" / "game-saves"
     live._SESSIONS[key] = _OwnedRunningSession(editor=True, isolation=_isolation("path", savedir=foreign))
     try:
-        assert live.launch_game(str(project))["code"] == "SESSION_ISOLATION_MISMATCH"
+        assert live.launch_game(str(project), savedir="temporary")["code"] == "SESSION_ISOLATION_MISMATCH"
         assert live.launch_game(str(project), savedir=str(foreign))["already_running"] is True
     finally:
         live._SESSIONS.pop(key, None)
@@ -432,14 +636,15 @@ def test_a_launch_that_arrives_while_another_starts_must_match_it(tmp_path: Path
         release.wait(5)
         return {"ok": False, "ready": False, "error": "stopped by the test"}
 
-    exposed = {"isolated": False, "eval": True}
+    everything = frozenset({"savedir", "home"})
+    exposed = {"exposed": everything, "isolated": False, "eval": True}
     try:
         live.start_launch(str(project), slow_launch, wait_timeout=0, requirements=exposed)
         refused = live.start_launch(str(project), slow_launch, wait_timeout=0,
-                                    requirements={"isolated": True, "eval": True})
+                                    requirements={"exposed": frozenset(), "isolated": True, "eval": True})
         assert refused["code"] == "SESSION_ISOLATION_MISMATCH"
         refused = live.start_launch(str(project), slow_launch, wait_timeout=0,
-                                    requirements={"isolated": False, "eval": False})
+                                    requirements={"exposed": everything, "isolated": False, "eval": False})
         assert refused["code"] == "SESSION_EVAL_MISMATCH"
         same = live.start_launch(str(project), slow_launch, wait_timeout=0, requirements=exposed)
         assert same["code"] == "LAUNCH_IN_PROGRESS"
@@ -489,14 +694,142 @@ def test_an_external_session_is_reused_only_when_it_matches(
                     "SESSION": str(_SESSION_ROOT / leaf), None: None}[name]
 
         info = dict(info, savedir=where(info["savedir"], "saves"), home=where(info["home"], "home"))
+        if info["savedir"]:
+            info["save_locations"] = [info["savedir"]]
     monkeypatch.setattr(live.BridgeClient, "from_project",
                         classmethod(lambda cls, root, **_kwargs: _InfoClient(info)))
-    result = live.launch_game(str(project), editor=False)
+    # Only an isolated launch can be refused a game for its storage.
+    result = live.launch_game(str(project), editor=False, savedir="temporary")
 
     if code is None:
         assert result["already_running"] is True and result["external"] is True
     else:
         assert result["ok"] is False and result["code"] == code
+
+
+def test_an_isolated_launch_is_not_handed_a_game_using_the_players_saves(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    session = _OwnedRunningSession(
+        editor=True, isolation=_isolation(savedir_mode="existing", home_mode="existing")
+    )
+    live._SESSIONS[key] = session
+    try:
+        refused = live.launch_game(str(project), editor=True, savedir="temporary")
+        reused = live.launch_game(str(project), editor=True)
+    finally:
+        live._SESSIONS.pop(key, None)
+
+    assert refused["ok"] is False
+    assert refused["code"] == "SESSION_ISOLATION_MISMATCH"
+    assert refused["existing_exposes_user_saves"] is True
+    # A launch that asked for nothing gets the running game, as before.
+    assert reused["already_running"] is True
+    assert session.close_calls == 0
+    assert session.close_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("request_knobs", "running", "reused"),
+    [
+        # Isolated saves with the host HOME must not get a game that writes
+        # its saves into the player's save folder, and the reverse.
+        ({"savedir": "temporary", "home": "existing"}, ("existing", "existing"), False),
+        ({"savedir": "temporary", "home": "existing"}, ("existing", "temporary"), False),
+        ({"savedir": "existing", "home": "temporary"}, ("existing", "existing"), False),
+        ({"savedir": "existing", "home": "temporary"}, ("temporary", "existing"), False),
+        # A game isolating every component the launch asked for is reusable,
+        # and one that isolates more is harmless.
+        ({"savedir": "temporary", "home": "existing"}, ("temporary", "existing"), True),
+        ({"savedir": "temporary", "home": "existing"}, ("temporary", "temporary"), True),
+        ({"savedir": "existing", "home": "temporary"}, ("existing", "temporary"), True),
+        ({"savedir": "temporary"}, ("temporary", "temporary"), True),
+        # A launch that isolates nothing reuses anything.
+        ({}, ("existing", "existing"), True),
+        ({}, ("temporary", "existing"), True),
+        ({}, ("temporary", "temporary"), True),
+    ],
+)
+def test_reusing_an_owned_game_checks_saves_and_home_separately(
+    tmp_path: Path, monkeypatch, request_knobs, running, reused
+) -> None:
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    savedir_mode, home_mode = running
+    session = _OwnedRunningSession(
+        editor=True, isolation=_isolation(savedir_mode=savedir_mode, home_mode=home_mode)
+    )
+    live._SESSIONS[key] = session
+    try:
+        result = live.launch_game(str(project), editor=True, **request_knobs)
+    finally:
+        live._SESSIONS.pop(key, None)
+
+    if reused:
+        assert result["ok"] is True
+        assert result["already_running"] is True
+    else:
+        assert result["ok"] is False
+        assert result["code"] == "SESSION_ISOLATION_MISMATCH"
+        assert result["existing_exposes_user_saves"] is True
+        # Each refused request leaves one component on the player's storage.
+        assert result["requested_exposes_user_saves"] is True
+    assert session.close_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("request_knobs", "info", "reused"),
+    [
+        ({"savedir": "temporary", "home": "existing"},
+         {"savedir": "HOST_SAVES", "home": "SESSION_HOME", "save_locations": ["HOST_SAVES"]}, False),
+        ({"savedir": "temporary", "home": "existing"},
+         {"savedir": "HOST_SAVES", "home": "HOST_HOME", "save_locations": ["HOST_SAVES"]}, False),
+        ({"savedir": "existing", "home": "temporary"},
+         {"savedir": "SESSION_SAVES", "home": "HOST_HOME", "save_locations": ["SESSION_SAVES"]}, False),
+        # An older bridge cannot tell where it keeps either component.
+        ({"savedir": "temporary", "home": "existing"}, None, False),
+        ({"savedir": "existing", "home": "temporary"}, None, False),
+        ({"savedir": "temporary", "home": "existing"},
+         {"savedir": "SESSION_SAVES", "home": "HOST_HOME", "save_locations": ["SESSION_SAVES"]}, True),
+        ({"savedir": "temporary", "home": "existing"},
+         {"savedir": "SESSION_SAVES", "home": "SESSION_HOME", "save_locations": ["SESSION_SAVES"]}, True),
+        ({"savedir": "existing", "home": "temporary"},
+         {"savedir": "HOST_SAVES", "home": "SESSION_HOME", "save_locations": ["HOST_SAVES"]}, True),
+    ],
+)
+def test_reusing_an_external_game_checks_saves_and_home_separately(
+    tmp_path: Path, monkeypatch, request_knobs, info, reused
+) -> None:
+    host_home = _host_home(tmp_path, monkeypatch)
+    host_saves = host_renpy_root() / "demo"
+    session = tmp_path / "renforge-session-x"
+    for path in (host_saves, session / "saves", session / "home"):
+        path.mkdir(parents=True)
+    if info is not None:
+        mapping = {
+            "SESSION_SAVES": str(session / "saves"),
+            "SESSION_HOME": str(session / "home"),
+            "HOST_HOME": str(host_home),
+            "HOST_SAVES": str(host_saves),
+        }
+        info = {
+            key: [mapping[item] for item in value] if isinstance(value, list) else mapping[value]
+            for key, value in info.items()
+        }
+
+    result = _external_reuse(tmp_path, monkeypatch, _InfoClient(info), **request_knobs)
+
+    if reused:
+        assert result["ok"] is True
+        assert result["external"] is True
+    else:
+        assert result["ok"] is False
+        assert result["code"] == "SESSION_ISOLATION_MISMATCH"
+        assert result["existing_exposes_user_saves"] is True
 
 
 def test_launch_rejects_editor_mode_for_unproven_external_bridge(tmp_path: Path, monkeypatch) -> None:
@@ -538,10 +871,11 @@ def test_new_launch_passes_editor_mode_to_bridge_launcher(tmp_path: Path, monkey
     assert result["ok"] is True
     assert result["editor"] is True
     assert launch_kwargs["editor"] is True
-    assert launch_kwargs["savedir"] == "temporary"
-    assert launch_kwargs["home"] == "temporary"
-    assert launch_kwargs["persistent"] == "empty"
-    assert launch_kwargs["preferences"] == "empty"
+    # Isolation is opt-in: a plain launch keeps the player's saves and HOME.
+    assert launch_kwargs["savedir"] == "existing"
+    assert launch_kwargs["home"] == "existing"
+    assert launch_kwargs["persistent"] == "existing"
+    assert launch_kwargs["preferences"] == "existing"
 
     live._SESSIONS.pop(live._key(project), None)
     launch_kwargs.clear()
@@ -562,16 +896,20 @@ def test_launch_status_preserves_editor_for_owned_session(tmp_path: Path) -> Non
 
     result = live.launch_status(str(project))
 
-    assert result == {
+    assert {k: result[k] for k in (
+        "ok", "ready", "status", "current_label", "editor", "active_language",
+    )} == {
         "ok": True,
         "ready": True,
         "status": "ready",
         "current_label": "dashboard_scene",
         "editor": True,
-        # No isolation recorded: status says the caller cannot count on one.
-        "isolated": False,
-        "eval_enabled": True,
+        "active_language": None,
     }
+    assert result["isolation"]["exposes_user_saves"] is False
+    # Its saves and HOME are in a session root, and its bridge may run code.
+    assert result["isolated"] is True
+    assert result["eval_enabled"] is True
     live._SESSIONS.pop(key, None)
 
 
@@ -955,3 +1293,107 @@ def test_stop_game_reports_the_close_error_itself(tmp_path: Path) -> None:
     finally:
         live._LAUNCHES.pop(key, None)
         live._SESSIONS.pop(key, None)
+
+
+def _relaunch_knobs(
+    tmp_path: Path, monkeypatch, existing_isolation, *, isolation_env: str | None = None, **launch_kwargs
+) -> dict:
+    """Replace an owned session with a warp launch; return the knobs it launched with."""
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    if isolation_env is not None:
+        monkeypatch.setenv("RENFORGE_ISOLATION", isolation_env)
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    live._SESSIONS[key] = _OwnedRunningSession(editor=True, isolation=existing_isolation)
+    captured: dict = {}
+
+    def fake_launch(_sdk, _project, **kwargs):
+        captured.update({k: kwargs.get(k) for k in ("savedir", "home", "persistent", "preferences")})
+        return _LaunchedSession(editor=True)
+
+    monkeypatch.setattr(live, "get_or_install_sdk", lambda *_a, **_k: "sdk")
+    monkeypatch.setattr(live, "launch_with_bridge", fake_launch)
+    try:
+        result = live.launch_game(str(project), warp="game/script.rpy:1", **launch_kwargs)
+    finally:
+        live._SESSIONS.pop(key, None)
+    assert result["ok"] is True
+    return captured
+
+
+def test_a_warp_relaunch_of_an_isolated_session_stays_isolated(tmp_path: Path, monkeypatch) -> None:
+    # Maintainer panel I2: jump/new_game/Warp replaced an isolated game with
+    # one on the player's saves, persistent data and HOME, silently.
+    knobs = _relaunch_knobs(tmp_path, monkeypatch, _isolation(savedir_mode="temporary"))
+    assert knobs == {
+        "savedir": "temporary",
+        "home": "temporary",
+        "persistent": "empty",
+        "preferences": "empty",
+    }
+
+
+def test_a_warp_relaunch_of_a_non_isolated_session_stays_on_the_players_saves(
+    tmp_path: Path, monkeypatch
+) -> None:
+    knobs = _relaunch_knobs(
+        tmp_path, monkeypatch, _isolation(savedir_mode="existing", home_mode="existing")
+    )
+    assert knobs == {
+        "savedir": "existing",
+        "home": "existing",
+        "persistent": "existing",
+        "preferences": "existing",
+    }
+
+
+@pytest.mark.parametrize(
+    ("running", "expected"),
+    [
+        # Isolated saves with the host HOME: the saves must stay isolated.
+        (("temporary", "existing"),
+         {"savedir": "temporary", "home": "existing", "persistent": "empty", "preferences": "empty"}),
+        # The player's saves with a private HOME: HOME must stay private.
+        (("existing", "temporary"),
+         {"savedir": "existing", "home": "temporary", "persistent": "existing", "preferences": "existing"}),
+    ],
+)
+def test_a_warp_relaunch_of_a_partly_isolated_session_keeps_each_component(
+    tmp_path: Path, monkeypatch, running, expected
+) -> None:
+    savedir_mode, home_mode = running
+    knobs = _relaunch_knobs(
+        tmp_path, monkeypatch, _isolation(savedir_mode=savedir_mode, home_mode=home_mode)
+    )
+    assert knobs == expected
+
+
+@pytest.mark.parametrize(
+    "running", [("temporary", "existing"), ("existing", "temporary"), ("existing", "existing")]
+)
+def test_a_warp_relaunch_never_drops_isolation_the_server_configures(
+    tmp_path: Path, monkeypatch, running
+) -> None:
+    # With RENFORGE_ISOLATION=temporary an all-auto relaunch may keep or add
+    # isolation, never fall back to the player's saves or HOME.
+    savedir_mode, home_mode = running
+    knobs = _relaunch_knobs(
+        tmp_path,
+        monkeypatch,
+        _isolation(savedir_mode=savedir_mode, home_mode=home_mode),
+        isolation_env="temporary",
+    )
+    assert knobs == {
+        "savedir": "temporary",
+        "home": "temporary",
+        "persistent": "empty",
+        "preferences": "empty",
+    }
+
+
+def test_an_explicit_savedir_on_a_warp_relaunch_is_honoured(tmp_path: Path, monkeypatch) -> None:
+    knobs = _relaunch_knobs(
+        tmp_path, monkeypatch, _isolation(savedir_mode="temporary"), savedir="existing"
+    )
+    assert knobs["savedir"] == "existing"
+    assert knobs["home"] == "existing"

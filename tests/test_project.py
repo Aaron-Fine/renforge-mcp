@@ -20,6 +20,18 @@ def test_renpy_project_with_game_dir(tmp_path: Path) -> None:
     assert not (project_root / ".renforge").exists()
 
 
+def test_renpy_project_can_skip_creating_project_state(tmp_path: Path) -> None:
+    project_root = tmp_path / "read_only_project"
+    (project_root / "game").mkdir(parents=True)
+
+    project = RenpyProject(project_root, create_cache=False)
+
+    # The state folder is outside the project and created on use either way.
+    assert project.cache_dir == project_state_dir(project_root)
+    assert not project.cache_dir.exists()
+    assert not (project_root / ".renforge").exists()
+
+
 def test_project_identity_survives_symlink_retarget(tmp_path: Path) -> None:
     project_a = tmp_path / "project-a"
     project_b = tmp_path / "project-b"

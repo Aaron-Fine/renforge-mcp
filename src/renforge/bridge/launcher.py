@@ -20,8 +20,9 @@ import subprocess
 import sys  # retained for tests that patch renforge.bridge.launcher.sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Iterator
 
 from .guard import guard_block, guard_rpy
 from ..launch_env import (
@@ -509,11 +510,36 @@ def _editor_environment(
     }
 
 
+def _existing_paths(root: Path) -> list[Path]:
+    """Every existing path under ``root``, so a partial delete can be reported."""
+    if not root.exists():
+        return []
+    paths: list[Path] = []
+    for current, _directories, filenames in os.walk(root):
+        base = Path(current)
+        paths.append(base)
+        paths.extend(base / name for name in filenames)
+    return paths
+
+
+def _deletion_receipt(project_root: Path, path: Path) -> str:
+    """Render a removed path for ``files_deleted``.
+
+    Paths inside the project stay project-relative POSIX; a temporary savedir
+    usually lives outside the project and stays absolute.
+    """
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return path.as_posix()
+
+
 def remove_bridge_artifacts(
     project_root: Path,
     *,
     expected_session_id: str | None = None,
     remove_bridge_info: bool = True,
+    removed: list[str] | None = None,
 ) -> bool:
     """Remove schema-3 owned session artifacts after full ownership validation.
 
@@ -521,12 +547,15 @@ def remove_bridge_artifacts(
     complete proven removal. Legacy fixed names, ``traceback.txt``,
     ``errors.txt``, and unowned pre-migration metadata are never touched.
     ``remove_bridge_info=False`` removes only source and asset artifacts.
+    When ``removed`` is given, deleted project-relative POSIX paths are
+    appended to it.
     """
     try:
         return remove_owned_artifacts(
             Path(project_root),
             expected_session_id=expected_session_id,
             remove_bridge_info=remove_bridge_info,
+            removed=removed,
         )
     except ArtifactOwnershipError as exc:
         # Preserve fail-closed cleanup for BridgeSession retries.
@@ -579,6 +608,10 @@ class BridgeSession:
         self._closed = False
         self._close_result: dict[str, Any] | None = None
 
+    @property
+    def project_root(self) -> Path:
+        return self._project_root
+
     def __enter__(self) -> "BridgeSession":
         return self
 
@@ -590,11 +623,32 @@ class BridgeSession:
         """Whether teardown completed and project ownership was released."""
         return self._closed
 
+    @contextmanager
+    def holding_open(self) -> Iterator[bool]:
+        """Keep :meth:`close` waiting while the caller writes into this session.
+
+        Yields ``False`` when the session is closed or its game has exited:
+        no game would read what the caller writes, and the next stop removes
+        it. Copying into the session root while a stop removes it would leave
+        files nothing cleans up, or make the removal fail and leave the
+        session half-closed.
+        """
+        with self._close_lock:
+            yield not self._closed and self.process.poll() is None
+
     def close(self, timeout: float = 10.0) -> dict[str, Any]:
         """Stop the game, Xvfb group if any, and temporary session files."""
         with self._close_lock:
             if self._closed:
-                return self._close_result or {"cleaned": self._cleaned, "failed": ["close"]}
+                result = dict(
+                    self._close_result
+                    or {"cleaned": self._cleaned, "failed": ["close"]}
+                )
+                # A receipt belongs to the call that performed the deletion.
+                # This call deleted nothing, so it must not claim the paths an
+                # earlier close already removed.
+                result["files_deleted"] = []
+                return result
             self._close_result = self._close_resources(timeout)
             ownership_failures = {
                 "process_alive",
@@ -621,6 +675,7 @@ class BridgeSession:
             "editor_coordinator": self._editor_coordinator is None,
         }
         failed: list[str] = []
+        removed: list[str] = []
 
         if self._editor_coordinator is not None:
             try:
@@ -655,7 +710,7 @@ class BridgeSession:
             if self.process.poll() is None:
                 failed.append("process_alive")
                 self._cleaned = cleaned
-                return {"cleaned": cleaned, "failed": failed}
+                return {"cleaned": cleaned, "failed": failed, "files_deleted": removed}
             cleaned["renpy_process"] = True
         else:
             # Already exited: reap it so it does not linger as a zombie.
@@ -671,32 +726,45 @@ class BridgeSession:
                 if self._project_lock is not None
                 else None
             )
-            remove_bridge_artifacts(self._project_root, expected_session_id=expected)
+            remove_bridge_artifacts(
+                self._project_root,
+                expected_session_id=expected,
+                removed=removed,
+            )
             cleaned["bridge_artifacts"] = True
         except Exception:
             failed.append("bridge_artifacts")
 
-        if self.cleanup_savedir and self.session_root is not None:
+        # An isolated session's root holds its savedir and HOME; without one,
+        # a temporary savedir stands alone.
+        cleanup_target = self.session_root if self.session_root is not None else self.temporary_savedir
+        if self.cleanup_savedir and cleanup_target is not None:
+            is_root = self.session_root is not None
+            # A failed rmtree may still have removed part of the tree, and the
+            # receipt has to name what is actually gone rather than nothing.
+            known_paths = _existing_paths(cleanup_target)
+            removed_all = True
             try:
-                shutil.rmtree(self.session_root, ignore_errors=False)
-                cleaned["session_root"] = True
-                cleaned["temporary_savedir"] = True
+                shutil.rmtree(cleanup_target, ignore_errors=False)
             except FileNotFoundError:
-                cleaned["session_root"] = True
-                cleaned["temporary_savedir"] = True
+                # Already gone: cleanup succeeded, but nothing was deleted.
+                pass
             except Exception:
-                failed.append("session_root")
-        elif self.cleanup_savedir and self.temporary_savedir is not None:
-            try:
-                shutil.rmtree(self.temporary_savedir, ignore_errors=False)
+                removed_all = False
+                for path in sorted(known_paths, key=lambda item: len(item.parts), reverse=True):
+                    if not path.exists():
+                        removed.append(_deletion_receipt(self._project_root, path))
+            else:
+                removed.append(_deletion_receipt(self._project_root, cleanup_target))
+            if removed_all:
                 cleaned["temporary_savedir"] = True
-            except FileNotFoundError:
-                cleaned["temporary_savedir"] = True
-            except Exception:
-                failed.append("temporary_savedir")
+                if is_root:
+                    cleaned["session_root"] = True
+            else:
+                failed.append("session_root" if is_root else "temporary_savedir")
 
         self._cleaned = cleaned
-        result: dict[str, Any] = {"cleaned": cleaned}
+        result: dict[str, Any] = {"cleaned": cleaned, "files_deleted": removed}
         if failed:
             result["failed"] = failed
         return result
@@ -917,6 +985,39 @@ def _raise_bridge_startup_error(code: str) -> None:
     )
 
 
+def normalize_language(language: str | None) -> str | None:
+    """Validate the optional ``RENPY_LANGUAGE`` override for the game process.
+
+    The value becomes a process environment entry, so anything a shell or an
+    encoding step could reinterpret (control or surrogate code points, path
+    separators) is rejected here instead of failing later in ``Popen``.
+    """
+    if language is None:
+        return None
+    if not isinstance(language, str):
+        raise LaunchError(
+            "LANGUAGE_INVALID",
+            "language must be a non-empty string.",
+            phase="detecting_environment",
+            suggested_fix="Pass a Ren'Py language code such as `japanese`, or omit the parameter.",
+        )
+    value = language.strip()
+    if (
+        not value
+        or len(value) > 64
+        or not value.isprintable()
+        or "/" in value
+        or "\\" in value
+    ):
+        raise LaunchError(
+            "LANGUAGE_INVALID",
+            "language must be 1-64 printable characters without '/' or '\\'.",
+            phase="detecting_environment",
+            suggested_fix="Pass a Ren'Py language code such as `japanese`, or omit the parameter.",
+        )
+    return value
+
+
 def _launch_after_project_lock(
     sdk: RenpySdk,
     project: RenpyProject,
@@ -937,6 +1038,7 @@ def _launch_after_project_lock(
     home: str | None = None,
     editor_endpoint: EditorEndpoint | None = None,
     editor_coordinator: EditorCoordinator | None = None,
+    language: str | None = None,
 ) -> BridgeSession:
     """Start ``project`` with the bridge and return a connected session.
 
@@ -947,9 +1049,14 @@ def _launch_after_project_lock(
     ``savedir='temporary'`` isolates saves under a disposable session directory
     that is removed on session close when ``cleanup_on_stop`` is true. Isolated
     launches also get a private HOME so preferences and ``~/.renpy`` writes miss
-    the user's files. All launch paths isolate by default; pass
-    savedir='existing' to opt into the game's normal locations.
+    the user's files. Isolation is opt-in: omitted values follow
+    ``RENFORGE_ISOLATION`` and otherwise use the game's normal locations.
+
+    ``language`` sets ``RENPY_LANGUAGE`` for this process. Ren'Py's
+    ``change_language`` persists the result as ``preferences.language``, so the
+    stored preference changes too; use an isolated savedir to contain it.
     """
+    language = normalize_language(language)
     started = time.monotonic()
     phases: list[dict[str, Any]] = []
     _raise_if_cancelled(cancel_event, phase="detecting_environment")
@@ -961,6 +1068,8 @@ def _launch_after_project_lock(
     _phase("detecting_environment")
     env = dict(os.environ)
     env.update(extra_env or {})
+    if language is not None:
+        env["RENPY_LANGUAGE"] = language
     capabilities = detect_environment(env)
 
     try:
@@ -984,6 +1093,7 @@ def _launch_after_project_lock(
     cleanup_savedir = isolation.cleanup
     try:
         env.update(isolation.environ(host_env=env))
+        env["RENFORGE_PERSISTENT_MODE"] = isolation.persistent_mode
         savedir_path = str(isolation.savedir) if isolation.savedir is not None else None
 
         # Token may be caller-supplied; session id is allocated with the artifact
@@ -1072,7 +1182,9 @@ def _launch_after_project_lock(
         # out. Turn them off when the session's preferences are its own (empty,
         # or in a save folder that is not the player's), so the change never
         # reaches the player's real preferences.
-        own_preferences = isolation.preferences_mode == "empty" or not isolation.exposes_user_saves
+        own_preferences = (
+            isolation.preferences_mode == "empty" or not isolation.exposes_user_saves(project.root)
+        )
         if own_preferences and env.get(TRANSITIONS_ENV, "").strip().lower() != "on":
             env["RENFORGE_BRIDGE_TRANSITIONS"] = "off"
         # Vsync makes every frame wait for the display. A hidden or locked-screen
@@ -1366,7 +1478,10 @@ def _launch_with_bridge_once(
     preferences: str | None = None,
     home: str | None = None,
     editor: bool = False,
+    language: str | None = None,
 ) -> BridgeSession:
+    """Launch a bridge while exclusively owning this project's artifacts."""
+    language = normalize_language(language)
     require_supported_runtime(sdk.version, project_root=project.abs_root)
     if startup_timeout is None:
         startup_timeout = default_startup_timeout()
@@ -1399,6 +1514,7 @@ def _launch_with_bridge_once(
             home=home,
             editor_endpoint=editor_endpoint,
             editor_coordinator=editor_coordinator,
+            language=language,
         )
         return session
     except BaseException:
@@ -1531,5 +1647,6 @@ __all__ = [
     "BridgeSession",
     "ProjectBridgeLock",
     "launch_with_bridge",
+    "normalize_language",
     "remove_bridge_artifacts",
 ]

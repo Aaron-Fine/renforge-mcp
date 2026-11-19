@@ -585,11 +585,11 @@ def test_live_named_save_state_round_trip(sdk, demo_copy: Path) -> None:
         assert client.get_var("courage") == 1
 
         saved = client.save_slot("branch-a", extra_info="before menu")
-        assert saved == {
-            "ok": True,
-            "slot": "branch-a",
-            "extra_info": "before menu",
-        }
+        assert saved["ok"] is True
+        assert saved["slot"] == "branch-a"
+        assert saved["extra_info"] == "before menu"
+        # The bridge also reports the Ren'Py savedir as a write receipt.
+        assert isinstance(saved.get("savedir"), str) and saved["savedir"]
 
         listed = client.list_slots(regexp="branch")
         assert listed["ok"] is True
@@ -1217,7 +1217,9 @@ define isolation_mp = MultiPersistent("renforge-isolation-canary")
     # Generate valid persistent, preference, multipersistent and slot canaries
     # with the same engine, rather than relying on invalid placeholder files.
     seed = tmp_path / 'seed'
-    with launch_with_bridge(sdk, project, savedir=str(seed), startup_timeout=90) as session:
+    with launch_with_bridge(
+        sdk, project, savedir=str(seed), home='temporary', startup_timeout=90,
+    ) as session:
         client = session.client
         client.eval_expr("setattr(persistent, 'renforge_host_canary', 'HOST-STATE')")
         client.eval_expr("setattr(_preferences, 'text_cps', 13)")
@@ -1263,7 +1265,7 @@ python early:
     before = [_state_snapshot(root) for root in protected]
 
     with launch_with_bridge(
-        sdk, project, startup_timeout=90,
+        sdk, project, savedir='temporary', startup_timeout=90,
         extra_env={'RENPY_MULTIPERSISTENT': str(host_mp)},
     ) as session:
         client = session.client
@@ -1279,6 +1281,16 @@ python early:
         locations = client.eval_expr("[item.directory for item in __import__('renpy').loadsave.location.locations]")
         assert locations == [str(session.temporary_savedir)]
         assert client.eval_expr("__import__('os').path.expanduser('~')") == str(session.temporary_home)
+        # What a server deciding whether to reuse this game is told.
+        info = client.session_info()
+        assert info["save_locations"] == locations
+        assert info["home"] == str(session.temporary_home)
+        from renforge.save_isolation import path_in_session_root
+
+        # A real isolated game must pass the reuse allowlist, or no external
+        # isolated game could ever be reused.
+        assert path_in_session_root(info["home"])
+        assert all(path_in_session_root(item) for item in info["save_locations"])
         # Every reinitialization must retain the invariant, including reload's
         # storage reinitialization, even if the game sets extra_savedirs again.
         client.eval_expr('__import__("renpy").savelocation.init()')
@@ -1287,7 +1299,6 @@ python early:
 
         imported = import_host_slots(project.root, session.temporary_savedir, slot='host-canary')
         assert imported['ok'], imported
-        client.eval_expr("__import__('renpy').loadsave.location.scan()")
         assert [slot['name'] for slot in client.list_slots()['slots']] == ['host-canary']
         client.eval_expr("setattr(persistent, 'renforge_host_canary', 'SESSION-STATE')")
         client.eval_expr("setattr(isolation_mp, 'marker', 'SESSION-MULTIPERSISTENT')")
@@ -1901,3 +1912,68 @@ def test_live_session_starts_the_story_at_a_label(sdk, demo_copy: Path) -> None:
         gate = play(str(demo_copy), snapshot["observation_id"], screenshot=False)
         assert gate["progress"]["stop"] == "choose", gate
         assert gate["observation"]["started_at_label"] == "village_gate"
+
+
+def test_isolated_language_launch_leaves_host_preferences_untouched(
+    sdk, demo_copy: Path, tmp_path: Path, monkeypatch
+) -> None:
+    """``language`` persists as a preference; isolation must contain that write."""
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.save_isolation import host_renpy_root
+
+    project = RenpyProject(demo_copy)
+    home = tmp_path / 'host-home'
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setenv('USERPROFILE', str(home))
+    monkeypatch.setenv('APPDATA', str(home / 'AppData' / 'Roaming'))
+    monkeypatch.delenv('RENFORGE_ISOLATION', raising=False)
+    (demo_copy / 'game' / 'script.rpy').write_text('''
+label main_menu:
+    return
+label start:
+    "Language test ready."
+    while True:
+        pause
+''', encoding='utf-8')
+    (demo_copy / 'game' / 'zz_language_fixture.rpy').write_text('''
+define config.save_directory = "renforge-language-canary"
+translate french strings:
+    old "Language test ready."
+    new "Test de langue prete."
+''', encoding='utf-8')
+
+    # Seed the host save tree with files the engine itself wrote.
+    seed = tmp_path / 'seed'
+    with launch_with_bridge(
+        sdk, project, savedir=str(seed), home='temporary', startup_timeout=90,
+    ) as session:
+        session.client.eval_expr("setattr(persistent, 'renforge_host_canary', 'HOST-STATE')")
+        session.client.eval_expr('renpy.save_persistent()')
+    assert (seed / 'persistent').is_file()
+    host_saves = host_renpy_root() / 'renforge-language-canary'
+    shutil.copytree(seed, host_saves)
+    local_saves = demo_copy / 'game' / 'saves'
+    shutil.copytree(seed, local_saves, dirs_exist_ok=True)
+
+    def snapshot() -> dict[str, tuple[bytes, int]]:
+        return {
+            f'{root.name}/{path.relative_to(root)}': (path.read_bytes(), path.stat().st_mtime_ns)
+            for root in (host_saves, local_saves)
+            for path in root.rglob('*') if path.is_file()
+        }
+
+    before = snapshot()
+    assert before
+
+    with launch_with_bridge(
+        sdk, project, savedir='temporary', language='french', startup_timeout=90,
+    ) as session:
+        client = session.client
+        root = session.session_root
+        assert root is not None
+        assert client.get_state()['language'] == 'french'
+        client.eval_expr('renpy.save_persistent()')
+        assert (session.temporary_savedir / 'persistent').is_file()
+    assert not root.exists()
+    assert snapshot() == before

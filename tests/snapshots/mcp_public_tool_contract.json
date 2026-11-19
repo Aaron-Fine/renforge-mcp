@@ -257,8 +257,84 @@
       "type": "object"
     }
   },
+  "renforge_validate": {
+    "description": "Run Ren'Py `lint` against a clean shadow copy of the project tree: no live session artifacts, optional staged bytes overlaid, and RenForge never publishes staged or copied bytes into the project. Lint executes the project's `init python` blocks with your privileges, so the shadow does not sandbox arbitrary writes made by project code. The shadow omits RenForge-injected files using `<state>/control/artifacts.json` when available plus the known `zzrenforge_*` and `00renforge_session_*` prefixes. Linked directories are never copied byte-for-byte and are reported in `skipped_links`; a link under `game/` (case-insensitive) is scanned read-only with an entry cap and time budget for `.rpy`/`.rpym` source, and `complete`/`ok` are false when source is found or the target cannot be inspected. A fully scanned source-free linked asset directory is represented by zero-byte placeholder files for lint (counted as files, not bytes; `degraded=true`), so expected image/audio names still resolve without copying asset bytes. Media files (images, audio, fonts, video) are also represented by zero-byte placeholders by default: lint resolves their names, not their contents, and init code that opens media bytes sees empty files. Set `RENFORGE_SHADOW_MEDIA=copy` for a faithful shadow; media bytes then count toward the byte quota. Other files are copied. Quotas default to 10000 files, 500 MiB, and 50000 directories (media placeholders count as files, not bytes) and are configurable with `RENFORGE_SHADOW_MAX_FILES`, `RENFORGE_SHADOW_MAX_BYTES`, and `RENFORGE_SHADOW_MAX_DIRS`. Lint runs with `--error-code`, so reported errors produce a non-zero return code. This may download and cache the Ren'Py SDK; it uses the requested `version` (or `stable`), and never a launcher found inside the project being validated. The result reports `sdk_version` and `placeholders` (files materialized by name only). A timeout or truncated transcript is never reported as success.",
+    "annotations": {
+      "readOnlyHint": false,
+      "idempotentHint": false,
+      "destructiveHint": false,
+      "openWorldHint": true
+    },
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "project_path": {
+          "description": "Ren'Py project root containing `game/`.",
+          "type": "string"
+        },
+        "version": {
+          "default": "stable",
+          "description": "Ren'Py SDK version selector: `stable` (default) or an explicit version such as `8.5.3`. `stable` honors `RENPY_SDK_STABLE_VERSION`. The project tree is never searched for an SDK.",
+          "type": "string"
+        },
+        "checks": {
+          "anyOf": [
+            {
+              "items": {
+                "const": "lint",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional checks. Only `[\"lint\"]` is supported; any other value is rejected.",
+          "items": {
+            "enum": [
+              "lint"
+            ],
+            "type": "string"
+          }
+        },
+        "staged": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional overlay map from a project-relative (`game/script.rpy`) or game-relative (`script.rpy`) path to UTF-8 text. Staged bytes live only in the temporary shadow and count against shadow quotas."
+        },
+        "keep_shadow": {
+          "default": false,
+          "description": "Keep the temporary shadow after validation and return `shadow_path`; cleanup then belongs to the caller.",
+          "type": "boolean"
+        },
+        "timeout": {
+          "default": 0,
+          "description": "Lint timeout in seconds. `0` derives `min(180, max(1, attestation_timeout*3))` (90 seconds by default); explicit values are clamped to 1-600.",
+          "maximum": 600,
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "project_path"
+      ],
+      "type": "object"
+    }
+  },
   "renforge_launch": {
-    "description": "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; Runtime control requires Ren'Py 8.0 or newer. Pre-8 bundled games or selected SDKs return UNSUPPORTED_RENPY_VERSION before SDK download, bridge injection, or process launch; an explicit newer SDK does not bypass a legacy game's incompatibility. poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. Saves, preferences, and HOME default to isolated temporary locations so the session does not read or write the user's normal Ren'Py state; the ready payload includes `session_id` and an `isolation` object. It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and publish authenticated ownership/bridge metadata under `<state>/control/`, where `<state>` is this project's RenForge folder outside the game (`RENFORGE_STATE_DIR` or `~/.local/state/renforge`, then `projects/<name>-<hash>`). `renforge_stop` removes only owned session artifacts. A `savedir` or `home` of `existing`, or any path outside the RenForge state folder, requires `authorize=true` when `RENFORGE_POLICY=enforce`. Copy selected host slots with `renforge_saves(action=\"import\")` instead of bind-mounting the user tree.",
+    "description": "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; Runtime control requires Ren'Py 8.0 or newer. Pre-8 bundled games or selected SDKs return UNSUPPORTED_RENPY_VERSION before SDK download, bridge injection, or process launch; an explicit newer SDK does not bypass a legacy game's incompatibility. poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. Saves and HOME default to the user's own; pass `savedir=temporary` (or set `RENFORGE_ISOLATION=temporary`) to isolate saves, persistent data, preferences, and HOME so the session does not read or write the user's normal Ren'Py state. The ready payload includes `session_id` and an `isolation` object (a reused game started by another process has no `session_id`; its `isolation` is what its bridge reports). It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and publish authenticated ownership/bridge metadata under `<state>/control/`, where `<state>` is this project's RenForge folder outside the game (`RENFORGE_STATE_DIR` or `~/.local/state/renforge`, then `projects/<name>-<hash>`). `renforge_stop` removes only owned session artifacts. A launch that keeps the user's saves or HOME (the default unless `RENFORGE_ISOLATION=temporary`), or writes to any path outside the RenForge state folder, requires `authorize=true` when `RENFORGE_POLICY=enforce`. Copy selected host slots into an isolated session with `renforge_saves(action=\"import\")` instead of bind-mounting the user tree.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -274,7 +350,7 @@
         },
         "warp": {
           "default": "",
-          "description": "Optional Ren'Py `file.rpy:line` startup target; this launch tool does not resolve label names.",
+          "description": "Optional Ren'Py `file.rpy:line` startup target; this launch tool does not resolve label names. A warp launch replaces a running game like `renforge_jump`: with every isolation knob omitted or `auto`, it keeps the saves and HOME isolation of the game it replaces (a fresh session; imported slots are not carried over).",
           "type": "string"
         },
         "version": {
@@ -312,12 +388,12 @@
         },
         "savedir": {
           "default": "auto",
-          "description": "Save location. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default isolated `temporary`) so this session cannot read or write the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory; that is destructive and requires `authorize=true` when `RENFORGE_POLICY=enforce`. Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop. Prefer `renforge_saves(action=\"import\")` to copy selected host slots into an isolated session.",
+          "description": "Save location. `temporary` isolates the session: saves, persistent data, preferences, and HOME go to a disposable folder, so the game cannot read or write the user's normal Ren'Py saves. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (`temporary` to isolate every launch; otherwise the game's normal save directory, as `existing` or `default` selects). Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop. Use `renforge_saves(action=\"import\")` to copy selected host slots into an isolated session.",
           "type": "string"
         },
         "persistent": {
           "default": "auto",
-          "description": "Persistent state follows the selected save directory. Omitted, empty, or `auto` selects `empty` for a fresh temporary directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; it never deletes existing persistent files. Use save import to copy selected slots.",
+          "description": "Persistent state follows the selected save directory. Omitted or `auto` selects `empty` for a fresh temporary directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; it never deletes existing persistent files. Use save import to copy selected slots.",
           "enum": [
             "auto",
             "existing",
@@ -338,12 +414,12 @@
         },
         "home": {
           "default": "auto",
-          "description": "Process HOME for the launched game. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default a private directory) so preferences and `~/.renpy` writes miss the user's files. Pass `existing` to keep the host HOME. `savedir=existing` also selects `home=existing` unless this is set. Any other non-empty value is an explicit HOME path.",
+          "description": "Process HOME for the launched game. Omitted, empty, or `auto` follows `savedir`: a private directory for `savedir=temporary`, so preferences and `~/.renpy` writes miss the user's files, otherwise the host HOME. Pass `temporary` or `existing` to choose explicitly. Any other non-empty value is an explicit HOME path.",
           "type": "string"
         },
         "preferences": {
           "default": "auto",
-          "description": "Preferences share Ren'Py's persistent storage. Omitted, empty, or `auto` selects `empty` for a fresh temporary save directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; preferences are isolated by storage selection, without resetting host state.",
+          "description": "Preferences share Ren'Py's persistent storage. Omitted or `auto` selects `empty` for a fresh temporary save directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; preferences are isolated by storage selection, without resetting host state.",
           "enum": [
             "auto",
             "existing",
@@ -351,9 +427,22 @@
           ],
           "type": "string"
         },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional Ren'Py language code set as `RENPY_LANGUAGE` for a fresh game process. Ren'Py persists it as `preferences.language`, so this changes the stored preference, not just one session; for verification use `savedir='temporary'` (and `persistent='empty'`, which requires an isolated savedir) or restore the language afterward. It cannot change an already-running session, and only `renforge_launch` accepts it: a later jump/new-game/Warp relaunch uses the stored preference. `language_applied` is `true`, `false`, or `null` when the bridge did not report a language; a successful launch with the default savedir adds a `warning` because it changed the stored preference.",
+          "maxLength": 64
+        },
         "authorize": {
           "default": false,
-          "description": "Pass `authorize=true` when `RENFORGE_POLICY=enforce` and the game would keep its saves or HOME outside RenForge's state folder: `savedir` or `home` set to `existing` (or `RENFORGE_ISOLATION=existing`), a host save or HOME path, or any other path, the shared temp dir included. Isolated launches (`savedir`/`home` omitted or `temporary`) do not need this.",
+          "description": "Pass `authorize=true` when `RENFORGE_POLICY=enforce` and the game would keep its saves or HOME outside RenForge's own folders: the default (no isolation knob, unless `RENFORGE_ISOLATION=temporary`), `savedir` or `home` set to `existing`, a host save or HOME path, or any other path outside the RenForge state folder, the shared temp dir included. Isolated launches (`savedir=temporary` with `home` omitted or `temporary`) do not need this.",
           "type": "boolean"
         }
       },
@@ -364,7 +453,7 @@
     }
   },
   "renforge_launch_status": {
-    "description": "Poll launch progress and return `idle`, `starting`, `ready`, `failed`, `closing`, or `closed`. Use after any launch start when the first call has not returned an immediate ready state. A ready payload repeats `session_id` and the `isolation` object from launch.",
+    "description": "Poll launch progress and return `idle`, `starting`, `ready`, `failed`, `closing`, or `closed`. Use after any launch start when the first call has not returned an immediate ready state. A ready payload repeats `session_id` and the `isolation` object from launch (only `isolation` for a game started by another process), plus `isolated` and `eval_enabled`.",
     "annotations": {
       "readOnlyHint": true,
       "idempotentHint": true,
@@ -386,7 +475,7 @@
     }
   },
   "renforge_jump": {
-    "description": "Restart into a specific label/file position and keep interacting in a fresh game session. If needed, this may download and cache the required SDK before restart. Isolation matches `renforge_launch`: saves, preferences, and HOME default to temporary locations. A `savedir` or `home` outside the RenForge state folder requires `authorize=true` when `RENFORGE_POLICY=enforce`. Use for deterministic positioning before scripted checks.",
+    "description": "Restart into a specific label/file position and keep interacting in a fresh game session. If needed, this may download and cache the required SDK before restart. Isolation matches `renforge_launch` (opt in with `savedir=temporary`). With every isolation knob omitted or `auto`, a relaunch that replaces an isolated game this server (or its dashboard) owns stays isolated; it still gets a fresh session, so slots imported into the old one are not carried over. Under `RENFORGE_POLICY=enforce` the policy judges the request, not the game it replaces: anything but `savedir=temporary` (or a path in the RenForge state folder) requires `authorize=true`. Use for deterministic positioning before scripted checks.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -411,12 +500,12 @@
         },
         "savedir": {
           "default": "auto",
-          "description": "Save location. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default isolated `temporary`) so this session cannot read or write the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory; that is destructive and requires `authorize=true` when `RENFORGE_POLICY=enforce`. Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop. Prefer `renforge_saves(action=\"import\")` to copy selected host slots into an isolated session.",
+          "description": "Save location. `temporary` isolates the session: saves, persistent data, preferences, and HOME go to a disposable folder, so the game cannot read or write the user's normal Ren'Py saves. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (`temporary` to isolate every launch; otherwise the game's normal save directory, as `existing` or `default` selects). Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop. Use `renforge_saves(action=\"import\")` to copy selected host slots into an isolated session.",
           "type": "string"
         },
         "persistent": {
           "default": "auto",
-          "description": "Persistent state follows the selected save directory. Omitted, empty, or `auto` selects `empty` for a fresh temporary directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; it never deletes existing persistent files. Use save import to copy selected slots.",
+          "description": "Persistent state follows the selected save directory. Omitted or `auto` selects `empty` for a fresh temporary directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; it never deletes existing persistent files. Use save import to copy selected slots.",
           "enum": [
             "auto",
             "existing",
@@ -426,12 +515,12 @@
         },
         "home": {
           "default": "auto",
-          "description": "Process HOME for the launched game. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default a private directory) so preferences and `~/.renpy` writes miss the user's files. Pass `existing` to keep the host HOME. `savedir=existing` also selects `home=existing` unless this is set. Any other non-empty value is an explicit HOME path.",
+          "description": "Process HOME for the launched game. Omitted, empty, or `auto` follows `savedir`: a private directory for `savedir=temporary`, so preferences and `~/.renpy` writes miss the user's files, otherwise the host HOME. Pass `temporary` or `existing` to choose explicitly. Any other non-empty value is an explicit HOME path.",
           "type": "string"
         },
         "preferences": {
           "default": "auto",
-          "description": "Preferences share Ren'Py's persistent storage. Omitted, empty, or `auto` selects `empty` for a fresh temporary save directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; preferences are isolated by storage selection, without resetting host state.",
+          "description": "Preferences share Ren'Py's persistent storage. Omitted or `auto` selects `empty` for a fresh temporary save directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; preferences are isolated by storage selection, without resetting host state.",
           "enum": [
             "auto",
             "existing",
@@ -441,7 +530,7 @@
         },
         "authorize": {
           "default": false,
-          "description": "Pass `authorize=true` when `RENFORGE_POLICY=enforce` and the game would keep its saves or HOME outside RenForge's state folder: `savedir` or `home` set to `existing` (or `RENFORGE_ISOLATION=existing`), a host save or HOME path, or any other path, the shared temp dir included. Isolated launches (`savedir`/`home` omitted or `temporary`) do not need this.",
+          "description": "Pass `authorize=true` when `RENFORGE_POLICY=enforce` and the game would keep its saves or HOME outside RenForge's own folders: the default (no isolation knob, unless `RENFORGE_ISOLATION=temporary`), `savedir` or `home` set to `existing`, a host save or HOME path, or any other path outside the RenForge state folder, the shared temp dir included. Isolated launches (`savedir=temporary` with `home` omitted or `temporary`) do not need this.",
           "type": "boolean"
         }
       },
@@ -453,7 +542,7 @@
     }
   },
   "renforge_new_game": {
-    "description": "Restart at `start` and begin a new story progression. This may download and cache the required SDK before the fresh launch. Isolation matches `renforge_launch`: saves, preferences, and HOME default to temporary locations. A `savedir` or `home` outside the RenForge state folder requires `authorize=true` when `RENFORGE_POLICY=enforce`. Prefer this for clean scenario entry rather than reusing unstable runtime state.",
+    "description": "Restart at `start` and begin a new story progression. This may download and cache the required SDK before the fresh launch. Isolation matches `renforge_launch` (opt in with `savedir=temporary`). With every isolation knob omitted or `auto`, a relaunch that replaces an isolated game this server (or its dashboard) owns stays isolated; it still gets a fresh session, so slots imported into the old one are not carried over. Under `RENFORGE_POLICY=enforce` the policy judges the request, not the game it replaces: anything but `savedir=temporary` (or a path in the RenForge state folder) requires `authorize=true`. Prefer this for clean scenario entry rather than reusing unstable runtime state.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -474,12 +563,12 @@
         },
         "savedir": {
           "default": "auto",
-          "description": "Save location. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default isolated `temporary`) so this session cannot read or write the user's normal Ren'Py saves. Pass `existing` (or `default`) to use the game's normal save directory; that is destructive and requires `authorize=true` when `RENFORGE_POLICY=enforce`. Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop. Prefer `renforge_saves(action=\"import\")` to copy selected host slots into an isolated session.",
+          "description": "Save location. `temporary` isolates the session: saves, persistent data, preferences, and HOME go to a disposable folder, so the game cannot read or write the user's normal Ren'Py saves. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (`temporary` to isolate every launch; otherwise the game's normal save directory, as `existing` or `default` selects). Any other non-empty value is an arbitrary save directory path that is created if missing and is never removed by stop. Use `renforge_saves(action=\"import\")` to copy selected host slots into an isolated session.",
           "type": "string"
         },
         "persistent": {
           "default": "auto",
-          "description": "Persistent state follows the selected save directory. Omitted, empty, or `auto` selects `empty` for a fresh temporary directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; it never deletes existing persistent files. Use save import to copy selected slots.",
+          "description": "Persistent state follows the selected save directory. Omitted or `auto` selects `empty` for a fresh temporary directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; it never deletes existing persistent files. Use save import to copy selected slots.",
           "enum": [
             "auto",
             "existing",
@@ -489,12 +578,12 @@
         },
         "home": {
           "default": "auto",
-          "description": "Process HOME for the launched game. Omitted, empty, or `auto` follows `RENFORGE_ISOLATION` (default a private directory) so preferences and `~/.renpy` writes miss the user's files. Pass `existing` to keep the host HOME. `savedir=existing` also selects `home=existing` unless this is set. Any other non-empty value is an explicit HOME path.",
+          "description": "Process HOME for the launched game. Omitted, empty, or `auto` follows `savedir`: a private directory for `savedir=temporary`, so preferences and `~/.renpy` writes miss the user's files, otherwise the host HOME. Pass `temporary` or `existing` to choose explicitly. Any other non-empty value is an explicit HOME path.",
           "type": "string"
         },
         "preferences": {
           "default": "auto",
-          "description": "Preferences share Ren'Py's persistent storage. Omitted, empty, or `auto` selects `empty` for a fresh temporary save directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; preferences are isolated by storage selection, without resetting host state.",
+          "description": "Preferences share Ren'Py's persistent storage. Omitted or `auto` selects `empty` for a fresh temporary save directory and `existing` for a reused directory. `empty` requires `savedir=temporary`; preferences are isolated by storage selection, without resetting host state.",
           "enum": [
             "auto",
             "existing",
@@ -504,7 +593,7 @@
         },
         "authorize": {
           "default": false,
-          "description": "Pass `authorize=true` when `RENFORGE_POLICY=enforce` and the game would keep its saves or HOME outside RenForge's state folder: `savedir` or `home` set to `existing` (or `RENFORGE_ISOLATION=existing`), a host save or HOME path, or any other path, the shared temp dir included. Isolated launches (`savedir`/`home` omitted or `temporary`) do not need this.",
+          "description": "Pass `authorize=true` when `RENFORGE_POLICY=enforce` and the game would keep its saves or HOME outside RenForge's own folders: the default (no isolation knob, unless `RENFORGE_ISOLATION=temporary`), `savedir` or `home` set to `existing`, a host save or HOME path, or any other path outside the RenForge state folder, the shared temp dir included. Isolated launches (`savedir=temporary` with `home` omitted or `temporary`) do not need this.",
           "type": "boolean"
         }
       },
@@ -1427,7 +1516,7 @@
     }
   },
   "renforge_saves": {
-    "description": "List, load, save, or import named slots in a single command family. `list` reads the running (usually isolated) session; `list_user` observes host slots under `~/.renpy` / `game/saves` without a running game and never writes. `import` copies selected host slots into the isolated session savedir (never bind-mounts the user tree) and is refused unless the session was launched with `savedir=temporary` (the default). `load` replaces live state and `save` can overwrite the chosen slot. Verify slot names before mutating gameplay progress. `load`, `list_user`, and `import` require `authorize=true` when `RENFORGE_POLICY=enforce`: the last two read the player's own saves.",
+    "description": "List, load, save, or import named slots in a single command family. `list` reads the running (usually isolated) session; `list_user` observes host slots in the host Ren'Py save folder and `game/saves` without a running game and never writes. `import` copies selected host slots into the isolated session savedir (never bind-mounts the user tree) and is refused unless the session was launched with `savedir=temporary`. `load` replaces live state and `save` can overwrite the chosen slot. Verify slot names before mutating gameplay progress. `load`, `list_user`, and `import` require `authorize=true` when `RENFORGE_POLICY=enforce`: the last two read the player's own saves.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -1462,7 +1551,7 @@
             }
           ],
           "default": null,
-          "description": "Slot label used by save/load/import. Import also accepts `slots` or `regexp`."
+          "description": "Slot label used by save/load/import. Import also accepts `slots` or `pattern`."
         },
         "extra_info": {
           "anyOf": [
@@ -1486,7 +1575,7 @@
             }
           ],
           "default": null,
-          "description": "Optional regex filter for `list`, `list_user`, or `import`."
+          "description": "Optional regex filter for `list`, applied by Ren'Py's `renpy.list_slots` in the game."
         },
         "slots": {
           "anyOf": [
@@ -1501,11 +1590,26 @@
             }
           ],
           "default": null,
-          "description": "Optional list of host slot names to copy for `import`.",
+          "description": "Optional list of host slot names to copy for `import` (at most 1000 names of at most 256 characters).",
           "items": {
+            "maxLength": 256,
             "minLength": 1,
             "type": "string"
-          }
+          },
+          "maxItems": 1000
+        },
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional glob for `list_user` or `import`, matched against the whole slot name: `*` any run of characters, `?` one character, `[ab]` one of a set (for example `1-*` or `auto-?`). At most 256 characters.",
+          "maxLength": 256
         },
         "authorize": {
           "default": false,
@@ -1533,6 +1637,9 @@
             },
             "slots": {
               "type": "null"
+            },
+            "pattern": {
+              "type": "null"
             }
           },
           "required": [
@@ -1557,6 +1664,9 @@
             },
             "slots": {
               "type": "null"
+            },
+            "pattern": {
+              "type": "null"
             }
           },
           "required": [
@@ -1577,6 +1687,9 @@
             },
             "slots": {
               "type": "null"
+            },
+            "pattern": {
+              "type": "null"
             }
           },
           "required": [
@@ -1596,6 +1709,9 @@
             },
             "slots": {
               "type": "null"
+            },
+            "regexp": {
+              "type": "null"
             }
           },
           "required": [
@@ -1608,6 +1724,9 @@
               "const": "import"
             },
             "extra_info": {
+              "type": "null"
+            },
+            "regexp": {
               "type": "null"
             }
           },
@@ -2433,7 +2552,7 @@
     }
   },
   "renforge_scene_tree": {
-    "description": "Inspect a bounded scene inventory with completed-frame logical geometry where established. Beyond renforge_list_ui_elements it includes non-focusable nodes and uncertain custom input. Natural text overflow is explicitly unavailable. Use this when semantic selectors are ambiguous. `save_as` or `diff_against` may create `<state>/scenes/`; `save_as` writes and overwrites the named JSON snapshot. Omit both options for read-only inspection.",
+    "description": "Inspect a bounded scene inventory with completed-frame logical geometry where established. Beyond renforge_list_ui_elements it includes non-focusable nodes and uncertain custom input. Use this when semantic selectors are ambiguous. `save_as` or `diff_against` may create `<state>/scenes/`; `save_as` writes and overwrites the named JSON snapshot. Omit both options for read-only inspection. With `include=[\"overflow\"]` only `text`, `button`, and `input` nodes get an overflow verdict: the effective ceiling is the tighter of the widget's absolute `xmaximum`/`ymaximum` (minus integer padding and margins) and the child text's own absolute maximum; the unwrapped width and the wrapped height are compared with that inner box. `overflow` is true only when the wrapped height exceeds the inner height (actual vertical clipping); horizontal wrapping is reported in `overflow_axes.x` and `wrapped.x`, not as overflow. `overflow_px` is the vertical clip amount. A y verdict requires an absolute x maximum to know the wrap width; a y-only request is unavailable. An x-only result is `complete: false` with `unmeasured_axes: [\"y\"]` and null `overflow`/`overflow_px`. Relative maximums are recorded but not compared, and vertical text is not measured. When no absolute maximum is declared the verdict is `available: false` with a reason.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,

@@ -58,6 +58,7 @@ EXPECTED_TOOLS = {
     "renforge_inspect_project",
     "renforge_scan_project",
     "renforge_parse_lint",
+    "renforge_validate",
     "renforge_inspect_image",
     "renforge_find_references",
     # live game control
@@ -253,7 +254,7 @@ def test_create_app_registers_expected_tools() -> None:
 
     tools = asyncio.run(app.list_tools())
     names = {tool.name for tool in tools if tool.name.startswith("renforge_")}
-    assert len(EXPECTED_TOOLS) == 60
+    assert len(EXPECTED_TOOLS) == 61
     assert EXPECTED_TOOLS == set(TOOL_DEFINITIONS) == names
     instructions = getattr(app, "instructions", "") or ""
     assert "renforge_info" in instructions or not hasattr(app, "instructions")
@@ -527,10 +528,40 @@ def test_launch_tool_defaults_editor_true(tmp_path, monkeypatch) -> None:
     assert calls["version"] == "stable"
     assert calls["warp"] is None
     assert calls["kwargs"]["editor"] is True
-    assert calls["kwargs"]["savedir"] == "temporary"
-    assert calls["kwargs"]["home"] == "temporary"
-    assert calls["kwargs"]["persistent"] == "empty"
-    assert calls["kwargs"]["preferences"] == "empty"
+    assert calls["kwargs"]["savedir"] == "existing"
+    assert calls["kwargs"]["home"] == "existing"
+    assert calls["kwargs"]["persistent"] == "existing"
+    assert calls["kwargs"]["preferences"] == "existing"
+
+
+def test_delegated_isolated_launch_forwards_language(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    from renforge import dashboard_client
+
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    calls = {}
+
+    def fake_dashboard_launch(_project_path, **kwargs):
+        calls.update(kwargs)
+        return {
+            "ok": True,
+            "ready": True,
+            "already_running": False,
+            "requested_language": kwargs.get("language"),
+            "active_language": kwargs.get("language"),
+            "language_applied": True,
+        }
+
+    monkeypatch.setattr(dashboard_client, "launch_game", fake_dashboard_launch)
+
+    app = _ToolRegistry()
+    _register_tools(app)
+    result = app.tools["renforge_launch"](str(tmp_path), savedir="temporary", language="japanese")
+
+    assert result["ok"] is True
+    assert calls["language"] == "japanese"
+    assert calls["savedir"] == "temporary" and calls["home"] == "temporary"
+    assert "warning" not in result
 
 
 def test_launch_tool_forwards_editor_mode_to_direct_launch(tmp_path, monkeypatch) -> None:
@@ -557,10 +588,10 @@ def test_launch_tool_forwards_editor_mode_to_direct_launch(tmp_path, monkeypatch
     assert calls["version"] == "stable"
     assert calls["warp"] is None
     assert calls["kwargs"]["editor"] is True
-    assert calls["kwargs"]["savedir"] == "temporary"
-    assert calls["kwargs"]["home"] == "temporary"
-    assert calls["kwargs"]["persistent"] == "empty"
-    assert calls["kwargs"]["preferences"] == "empty"
+    assert calls["kwargs"]["savedir"] == "existing"
+    assert calls["kwargs"]["home"] == "existing"
+    assert calls["kwargs"]["persistent"] == "existing"
+    assert calls["kwargs"]["preferences"] == "existing"
 
 
 def test_launch_tool_honors_editor_opt_out(tmp_path, monkeypatch) -> None:
@@ -725,7 +756,7 @@ def test_stop_tool_falls_back_when_dashboard_is_unavailable(tmp_path, monkeypatc
 
     def fake_direct_stop(project_path: str):
         calls["project_path"] = project_path
-        return {"ok": True, "was_running": False}
+        return {"ok": True, "was_running": False, "files_deleted": []}
 
     monkeypatch.setattr(live, "stop_game", fake_direct_stop)
 
@@ -733,7 +764,7 @@ def test_stop_tool_falls_back_when_dashboard_is_unavailable(tmp_path, monkeypatc
     _register_tools(app)
     result = app.tools["renforge_stop"](str(tmp_path))
 
-    assert result == {"ok": True, "was_running": False}
+    assert result == {"ok": True, "was_running": False, "files_deleted": []}
     assert calls == {"project_path": str(tmp_path)}
 
 
@@ -1005,7 +1036,7 @@ def test_saves_tool_dispatches_grouped_save_action(tmp_path, monkeypatch) -> Non
 
     calls = {}
 
-    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None, slots=None):
+    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None, slots=None, pattern=None):
         calls.update(
             project_path=project_path,
             action=action,
@@ -1044,6 +1075,33 @@ def test_saves_tool_dispatches_grouped_save_action(tmp_path, monkeypatch) -> Non
     }
 
 
+@pytest.mark.parametrize("action", ["list_user", "import"])
+def test_saves_tool_forwards_pattern(tmp_path, monkeypatch, action) -> None:
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    from fastmcp import Client
+
+    from renforge.tools import live
+
+    calls = {}
+
+    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None, slots=None, pattern=None):
+        calls.update(action=action, pattern=pattern, regexp=regexp)
+        return {"ok": True}
+
+    monkeypatch.setattr(live, "saves", fake_saves)
+
+    async def _call():
+        async with Client(create_app()) as client:
+            return await client.call_tool(
+                "renforge_saves",
+                {"project_path": str(tmp_path), "action": action, "pattern": "1-*"},
+            )
+
+    asyncio.run(_call())
+
+    assert calls == {"action": action, "pattern": "1-*", "regexp": None}
+
+
 def test_saves_tool_validates_action_and_required_slot(tmp_path) -> None:
     pytest.importorskip("fastmcp", reason="fastmcp not installed")
     from fastmcp import Client
@@ -1080,7 +1138,7 @@ def test_saves_tool_dispatches_load_and_list_actions(tmp_path, monkeypatch) -> N
 
     calls = []
 
-    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None, slots=None):
+    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None, slots=None, pattern=None):
         calls.append(
             {
                 "project_path": project_path,
@@ -1149,6 +1207,7 @@ def test_saves_tool_is_listed_with_grouped_actions() -> None:
         "extra_info",
         "regexp",
         "slots",
+        "pattern",
         "authorize",
     }
 
@@ -1944,7 +2003,7 @@ def test_session_launch_keeps_its_own_home_even_when_isolation_defaults_to_exist
     captured: dict = {}
     monkeypatch.setattr(live, "launch_game", lambda *a, **k: captured.update(k) or {"ok": True})
 
-    def fake_start_launch(project_path, launch, editor=True, requirements=None):
+    def fake_start_launch(project_path, launch, editor=True, requirements=None, **_kwargs):
         return launch(Path(project_path), threading.Event())
 
     monkeypatch.setattr(live, "start_launch", fake_start_launch)
@@ -1956,3 +2015,191 @@ def test_session_launch_keeps_its_own_home_even_when_isolation_defaults_to_exist
     asyncio.run(_call())
     assert captured["home"] == "temporary"
     assert captured["editor"] is False
+
+
+def _saves_tool(monkeypatch, import_result):
+    from renforge import dashboard_client
+    from renforge.tools import live
+
+    calls = {"import_saves": [], "saves": []}
+
+    def fake_import(project_path, **kwargs):
+        calls["import_saves"].append((project_path, kwargs))
+        return import_result
+
+    def fake_saves(project_path, action, **kwargs):
+        calls["saves"].append((project_path, action, kwargs))
+        return {"ok": False, "code": "NO_ISOLATED_SESSION", "local": True}
+
+    monkeypatch.setattr(dashboard_client, "import_saves", fake_import)
+    monkeypatch.setattr(live, "saves", fake_saves)
+    app = _ToolRegistry()
+    _register_tools(app)
+    return app.tools["renforge_saves"], calls, live
+
+
+def test_saves_import_delegates_when_this_process_owns_no_session(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    answer = {"ok": True, "via": "dashboard"}
+    tool, calls, _live = _saves_tool(monkeypatch, answer)
+
+    result = tool(str(tmp_path), "import", slots=["1-1"])
+
+    assert result == answer
+    assert calls["import_saves"] == [
+        (str(tmp_path), {"slot": None, "slots": ["1-1"], "pattern": None})
+    ]
+    assert calls["saves"] == []
+
+
+def test_saves_import_uses_the_owned_session_before_the_dashboard(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    tool, calls, live = _saves_tool(monkeypatch, {"ok": True, "via": "dashboard"})
+    monkeypatch.setattr(live, "_SESSIONS", {live._key(tmp_path): object()})
+
+    result = tool(str(tmp_path), "import", slots=["1-1"])
+
+    assert result["local"] is True
+    assert calls["import_saves"] == []
+    assert [c[1] for c in calls["saves"]] == ["import"]
+
+
+def test_saves_import_without_dashboard_reports_no_isolated_session(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    from renforge.tools import live as real_live
+
+    original_saves = real_live.saves
+    tool, calls, live = _saves_tool(monkeypatch, None)
+    monkeypatch.setattr(live, "saves", original_saves)
+    monkeypatch.setattr(live, "_SESSIONS", {})
+
+    result = tool(str(tmp_path), "import", slots=["1-1"])
+
+    assert len(calls["import_saves"]) == 1
+    assert result["ok"] is False
+    assert result["code"] == "NO_ISOLATED_SESSION"
+
+
+def test_saves_import_dashboard_answer_is_final(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    answer = {"ok": False, "code": "NO_ISOLATED_SESSION", "via": "dashboard"}
+    tool, calls, _live = _saves_tool(monkeypatch, answer)
+
+    result = tool(str(tmp_path), "import", slots=["1-1"])
+
+    assert result == answer
+    assert calls["saves"] == []
+
+
+def test_saves_import_extra_info_never_reaches_the_dashboard(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    from renforge.tools import live as real_live
+
+    original_saves = real_live.saves
+    tool, calls, live = _saves_tool(monkeypatch, {"ok": True, "via": "dashboard"})
+    monkeypatch.setattr(live, "saves", original_saves)
+
+    result = tool(str(tmp_path), "import", slots=["1-1"], extra_info="x")
+
+    assert result["ok"] is False
+    assert result["error"] == "extra_info is only valid for action 'save'"
+    assert calls["import_saves"] == []
+    for action in ("load", "list", "list_user", "import"):
+        slot = "1-1" if action in ("load", "import") else None
+        error = real_live.saves_argument_error(
+            action, slot=slot, extra_info="x", regexp=None, slots=None, pattern=None
+        )
+        expected = {"ok": False, "error": "extra_info is only valid for action 'save'"}
+        if action == "import":
+            expected["code"] = "SAVE_IMPORT_INVALID"
+        assert error == expected, action
+
+
+def test_saves_import_argument_errors_never_reach_the_dashboard(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    from renforge.tools import live as real_live
+
+    original_saves = real_live.saves
+    tool, calls, live = _saves_tool(monkeypatch, {"ok": True, "via": "dashboard"})
+    monkeypatch.setattr(live, "saves", original_saves)
+
+    result = tool(str(tmp_path), "import", regexp="x")
+
+    assert result["ok"] is False
+    assert "pattern" in result["error"] and "regexp" in result["error"]
+    assert calls["import_saves"] == []
+
+
+@pytest.mark.parametrize("tool", ["renforge_jump", "renforge_new_game"])
+def test_relaunch_tools_leave_unset_isolation_to_the_owning_process(
+    tmp_path, monkeypatch, tool
+) -> None:
+    # The process that owns the running game decides whether an all-auto
+    # jump inherits its isolation, so the wrapper must not resolve "auto"
+    # to the player's saves first, locally or for a dashboard.
+    from renforge import dashboard_client
+    from renforge.tools import live
+
+    game = tmp_path / "game"
+    game.mkdir()
+    (game / "script.rpy").write_text("label start:\n    return\nlabel other:\n    return\n", encoding="utf-8")
+    knobs = ("savedir", "home", "persistent", "preferences")
+    arguments = {"target": "other"} if tool == "renforge_jump" else {}
+
+    seen: dict = {}
+    monkeypatch.setattr(dashboard_client, "launch_game", lambda *_a, **_k: None)
+
+    def fake_launch(project_path: str, version: str = "stable", warp: str | None = None, **kwargs):
+        seen["local"] = {k: kwargs.get(k) for k in knobs}
+        return {"ok": True, "ready": True, "already_running": False, "editor": True}
+
+    monkeypatch.setattr(live, "launch_game", fake_launch)
+    app = _ToolRegistry()
+    _register_tools(app)
+    assert app.tools[tool](str(tmp_path), **arguments)["ok"] is True
+    assert seen["local"] == dict.fromkeys(knobs)
+
+    def fake_dashboard(project_path: str, **kwargs):
+        seen["dashboard"] = {k: kwargs.get(k) for k in knobs}
+        return {"ok": True, "ready": True, "via": "dashboard", "editor": True}
+
+    monkeypatch.setattr(dashboard_client, "launch_game", fake_dashboard)
+    assert app.tools[tool](str(tmp_path), **arguments)["ok"] is True
+    assert seen["dashboard"] == dict.fromkeys(knobs)
+
+    explicit = app.tools[tool](str(tmp_path), savedir="temporary", **arguments)
+    assert explicit["ok"] is True
+    assert seen["dashboard"] == {
+        "savedir": "temporary", "home": "temporary", "persistent": "empty", "preferences": "empty"
+    }
+
+
+@pytest.mark.parametrize("tool", ["renforge_jump", "renforge_new_game"])
+def test_relaunch_tools_keep_this_servers_isolation_for_a_dashboard(tmp_path, monkeypatch, tool) -> None:
+    # With RENFORGE_ISOLATION=temporary on this server, an all-auto relaunch
+    # must stay isolated even when a dashboard started without it owns the
+    # game: the owner may only strengthen isolation, never drop it.
+    from renforge import dashboard_client
+    from renforge.tools import live
+
+    game = tmp_path / "game"
+    game.mkdir()
+    (game / "script.rpy").write_text("label start:\n    return\nlabel other:\n    return\n", encoding="utf-8")
+    knobs = ("savedir", "home", "persistent", "preferences")
+    arguments = {"target": "other"} if tool == "renforge_jump" else {}
+    monkeypatch.setenv("RENFORGE_ISOLATION", "temporary")
+    seen: dict = {}
+
+    def fake_dashboard(project_path: str, **kwargs):
+        seen["dashboard"] = {k: kwargs.get(k) for k in knobs}
+        return {"ok": True, "ready": True, "via": "dashboard", "editor": True}
+
+    monkeypatch.setattr(dashboard_client, "launch_game", fake_dashboard)
+    monkeypatch.setattr(live, "launch_game", lambda *_a, **_k: pytest.fail("ran locally"))
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    assert app.tools[tool](str(tmp_path), **arguments)["ok"] is True
+    assert seen["dashboard"] == {
+        "savedir": "temporary", "home": "temporary", "persistent": "empty", "preferences": "empty"
+    }

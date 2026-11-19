@@ -85,6 +85,7 @@ TOOLSETS: dict[str, tuple[str, ...]] = {
         "renforge_find_references",
         "renforge_parse_lint",
         "renforge_assets",
+        "renforge_validate",
     ),
     "translation": (
         "renforge_languages",

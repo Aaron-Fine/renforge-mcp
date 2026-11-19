@@ -129,8 +129,9 @@ def test_enforce_denies_open_world_and_destructive_without_authorize(monkeypatch
     denied_list_user = evaluate("renforge_saves", {"action": "list_user"})
     denied_import = evaluate("renforge_saves", {"action": "import", "slot": "1-1"})
     denied_session_import = evaluate("renforge_session", {"action": "import", "slot": "1-1"})
-    isolated_launch = evaluate("renforge_launch", {"savedir": "auto"})
+    isolated_launch = evaluate("renforge_launch", {"savedir": "temporary"})
     exposed_launch = evaluate("renforge_launch", {"savedir": "existing"})
+    default_launch = evaluate("renforge_launch", {"savedir": "auto"})
 
     assert denied_eval.allowed is False
     assert denied_eval.to_result()["code"] == "POLICY_DENIED"
@@ -146,6 +147,10 @@ def test_enforce_denies_open_world_and_destructive_without_authorize(monkeypatch
     assert isolated_launch.risk == RISK_MUTATING
     assert exposed_launch.allowed is False
     assert exposed_launch.risk == RISK_DESTRUCTIVE
+    # Isolation is opt-in (0.7.6), so a launch with no knobs uses the player's
+    # saves; the fork's gate makes that destructive too.
+    assert default_launch.allowed is False
+    assert default_launch.risk == RISK_DESTRUCTIVE
 
 
 def test_enforce_allows_authorized_and_allowlisted_calls(monkeypatch) -> None:
@@ -361,9 +366,11 @@ def test_a_launch_into_a_folder_outside_renforge_and_temp_needs_authorize(tmp_pa
         assert evaluate("renforge_launch", {**params, "authorize": True}).allowed is True
     inside = state / "projects" / "demo-0123" / "saves"
     for value in (str(inside), f"  {inside}  "):
-        decision = evaluate("renforge_launch", {"savedir": value})
+        # An explicit savedir keeps the host HOME unless home is set (0.7.6).
+        decision = evaluate("renforge_launch", {"savedir": value, "home": "temporary"})
         assert decision.risk == RISK_MUTATING, value
         assert decision.allowed is True
+        assert evaluate("renforge_launch", {"savedir": value}).risk == RISK_DESTRUCTIVE, value
     # The temp dir is shared with other apps, so it is not RenForge's own.
     temp = Path(tempfile.gettempdir())
     for params in ({"home": str(temp)}, {"savedir": str(temp / "other-app")}):

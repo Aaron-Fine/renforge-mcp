@@ -17,6 +17,44 @@ TOOL_NAMES = (
 
 SESSION_ACTIONS = ("launch", "status", "save", "load", "list", "import", "stop")
 
+_LANGUAGE_RESULT_KEYS = ("requested_language", "active_language", "language_applied")
+
+
+def _annotate_language_result(
+    result: dict[str, Any],
+    language: str | None,
+    warning: str | None = None,
+) -> dict[str, Any]:
+    """Keep language fields honest for delegated dashboard launches.
+
+    An older dashboard ignores the unknown ``language`` key and returns no
+    language fields. Without this note the launch would look as if the language
+    had been applied. A successful launch that used the default savedir also
+    needs the persistence warning, because Ren'Py stores the language there.
+    """
+    annotated = dict(result)
+    reported_language = any(key in annotated for key in _LANGUAGE_RESULT_KEYS)
+    if language is not None and annotated.get("ok") and not reported_language:
+        note = (
+            "The dashboard did not report language support, so the requested "
+            f"language {language!r} was not confirmed. Upgrade the dashboard or "
+            "launch without a language."
+        )
+        annotated["requested_language"] = language
+        annotated["language_applied"] = False
+        message = annotated.get("message")
+        annotated["message"] = f"{message} {note}" if isinstance(message, str) and message else note
+    if language is not None and not annotated.get("ok"):
+        annotated["language_applied"] = False
+    if (
+        warning is not None
+        and annotated.get("ok")
+        and not annotated.get("already_running")
+        and reported_language
+    ):
+        annotated.setdefault("warning", warning)
+    return annotated
+
 
 def build_wrappers(context):
     live = context.live
@@ -34,6 +72,7 @@ def build_wrappers(context):
         persistent: str | None = None,
         cleanup_on_stop: bool = True,
         timeout: float | None = None,
+        language: str | None = None,
         session: dict[str, Any] | None = None,
         cancel_event: threading.Event | None = None,
         home: str | None = None,
@@ -44,20 +83,38 @@ def build_wrappers(context):
             launch_game as launch_via_dashboard,
             stop_game as stop_via_dashboard,
         )
-        from ..save_isolation import apply_launch_isolation_defaults
+        from ..save_isolation import (
+            apply_launch_isolation_defaults,
+            configured_isolation_mode,
+            isolation_knobs_unset,
+        )
 
         canonical_editor = bool(editor)
         session_cfg = dict(session or {})
-        isolation_defaults = apply_launch_isolation_defaults(
-            savedir=session_cfg.get("savedir", savedir),
-            home=session_cfg.get("home", home),
-            persistent=session_cfg.get("persistent", persistent),
-            preferences=session_cfg.get("preferences", preferences),
-        )
+        knobs = {
+            "savedir": session_cfg.get("savedir", savedir),
+            "home": session_cfg.get("home", home),
+            "persistent": session_cfg.get("persistent", persistent),
+            "preferences": session_cfg.get("preferences", preferences),
+        }
+        isolation_defaults = apply_launch_isolation_defaults(**knobs)
         effective_savedir = isolation_defaults["savedir"]
         effective_home = isolation_defaults["home"]
         effective_persistent = isolation_defaults["persistent"]
         effective_preferences = isolation_defaults["preferences"]
+        # A relaunch (warp) with every knob auto is resolved by the process
+        # that owns the running game, so an isolated game's jump stays
+        # isolated there instead of being sent the player's saves from here.
+        # When this server's RENFORGE_ISOLATION already isolates, resolve here
+        # instead: the owner may strengthen isolation, never drop it.
+        owner_resolves = (
+            warp is not None
+            and isolation_knobs_unset(*knobs.values())
+            and configured_isolation_mode() != "temporary"
+        )
+        if owner_resolves:
+            effective_savedir = effective_home = None
+            effective_persistent = effective_preferences = None
         effective_cleanup = (
             session_cfg["cleanup_on_stop"]
             if isinstance(session_cfg.get("cleanup_on_stop"), bool)
@@ -82,6 +139,7 @@ def build_wrappers(context):
             home=effective_home,
             preferences=effective_preferences,
             start_label=start_label,
+            language=language,
         )
         if delegated is not None:
             if cancel_event is not None and cancel_event.is_set():
@@ -107,7 +165,20 @@ def build_wrappers(context):
                         "launch_cancel_requested": True,
                     }
                 return live.cancelled_launch_result(phase="starting_renpy")
-            return delegated
+            warning_savedir = effective_savedir
+            if owner_resolves:
+                # The dashboard chose; its isolation report says what it chose.
+                reported = delegated.get("isolation")
+                warning_savedir = (
+                    reported.get("savedir_mode")
+                    if isinstance(reported, dict) and reported.get("savedir_mode")
+                    else isolation_defaults["savedir"]
+                )
+            warning = live.language_persistence_warning(
+                language,
+                warning_savedir if isinstance(warning_savedir, str) else None,
+            )
+            return _annotate_language_result(delegated, language, warning)
         if cancel_event is not None and cancel_event.is_set():
             stopped = live.stop_external_game(project_path)
             if not stopped.get("ok"):
@@ -128,6 +199,7 @@ def build_wrappers(context):
             persistent=effective_persistent,
             cleanup_on_stop=bool(effective_cleanup),
             timeout=timeout,
+            language=language,
             session=session,
             cancel_event=cancel_event,
             home=effective_home,
@@ -164,7 +236,13 @@ def build_wrappers(context):
 
         requirements = live.launch_requirements(
             project_path, **{field: kwargs.get(field) for field in ("savedir", "home", "persistent", "preferences")})
-        return live.start_launch(project_path, _launch, editor=requested_editor, requirements=requirements)
+        return live.start_launch(
+            project_path,
+            _launch,
+            editor=requested_editor,
+            language=kwargs.get("language"),
+            requirements=requirements,
+        )
 
 
     def renforge_launch(
@@ -180,6 +258,7 @@ def build_wrappers(context):
         timeout: float = 0,
         home: str = "auto",
         preferences: str = "auto",
+        language: str | None = None,
         authorize: bool = False,
     ) -> dict:
         """Launch or reuse a game with the Live Editor enabled by default.
@@ -195,14 +274,23 @@ def build_wrappers(context):
         The call waits at most 20 seconds for readiness, then returns
         ``status="starting"`` while startup continues in the background. Poll
         ``renforge_launch_status`` until it reports ``ready`` or ``failed``.
-        display/audio default to auto. Saves, preferences, and HOME default to
-        isolated temporary locations so this session does not read or write the
-        user's normal Ren'Py state. The ready payload includes ``session_id``
-        and an ``isolation`` object. Pass savedir='existing' (and home='existing'
-        if needed) to use the user's files, or set RENFORGE_ISOLATION=existing
-        as a server-wide default; that requires authorize=true when
-        RENFORGE_POLICY=enforce. timeout controls the background startup
-        deadline, not the MCP call (default 180 s, or RENFORGE_STARTUP_TIMEOUT).
+        display/audio default to auto. Saves and HOME default to the user's own,
+        as before; pass savedir='temporary' (or set RENFORGE_ISOLATION=temporary
+        server-wide) to isolate saves, persistent data, preferences, and HOME in
+        a disposable session folder. The ready payload includes ``session_id``
+        and an ``isolation`` object. A launch that keeps the user's saves or
+        HOME, or writes to a folder outside RenForge's own, requires
+        authorize=true when RENFORGE_POLICY=enforce. timeout controls the
+        background startup deadline, not the MCP call (default 180 s, or
+        RENFORGE_STARTUP_TIMEOUT).
+        ``language`` sets ``RENPY_LANGUAGE`` for a fresh game process. Ren'Py
+        persists it as ``preferences.language``, so this overrides the stored
+        preference, not just one session; for verification use
+        ``savedir="temporary"`` (and ``persistent="empty"``, which needs an
+        isolated savedir) or restore the language afterward. It cannot change an
+        already-running session. Only this tool accepts ``language``: a later
+        ``renforge_jump``/``renforge_new_game`` or dashboard Warp relaunch
+        starts without it and returns to the stored preference.
         """
         kwargs: dict[str, Any] = {
             "version": version,
@@ -218,6 +306,8 @@ def build_wrappers(context):
         }
         if timeout and timeout > 0:
             kwargs["timeout"] = float(timeout)
+        if language is not None:
+            kwargs["language"] = language
         return _log_tool_call(
             name="renforge_launch",
             params={
@@ -233,6 +323,7 @@ def build_wrappers(context):
                 "timeout": timeout,
                 "home": home,
                 "preferences": preferences,
+                "language": language,
                 "authorize": authorize,
             },
             project_root=project_path,
@@ -443,12 +534,19 @@ def build_wrappers(context):
             from ..state import project_state_dir
 
             saves = project_state_dir(project_path) / "saves"
+            # The import creates only the saves folder itself; the state folder
+            # is RenForge's own (and already resolved), so make it here.
+            saves.parent.mkdir(parents=True, exist_ok=True)
             pattern = re.compile(r"%s-[A-Za-z]{2}\d+\.save" % re.escape(name))
             replaced = saves.is_dir() and any(pattern.fullmatch(entry.name) for entry in saves.iterdir())
             result = import_host_slots(project_path, saves, slot=name, save_name=_save_name())
+            touched = list(result.get("files_touched") or [])
             if not result.get("ok"):
-                return {"ok": False, "error": f"the player has no save slot {name!r}; list shows player_slots"}
-            return {"ok": True, "slot": name, "replaced": replaced,
+                if result.get("code") in (None, "NO_MATCHING_SAVE_SLOTS"):
+                    return {"ok": False, "code": "NO_MATCHING_SAVE_SLOTS", "files_touched": touched,
+                            "error": f"the player has no save slot {name!r}; list shows player_slots"}
+                return {**result, "files_touched": touched}
+            return {"ok": True, "slot": name, "replaced": replaced, "files_touched": touched,
                     "next": ("load this slot to play from it. Ren'Py asks whether to trust a save made on "
                              "another device: choose Yes for the save, then No for the device, which loads "
                              "this save without trusting others.")}
