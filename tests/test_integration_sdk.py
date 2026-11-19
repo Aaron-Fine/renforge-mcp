@@ -1603,14 +1603,15 @@ label start:
     return
 ''', encoding='utf-8')
     with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
+        # get_state does not list screens; ask for the target screen itself.
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            screens = session.client.get_state().get('screens', [])
-            if any(item['name'] == 'target' for item in screens):
+            inspected = session.client.inspect_screen('target')
+            if inspected.get('active') is True:
                 break
             time.sleep(0.1)
         else:
-            pytest.fail("the target screen never showed: %r" % (screens,))
+            pytest.fail("the target screen never showed: %r" % (inspected,))
         from renforge.interaction import classify
         from renforge.observe import apply_screenshot
         import renforge.util.images as images
