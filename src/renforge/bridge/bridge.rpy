@@ -3885,7 +3885,7 @@ init python:
         filename = getattr(node, "filename", None)
         if isinstance(filename, str) and filename.strip():
             return filename.strip()
-        # A DynamicImage's name is its template ("[player_skin]_avatar_idle");
+        # A DynamicImage's name is its template ("[outfit]_portrait");
         # the image it resolved to is what is drawn.
         if node.__class__.__name__ == "DynamicImage":
             for attr in ("raw_target", "target"):
@@ -3905,7 +3905,7 @@ init python:
         if _renforge_observe_is_sequence(name):
             parts = [part for part in name if isinstance(part, str) and part.strip()]
             if parts:
-                # An image name is a tag and attributes ("lorbook naughtydn"),
+                # An image name is a tag and attributes ("eileen happy"),
                 # written as Ren'Py writes it, not a path.
                 return " ".join(parts)
         child = getattr(node, "child", None)
@@ -4013,7 +4013,7 @@ init python:
 
 
     def _renforge_observe_object_token(value):
-        # A camper is an object. fileName is the badge stem; name is the fallback.
+        # An object argument is named by its fileName field, else its name.
         for attr in ("fileName", "name"):
             try:
                 field = getattr(value, attr)
@@ -4464,7 +4464,7 @@ init python:
         if isinstance(scope, builtins.dict):
             prompt = scope.get("prompt")
             if isinstance(prompt, builtins.str) and prompt.strip():
-                # As drawn: "[mc_nick]" substituted, text tags removed.
+                # As drawn: "[player_name]" substituted, text tags removed.
                 return _renforge_strip_say_tags(_renforge_render_say_text(prompt)).strip() or None
         return None
 
@@ -4733,7 +4733,7 @@ init python:
             return False
         # Showing or hiding a screen beside an interface action is that
         # button's own indicator: a fast-forward button that runs
-        # Show("fastHide") with Skip(). Skip only turns sensitive while
+        # Show("skip_indicator") with Skip(). Skip only turns sensitive while
         # skipping is allowed, so as a decision it stopped progression (which
         # allows skipping) at once.
         if any(type(action).__name__ in _RENFORGE_CHROME_ACTIONS and _renforge_engine_class(type(action))
@@ -4805,8 +4805,7 @@ init python:
         """A Function action handed the menu item or its action as an argument.
 
         A choice screen may route each item through its own callback
-        (``action Function(menu_choice_intercept,
-        menu_item=i)``); that button is the item.
+        (``action Function(on_choice, item=i)``); that button is the item.
         """
         for action in _renforge_action_list(container):
             args = getattr(action, "args", None)
@@ -5403,7 +5402,7 @@ init python:
         """Keep the restored-screen hook in config.after_load_callbacks.
 
         A game may assign its own list during init, after the bridge added
-        the hook (``config.after_load_callbacks = [after_load_setup_custom]``).
+        the hook (``config.after_load_callbacks = [after_load_setup]``).
         """
         after_load = getattr(renpy.config, "after_load_callbacks", None)
         if isinstance(after_load, builtins.list) and not any(
