@@ -3809,16 +3809,36 @@ init python:
             },
         }
 
+    _RENFORGE_ENGINE_WIDGETS = (("dragdrop", "Drag", "drag"), ("viewport", "Viewport", "viewport"),
+                                ("behavior", "Input", "input"), ("behavior", "Bar", "bar"),
+                                ("behavior", "Button", "button"))
+
     def _renforge_engine_role(widget):
         """The role Ren'Py's own widget classes give, subclasses included."""
         display = getattr(renpy, "display", None)
-        for module, name, role in (("dragdrop", "Drag", "drag"), ("viewport", "Viewport", "viewport"),
-                                   ("behavior", "Input", "input"), ("behavior", "Bar", "bar"),
-                                   ("behavior", "Button", "button")):
+        for module, name, role in _RENFORGE_ENGINE_WIDGETS:
             cls = getattr(getattr(display, module, None), name, None)
             if isinstance(cls, type) and isinstance(widget, cls):
                 return role
         return None
+
+    def _renforge_is_engine_widget(widget, name):
+        """Whether ``widget`` is Ren'Py's ``name`` widget (Drag, Viewport, Input,
+        Bar, Button), a subclass such as VPGrid included.
+
+        A widget whose class has exactly that name also counts, as before, for
+        runtimes where the engine class cannot be resolved.
+        """
+        if widget is None:
+            return False
+        module = next((module for module, known, _role in _RENFORGE_ENGINE_WIDGETS if known == name), None)
+        cls = getattr(getattr(getattr(renpy, "display", None), module, None), name, None) if module else None
+        try:
+            if isinstance(cls, type) and isinstance(widget, cls):
+                return True
+            return widget.__class__.__name__ == name
+        except Exception:
+            return False
 
     def _renforge_observe_role(focus, widget):
         # Ren'Py's classes first; names only for displayables that are not
@@ -4143,11 +4163,8 @@ init python:
         if widget is None:
             return None
         attrs = ("action", "clicked")
-        try:
-            if widget.__class__.__name__ == "Drag":
-                attrs = ("dragged", "clicked", "action")
-        except Exception:
-            attrs = ("action", "clicked")
+        if _renforge_is_engine_widget(widget, "Drag"):
+            attrs = ("dragged", "clicked", "action")
         for attr in attrs:
             value = getattr(widget, attr, None)
             if value is None:
@@ -4242,11 +4259,7 @@ init python:
     def _renforge_observe_adjustment(widget):
         if widget is None:
             return None
-        try:
-            name = widget.__class__.__name__
-        except Exception:
-            name = ""
-        if name == "Viewport":
+        if _renforge_is_engine_widget(widget, "Viewport"):
             axes = {}
             horizontal = _renforge_observe_axis(getattr(widget, "xadjustment", None))
             vertical = _renforge_observe_axis(getattr(widget, "yadjustment", None))
@@ -4259,12 +4272,7 @@ init python:
 
 
     def _renforge_observe_drag_name(widget):
-        if widget is None:
-            return None
-        try:
-            if widget.__class__.__name__ != "Drag":
-                return None
-        except Exception:
+        if not _renforge_is_engine_widget(widget, "Drag"):
             return None
         name = getattr(widget, "drag_name", None)
         if isinstance(name, builtins.str) and name.strip():
@@ -4273,12 +4281,7 @@ init python:
 
 
     def _renforge_observe_drag_image(widget):
-        if widget is None:
-            return None
-        try:
-            if widget.__class__.__name__ != "Drag":
-                return None
-        except Exception:
+        if not _renforge_is_engine_widget(widget, "Drag"):
             return None
         return _renforge_displayable_filename(getattr(widget, "child", None))
 
@@ -4453,10 +4456,8 @@ init python:
 
 
     def _renforge_is_input_displayable(node):
-        try:
-            return node.__class__.__name__ == "Input"
-        except Exception:
-            return False
+        """Whether ``node`` is Ren'Py's Input, a subclass included."""
+        return _renforge_is_engine_widget(node, "Input")
 
 
     def _renforge_input_prompt(screen_node, widget):

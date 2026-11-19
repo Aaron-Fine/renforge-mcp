@@ -323,3 +323,65 @@ def test_first_seen_forgets_screens_that_left_and_checks_the_name(running_bridge
     hud.screen_name = ("inventory", None)
     start_interact()
     assert _kept_up(running_bridge) == {"inventory": False}
+
+
+# --- engine widget subclasses -------------------------------------------------
+
+
+def _engine_widget_classes(renpy):
+    class Viewport:
+        pass
+
+    class VPGrid(Viewport):
+        pass
+
+    class Drag:
+        pass
+
+    class Input:
+        pass
+
+    renpy.display.viewport = types.SimpleNamespace(Viewport=Viewport)
+    renpy.display.dragdrop = types.SimpleNamespace(Drag=Drag)
+    renpy.display.behavior = types.SimpleNamespace(Input=Input)
+    return VPGrid, Drag, Input
+
+
+def test_vpgrid_reports_its_scroll_adjustments(running_bridge):
+    VPGrid, _Drag, _Input = _engine_widget_classes(running_bridge.renpy)
+    grid = VPGrid()
+    grid.xadjustment = None
+    grid.yadjustment = types.SimpleNamespace(value=40, range=400, step=10, page=200)
+
+    adjustment = running_bridge.globs["_renforge_observe_adjustment"](grid)
+
+    assert adjustment == {"y": {"value": 40, "range": 400, "step": 10, "page": 200}}
+
+
+def test_drag_subclass_keeps_its_drag_name_image_and_dragged_action(running_bridge):
+    _VPGrid, Drag, _Input = _engine_widget_classes(running_bridge.renpy)
+
+    class Card(Drag):
+        pass
+
+    class Dropped:
+        pass
+
+    card = Card()
+    card.drag_name = "ace"
+    card.child = types.SimpleNamespace(filename="images/cards/ace.png")
+    card.dragged = Dropped()
+    globs = running_bridge.globs
+
+    assert globs["_renforge_observe_drag_name"](card) == "ace"
+    assert globs["_renforge_observe_drag_image"](card) is not None
+    assert globs["_renforge_observe_action_class"](card) == "Dropped"
+
+
+def test_input_subclass_is_an_input(running_bridge):
+    _VPGrid, _Drag, Input = _engine_widget_classes(running_bridge.renpy)
+
+    class MaskedInput(Input):
+        pass
+
+    assert running_bridge.globs["_renforge_is_input_displayable"](MaskedInput()) is True
