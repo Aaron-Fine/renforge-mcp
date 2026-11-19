@@ -3616,6 +3616,12 @@ init python:
 
 
     def _renforge_h_scene_tree(payload):
+        """The scene as nodes: controls first, then each layer's displayables.
+
+        Filters (layers, types, screen, ids), detail level and the max_depth,
+        max_nodes and max_text_chars limits come from the payload; what the
+        limits cut is counted under ``omitted``.
+        """
         payload = payload or {}
         detail = str(payload.get("detail") or "semantic").casefold()
         if detail not in ("semantic", "layout", "raw"):
@@ -3655,10 +3661,13 @@ init python:
         inventory = _renforge_scene_inventory()
         counters["_inventory"] = inventory
         # Controls and other nodes share the same completed frame geometry.
+        # Input candidates are judged against every control, not only the
+        # ones max_nodes leaves room to list.
         try:
-            focusables = _renforge_focusable_elements(max_nodes + 1, max_text_chars, inventory)
+            controls = _renforge_focusable_elements(None, max_text_chars, inventory)
         except Exception:
-            focusables = []
+            controls = []
+        focusables = controls[:max_nodes + 1]
         if len(focusables) > max_nodes:
             counters["_omitted_max_nodes"] += len(focusables) - max_nodes
             for _focus, element in focusables[:max_nodes]:
@@ -3740,7 +3749,7 @@ init python:
                     nodes.append(node)
                     _renforge_scene_descend_children(d, layer, screen_name, node["zorder"], seen, nodes, counters, 0)
 
-        input_candidates, _unclassified = _renforge_input_candidates(inventory, focusables)
+        input_candidates, _unclassified = _renforge_input_candidates(inventory, controls)
         _renforge_scene_unique_ids(nodes, max_text_chars)
         _renforge_scene_finalize(nodes, include)
 

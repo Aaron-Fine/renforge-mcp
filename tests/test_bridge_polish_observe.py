@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 import types
 
+from test_bridge_runtime import _arm_stable_interaction, _completed_render
 from test_bridge_runtime import running_bridge  # noqa: F401 - shared bridge fixture
 
 
@@ -385,3 +386,50 @@ def test_input_subclass_is_an_input(running_bridge):
         pass
 
     assert running_bridge.globs["_renforge_is_input_displayable"](MaskedInput()) is True
+
+
+# --- scene_tree input candidates ------------------------------------------------
+
+
+def test_scene_tree_max_nodes_does_not_turn_controls_into_input_candidates(running_bridge):
+    """Controls past max_nodes are still controls, not unknown event handlers."""
+    renpy = running_bridge.renpy
+
+    class Action:
+        pass
+
+    class GameAction(Action):
+        def __call__(self):
+            pass
+
+    class GameButton:
+        def __init__(self, action):
+            self.action = action
+
+        def event(self, ev, x, y, st):
+            raise AssertionError("the bridge ran a game event handler")
+
+    class HubScreen:
+        screen_name = ("hub", None)
+        layer = "screens"
+        modal = False
+        hiding = False
+        widgets = {}
+        scope = {}
+
+    HubScreen.__name__ = "ScreenDisplayable"
+    buttons = [GameButton(GameAction()) for _ in range(4)]
+    screen = HubScreen()
+    screen.children = buttons
+    renpy.ui = types.SimpleNamespace(Action=Action)
+    renpy.display.behavior.is_sensitive = lambda action: True
+    _arm_stable_interaction(running_bridge, generation=9)
+    renpy.game.context = lambda: types.SimpleNamespace(interacting=True, scene_lists=types.SimpleNamespace(
+        layers={"screens": [types.SimpleNamespace(displayable=screen)]}))
+    renpy.config.screen_width, renpy.config.screen_height = 800, 600
+    renpy.display.focus.focus_list[:] = []
+    renpy.display.render = types.SimpleNamespace(screen_render=_completed_render(800, 600, [screen], children=[
+        (_completed_render(60, 40, [button]), 100 * index, 300, True, True) for index, button in enumerate(buttons)]))
+
+    assert running_bridge.client.scene_tree()["input_candidates"] == []
+    assert running_bridge.client.scene_tree(max_nodes=2)["input_candidates"] == []
