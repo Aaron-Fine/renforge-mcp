@@ -123,3 +123,62 @@ def test_custom_click_attributes_are_judged_alike_by_discovery_and_the_click(run
     value = running_bridge.globs["_renforge_custom_action_value"]
     assert value(acting) == acting.click_action
     assert value(empty) is None and value(counter) is None
+
+
+# --- a semantic click walks the scene once -----------------------------------
+
+
+def _acting_hotspot(running_bridge, monkeypatch):
+    """One game displayable whose click attribute holds an Action; returns its runs."""
+    renpy = running_bridge.renpy
+    runs = []
+
+    class Action:
+        def __call__(self):
+            runs.append(1)
+
+    class Hotspot:
+        def __init__(self):
+            self.click_action = Action()
+
+        def event(self, ev, x, y, st):
+            raise AssertionError("a semantic click runs the action, not the event")
+
+    monkeypatch.setattr(renpy, "ui", types.SimpleNamespace(Action=Action), raising=False)
+    renpy.display.behavior.run = lambda action: action()
+    _custom_widget_scene(running_bridge, [Hotspot()])
+    return runs
+
+
+def _count_inventories(running_bridge, monkeypatch):
+    original = running_bridge.globs["_renforge_scene_inventory"]
+    calls = []
+
+    def counting():
+        calls.append(1)
+        return original()
+
+    monkeypatch.setitem(running_bridge.globs, "_renforge_scene_inventory", counting)
+    return calls
+
+
+def test_a_semantic_click_builds_the_scene_inventory_once(running_bridge, monkeypatch):
+    runs = _acting_hotspot(running_bridge, monkeypatch)
+    element = running_bridge.client.list_ui_elements()[0]
+    calls = _count_inventories(running_bridge, monkeypatch)
+
+    clicked = running_bridge.client.click_element(id=element["id"])
+    assert clicked.get("ok") is True and clicked.get("via") == "action", clicked
+    assert runs == [1]
+    assert len(calls) == 1
+
+
+def test_a_semantic_click_on_an_unsettled_frame_is_refused_with_the_observation(running_bridge, monkeypatch):
+    runs = _acting_hotspot(running_bridge, monkeypatch)
+    element = running_bridge.client.list_ui_elements()[0]
+    monkeypatch.setitem(running_bridge.globs, "_renforge_transition_pending", lambda: True)
+
+    refused = running_bridge.client.click_element(id=element["id"])
+    assert refused.get("ok") is False and refused.get("error") == "unstable", refused
+    assert refused["observation"]["unstable_reason"] == "transition"
+    assert runs == []

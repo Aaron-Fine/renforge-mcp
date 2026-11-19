@@ -2630,10 +2630,13 @@ init python:
         if element.get("covered") or element.get("clickable") is False:
             return {"ok": False, "error": "UI element has no eligible click", "element": element}
         if element.get("semantic") and "click" in element.get("operations", ()):
-            raw = _renforge_observe_raw(False, include_readout=False)
-            refusal = _renforge_runtime.interaction.guard_identity(raw, raw["interaction"])
-            if refusal:
-                return {"ok": False, "error": refusal, "observation": raw}
+            # Running the action needs a settled frame, as act does. Only a
+            # refusal pays for a second scene walk: its reply carries the
+            # observation.
+            stable, _reason = _renforge_observe_stability()
+            if stable is not True:
+                return {"ok": False, "error": "unstable",
+                        "observation": _renforge_observe_raw(False, include_readout=False)}
             result = {"ok": True, "id": element["id"], "text": element.get("text"),
                       "screen": element.get("screen"), "bounds": element.get("bounds"), "via": "action"}
             try:
