@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from renforge import mods, policy
+from renforge.util import files as util_files
 from renforge.tools import mods as mod_tools
 from renforge.state import project_state_dir
 
@@ -178,7 +179,12 @@ def test_remove_clears_mod_dir_when_nothing_unlisted(tmp_path) -> None:
 
     result = mods.remove(root, "demo")
 
-    assert result == {"ok": True, "removed": ["scripts/intro.rpy"], "kept": []}
+    assert result == {
+        "ok": True,
+        "removed": ["scripts/intro.rpy"],
+        "kept": [],
+        "files_deleted": ["game/mods/demo/renforge-mod.json", "game/mods/demo/scripts/intro.rpy"],
+    }
     assert not (root / "game" / "mods" / "demo").exists()
     assert (root / "game" / "mods").is_dir()
 
@@ -201,7 +207,12 @@ def test_package_zips_listed_files_without_compiled_or_manifest(tmp_path) -> Non
     result = mods.package(root, "demo")
 
     zip_path = project_state_dir(root) / "mods" / "demo.zip"
-    assert result == {"ok": True, "path": str(zip_path), "files": ["readme.md", "scripts/intro.rpy"]}
+    assert result == {
+        "ok": True,
+        "path": str(zip_path),
+        "files": ["readme.md", "scripts/intro.rpy"],
+        "files_touched": [str(zip_path)],
+    }
     with zipfile.ZipFile(zip_path) as archive:
         assert sorted(archive.namelist()) == ["game/mods/demo/readme.md", "game/mods/demo/scripts/intro.rpy"]
         assert archive.read("game/mods/demo/readme.md") == b"hello"
@@ -215,6 +226,7 @@ def test_package_unknown_mod_is_an_error(tmp_path) -> None:
 
 def test_lint_keeps_only_diagnostics_inside_the_mod(tmp_path) -> None:
     root = _project(tmp_path)
+    mods.write_file(root, "demo", "a.rpy", "label a:\n    return\n")
     seen = {}
 
     def fake_run(project_root):
@@ -245,6 +257,7 @@ def test_lint_keeps_only_diagnostics_inside_the_mod(tmp_path) -> None:
 
 def test_lint_is_ok_when_mod_has_no_diagnostics(tmp_path) -> None:
     root = _project(tmp_path)
+    mods.write_file(root, "demo", "a.rpy", "label a:\n    return\n")
 
     def clean_run(project_root):
         return {"ok": True, "returncode": 0, "diagnostics": [{"file": "game/script.rpy", "line": 1, "severity": "error"}]}
@@ -254,6 +267,7 @@ def test_lint_is_ok_when_mod_has_no_diagnostics(tmp_path) -> None:
 
 def test_lint_is_not_ok_when_lint_run_fails(tmp_path) -> None:
     root = _project(tmp_path)
+    mods.write_file(root, "demo", "a.rpy", "label a:\n    return\n")
 
     def failing_run(project_root):
         return {"ok": False, "error": "no sdk", "diagnostics": []}
@@ -317,7 +331,12 @@ def test_dispatcher_write_then_remove(tmp_path) -> None:
     removed = mod_tools.mod(str(root), "remove", name="demo")
 
     assert written["ok"] is True
-    assert removed == {"ok": True, "removed": ["x.rpy"], "kept": []}
+    assert removed == {
+        "ok": True,
+        "removed": ["x.rpy"],
+        "kept": [],
+        "files_deleted": ["game/mods/demo/renforge-mod.json", "game/mods/demo/x.rpy"],
+    }
 
 
 def test_dispatcher_package_and_lint_route_to_mods(tmp_path, monkeypatch) -> None:
@@ -369,7 +388,7 @@ def _install_reload(monkeypatch, fake: _Reload) -> None:
 
 
 def test_reload_polls_until_stable_and_reports_clean_errors(tmp_path, monkeypatch) -> None:
-    observation = {"ok": True, "stable": True, "dialogue": None}
+    observation = {"ok": True, "stable": True, "dialogue": "Hello"}
     fake = _Reload(
         observations=[{"ok": True, "stable": False}, observation],
         error_replies=[
@@ -490,3 +509,219 @@ def test_package_reports_missing_files_and_fails_when_nothing_is_left(tmp_path) 
     empty = mods.package(root, "demo")
     assert empty["ok"] is False
     assert empty["missing"] == ["a.rpy", "b.rpy"]
+
+
+def test_write_and_remove_work_through_a_symlinked_project_root(tmp_path) -> None:
+    # A symlink above the project (a linked games library, macOS /var, or
+    # /home -> /var/home) is not under game/ and must not block writes.
+    real = tmp_path / "real"
+    real.mkdir()
+    _project(real)
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+
+    written = mods.write_file(link, "demo", "main.rpy", "label demo:\n    return\n")
+    removed = mods.remove(link, "demo")
+
+    assert written["ok"] is True
+    assert removed["removed"] == ["main.rpy"]
+    assert not (real / "game" / "mods" / "demo").exists()
+
+
+def test_write_refuses_to_take_over_a_file_it_did_not_create(tmp_path) -> None:
+    # A game with its own mod loader may ship game/mods/<name>/ files.
+    root = _project(tmp_path)
+    shipped = root / "game" / "mods" / "core" / "script.rpy"
+    shipped.parent.mkdir(parents=True)
+    shipped.write_text("label core:\n    return\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="another mod name"):
+        mods.write_file(root, "core", "script.rpy", "clobbered")
+    with pytest.raises(ValueError, match="another mod name"):
+        mods.write_file(root, "core", "new.rpy", "label new:\n    return\n")
+    assert shipped.read_text(encoding="utf-8") == "label core:\n    return\n"
+    assert not (shipped.parent / "renforge-mod.json").exists()
+    assert not (shipped.parent / "new.rpy").exists()
+
+
+def test_write_refuses_an_unlisted_file_or_compiled_sibling_in_its_own_mod(tmp_path) -> None:
+    root = _project(tmp_path)
+    mods.write_file(root, "demo", "a.rpy", "a")
+    mod_dir = root / "game" / "mods" / "demo"
+    (mod_dir / "stray.rpy").write_text("stray", encoding="utf-8")
+    (mod_dir / "only.rpyc").write_bytes(b"compiled")
+
+    with pytest.raises(ValueError, match="did not write"):
+        mods.write_file(root, "demo", "stray.rpy", "clobbered")
+    # remove() deletes a listed .rpy's .rpyc, so a foreign .rpyc blocks the name too.
+    with pytest.raises(ValueError, match="did not write"):
+        mods.write_file(root, "demo", "only.rpy", "x")
+    assert (mod_dir / "stray.rpy").read_text(encoding="utf-8") == "stray"
+    assert (mod_dir / "only.rpyc").read_bytes() == b"compiled"
+    assert _manifest(root, "demo")["files"] == ["a.rpy"]
+    # Rewriting a file the mod already lists still works, even once compiled.
+    (mod_dir / "a.rpyc").write_bytes(b"compiled")
+    assert mods.write_file(root, "demo", "a.rpy", "b")["ok"] is True
+
+
+def test_write_remove_and_package_return_write_receipts(tmp_path) -> None:
+    root = _project(tmp_path)
+
+    written = mods.write_file(root, "demo", "scripts/intro.rpy", "intro")
+    packaged = mods.package(root, "demo")
+    (root / "game" / "mods" / "demo" / "scripts" / "intro.rpyc").write_bytes(b"compiled")
+    removed = mods.remove(root, "demo")
+
+    assert written["files_touched"] == [
+        "game/mods/demo/renforge-mod.json",
+        "game/mods/demo/scripts/intro.rpy",
+    ]
+    assert packaged["files_touched"] == [str(project_state_dir(root) / "mods" / "demo.zip")]
+    assert removed["files_deleted"] == [
+        "game/mods/demo/renforge-mod.json",
+        "game/mods/demo/scripts/intro.rpy",
+        "game/mods/demo/scripts/intro.rpyc",
+    ]
+
+
+@pytest.mark.parametrize("path", ["Renforge-Mod.json", "RENFORGE-MOD.JSON", "sub/renforge-mod.json"])
+def test_write_rejects_the_manifest_name_in_any_case_or_folder(tmp_path, path) -> None:
+    # NTFS and APFS fold case, so a different spelling would replace the manifest.
+    root = _project(tmp_path)
+
+    with pytest.raises(ValueError, match="managed by RenForge"):
+        mods.write_file(root, "demo", path, "{}")
+
+
+def test_package_skips_an_invalid_manifest_entry_like_list_and_remove(tmp_path) -> None:
+    root = _project(tmp_path)
+    mods.write_file(root, "demo", "a.rpy", "label a:\n    return\n")
+    manifest_path = root / "game" / "mods" / "demo" / "renforge-mod.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"].append("notes.png")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = mods.package(root, "demo")
+
+    assert result["ok"] is True
+    assert result["files"] == ["a.rpy"]
+    assert result["missing"] == ["notes.png"]
+
+
+def test_remove_uses_the_reparse_aware_link_check(tmp_path, monkeypatch) -> None:
+    # Path.is_symlink() misses NTFS junctions; the write path's check does not.
+    # Stand in for a junction: a directory the shared check reports as a link.
+    root = _project(tmp_path)
+    mods.write_file(root, "demo", "sub/a.rpy", "label a:\n    return\n")
+    junction = (root / "game" / "mods" / "demo" / "sub").resolve()
+    real_check = util_files._component_is_link
+    monkeypatch.setattr(
+        mods, "_component_is_link", lambda path: Path(path) == junction or real_check(path), raising=False
+    )
+
+    result = mods.remove(root, "demo")
+
+    assert result["removed"] == []
+    assert result["kept"] == ["sub/a.rpy"]
+    assert (junction / "a.rpy").exists()
+
+
+_PARSE_ERROR_OUTPUT = """\
+I'm sorry, but errors were detected in your script. Please correct the
+errors listed below, and try again.
+
+File "game/mods/hud/main.rpy", line 3: expected statement.
+    foo bar
+       ^
+
+File "game/script.rpy", line 9: expected statement.
+"""
+
+
+def test_lint_reports_a_parse_error_in_the_mod(tmp_path) -> None:
+    from renforge.lint import parse_lint_output
+
+    root = _project(tmp_path)
+    mods.write_file(root, "hud", "main.rpy", "foo bar\n")
+
+    def parse_error_run(project_root):
+        return {
+            "ok": False,
+            "returncode": 1,
+            "timed_out": False,
+            "diagnostics": parse_lint_output(_PARSE_ERROR_OUTPUT),
+            "raw": _PARSE_ERROR_OUTPUT,
+        }
+
+    result = mods.lint(root, "hud", run=parse_error_run)
+
+    assert result["ok"] is False
+    assert result["diagnostics"] == [
+        {"file": "game/mods/hud/main.rpy", "line": 3, "severity": "error", "message": "expected statement."}
+    ]
+
+
+def test_lint_passes_on_a_timeout_and_the_output_tail(tmp_path) -> None:
+    root = _project(tmp_path)
+    mods.write_file(root, "hud", "main.rpy", "label hud:\n    return\n")
+    raw = "x" * 5000 + "the end"
+
+    def timed_out_run(project_root):
+        return {"ok": False, "returncode": None, "timed_out": True, "diagnostics": [], "raw": raw}
+
+    result = mods.lint(root, "hud", run=timed_out_run)
+
+    assert result["ok"] is False
+    assert result["timed_out"] is True
+    assert result["raw_tail"].endswith("the end")
+    assert len(result["raw_tail"]) == 2000
+
+
+def test_lint_of_an_unknown_mod_is_an_error(tmp_path) -> None:
+    root = _project(tmp_path)
+    calls = []
+
+    result = mods.lint(root, "ghost", run=lambda project_root: calls.append(project_root) or {"ok": True})
+
+    assert result == {"ok": False, "error": "unknown mod: ghost"}
+    assert calls == []
+
+
+def test_lint_runs_on_a_shadow_copy_by_default(tmp_path, monkeypatch) -> None:
+    # Linting in place compiles .rpyc and writes game/cache outside the mod.
+    from renforge.tools import validate
+
+    root = _project(tmp_path)
+    mods.write_file(root, "hud", "main.rpy", "foo bar\n")
+    seen = []
+
+    def fake_validate(project_path, **kwargs):
+        seen.append(project_path)
+        return {"ok": False, "returncode": 1, "timed_out": False, "stdout": _PARSE_ERROR_OUTPUT, "stderr": ""}
+
+    monkeypatch.setattr(validate, "validate_project", fake_validate)
+    monkeypatch.setattr(
+        "renforge.lint.run_lint", lambda *a, **k: pytest.fail("mod lint must not lint the project in place")
+    )
+
+    result = mods.lint(root, "hud")
+
+    assert seen == [str(root)]
+    assert [d["line"] for d in result["diagnostics"]] == [3]
+
+
+def test_reload_returns_a_compact_observation_like_the_play_tools(tmp_path, monkeypatch) -> None:
+    raw = {
+        "ok": True,
+        "stable": True,
+        "observation_id": "o1",
+        "dialogue": None,
+        "keys": [],
+        "frame": {"width": 1280, "session_id": "s"},
+    }
+    fake = _Reload(observations=[raw], error_replies=[{"ok": True, "events": []}, {"ok": True, "events": []}])
+    _install_reload(monkeypatch, fake)
+
+    result = mod_tools.mod(str(tmp_path), "reload")
+
+    assert result["observation"] == {"ok": True, "stable": True, "observation_id": "o1", "frame": {"width": 1280}}

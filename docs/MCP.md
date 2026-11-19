@@ -307,14 +307,15 @@ from the project, because the project owner writes it.
 Every tool belongs to one group. `play` is the agent loop, with one tool per
 task: `renforge_info`, `renforge_session`, `renforge_observe`, `renforge_act`,
 and `renforge_explain`. `mod` holds `renforge_mod`, which writes and reloads
-game code, so a server limited to `play` cannot run code in the game. The
-other groups keep every earlier capability for existing clients, scripts, and
-the Live Editor:
+game code, so a server limited to `play` cannot run code in the game.
+`renforge_info` is listed whichever groups are chosen, because every workflow
+starts with it. The other groups keep every earlier capability for existing
+clients, scripts, and the Live Editor:
 
 | Toolset | What it holds |
 | --- | --- |
 | `mod` | `renforge_mod`: write, lint, reload, remove, and package mods |
-| `live` | Launch/stop/saves, advancing, clicks, keys, choices, UI listings, screenshots, the scene tree |
+| `live` | Launch/stop/saves, advancing, clicks, keys, choices, UI listings, screenshots and comparing them (including `renforge_estimate_translation`, the image-shift estimate), the scene tree |
 | `debug` | Game state, variables, `eval`, events, errors, waits, scenarios, autopilot |
 | `editor` | The Live Editor |
 | `project` | Static project analysis, lint and shadow validation (`renforge_validate`), references, assets |
@@ -323,7 +324,8 @@ the Live Editor:
 | `docs` | Ren'Py documentation search |
 
 `RENFORGE_TOOLSETS` (comma-separated, default `all`) chooses which groups the
-server lists. Unknown names stop the server at startup.
+server lists. Unknown names, or a value that names no group (`,`), stop the
+server at startup.
 
 ```bash
 RENFORGE_TOOLSETS=play renforge serve          # the agent loop only; no code runs in the game
@@ -618,10 +620,10 @@ Each observation's `forward` says what to do next:
 
 | `forward` | Meaning | Next call |
 | --- | --- | --- |
-| `dismiss` | A line or pause the player would click past | `renforge_act` with no `id` |
-| `wait` | A pause that ends by itself | `renforge_act` with no `id` (it waits) |
-| `choose` | The game waits for a decision: a menu, input, button, or modal screen | `renforge_act` with a control `id` (or a key from `keys`) |
-| `none` | Nothing RenForge knows moves the game on | Look at `omitted`, `input_candidates`, and the screenshot |
+| `dismiss` | A line or soft pause the player would click past | `renforge_act` with no `id` |
+| `wait` | A hard pause with no decision controls, which ends by itself | `renforge_act` with no `id` (it waits; nothing is dismissed) |
+| `choose` | The game waits for a decision: a menu, editable input, button, modal screen, or hard-pause hub | `renforge_act` with a control `id` (or a key from `keys`) |
+| `none` | Nothing RenForge knows moves the game on, including custom input it could not fully discover | Look at `omitted`, `input_candidates`, and the screenshot |
 
 `renforge_observe` returns one compact snapshot:
 `observation_id`, stability, dialogue, controls, readout, `forward`, and an
@@ -629,7 +631,9 @@ optional screenshot. Defaults and repeats are left out and chrome is reduced to
 id and text; `renforge_explain(id=...)` returns a control's full record.
 `renforge_act` then takes that `observation_id` and one of:
 
-- a control `id`, with an optional `value`: text for an input field (submitted
+- a control `id` from `controls` or `chrome` (a chrome id presses the game's own
+  interface button, which can save, load, open a menu, or quit), with an
+  optional `value`: text for an input field (submitted
   with Enter), a number for a bar, `{"x", "y"}` for a viewport, or a control id
   for a drag's drop target (an empty string drops on nothing);
 - `key/<name>` for a physical key (a-z, arrows, escape, return, space, tab),
@@ -664,14 +668,6 @@ in `renforge_act`'s `progress.crossed` transcript carry `seen: true` when they r
 Together they show when a playthrough is going in circles, for example a
 retry loop after a bad ending.
 
-`forward` describes progression:
-
-- `dismiss`: narrative or a soft pause can advance.
-- `choose`: a modal screen, editable input, or hard-pause hub needs attention.
-- `wait`: a hard pause has no gameplay decision controls; poll without dismissing.
-- `none`: no supported progression was established, including incomplete
-  custom-input discovery. Check `omitted` and `input_candidates` before acting.
-
 Controls from `renforge_observe` carry a `source` field: the `file:line` of the
 screen-language statement that built them, or null for controls built in
 Python. Pass a control `id` to `renforge_explain` to see that statement, its
@@ -682,7 +678,7 @@ anything, so it is safe to call on a live game.
 To check that what is on screen fits the playthrough, `renforge_explain`
 also reads state: results for a label, screen, control, or source carry
 `values`, the current values of the plain variables their conditions read,
-and `variables=["day", "calendar.dayCount"]` reads named store variables or
+and `variables=["day", "player.day"]` reads named store variables or
 dotted fields directly. Game objects come back as their simple public fields;
 functions are never called.
 
@@ -883,7 +879,7 @@ ordinary decorative displayables do not require custom adapters. Conditional
 custom handlers and story prerequisites remain unknown. A custom region may
 render across the entire frame, so its enclosing bounds can be too broad to
 locate a specific hotspot. Use the visible UI and
-bounded coordinate input without inspecting game flags.
+bounded coordinate input to find it.
 
 `crossed` preserves distinct repeated dialogue occurrences, including rendered
 speaker names, and merges callback/frame copies. Events are drained throughout
@@ -901,7 +897,7 @@ The loop for an agent:
 
 ```text
 renforge_mod(project_path=project, action="write", name="demo", path="intro.rpy", content="...")
-renforge_mod(project_path=project, action="lint", name="demo")          # diagnostics inside the mod only
+renforge_mod(project_path=project, action="lint", name="demo")          # shadow-copy lint, diagnostics inside the mod only
 renforge_mod(project_path=project, action="reload")                     # hot reload, errors, fresh observation
 renforge_observe(project_path=project)                                  # check the result in the running game
 renforge_mod(project_path=project, action="remove", name="demo")        # listed files, .rpyc siblings, empty dirs
@@ -910,7 +906,13 @@ renforge_mod(project_path=project, action="remove", name="demo")        # listed
 `package` zips the mod into `<state>/mods/<name>.zip`. `list` shows each
 mod's files plus any `missing` (listed but gone) or `unlisted` files. Paths must
 be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
-1,000,000 UTF-8 bytes. Symlinks under `game/` are refused. `guide` returns modding idioms
+1,000,000 UTF-8 bytes. Symlinks under `game/` are refused. `write` will not take
+over files it did not create: a `game/mods/<name>/` folder without a manifest
+(some games ship their own mods there), or a file (or a `.rpy`'s `.rpyc`) the
+manifest does not list, is refused, so choose another name. `lint` runs
+Ren'Py lint on a temporary shadow copy, as `renforge_validate` does, so the
+project's `init` code runs but nothing is written in the game; when it fails
+with nothing in the mod, `raw_tail` holds the end of Ren'Py's output. `guide` returns modding idioms
 (`init offset`, screen replacement, `config.label_overrides`, overlay screens).
 
 ## Tool catalogue
@@ -952,7 +954,7 @@ be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 
 | Tool | Purpose |
 | --- | --- |
-| `renforge_mod` | Write, test, and remove a mod under `game/mods/<name>/`. `action` is `write` (`path`, `content`), `list`, `lint`, `reload`, `remove`, `package`, or `guide`; every action except `list`, `guide`, and `reload` takes `name`. Game files outside that directory are never modified. `remove` deletes only manifest-listed files plus their `.rpyc` siblings, and reports unlisted files under `kept`. `reload` hot-reloads the running game and returns `reload`, `observation`, and `errors`. See [Modding](#modding). |
+| `renforge_mod` | Write, test, and remove a mod under `game/mods/<name>/`. `action` is `write` (`path`, `content`), `list`, `lint`, `reload`, `remove`, `package`, or `guide`; every action except `list`, `guide`, and `reload` takes `name`. Game files outside that directory are never modified. `write` refuses a folder RenForge did not create and any file the manifest does not list. `lint` lints a temporary shadow copy (the project's init code runs there) and keeps diagnostics in the mod, parse errors included. `remove` deletes only manifest-listed files plus their `.rpyc` siblings, and reports unlisted files under `kept`. `write`, `remove`, and `package` return `files_touched`/`files_deleted`. `reload` hot-reloads the running game and returns `reload`, a compact `observation`, and `errors`. See [Modding](#modding). |
 
 ### Choices and user interface
 
@@ -982,7 +984,7 @@ be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 | --- | --- |
 | `renforge_eval` | Evaluate a Python expression in `store`. Use for diagnosis and development only. Open-world: requires `authorize=true` when `RENFORGE_POLICY=enforce`. |
 | `renforge_inspect_screen` | Inspect whether a screen is active and, when shown, return its layer, JSON-safe scope, and passed arguments. |
-| `renforge_explain` | Explain where game content is defined and what it does, read from the running game's loaded syntax trees without evaluating anything. Works for `.rpa`/`.rpyc`-only games. No selector returns an index of labels, screens, and files; `label` lists a label's statements; `screen` lists a screen's displayable tree; `id` (a control from `renforge_observe`) returns the statement that built it, its keyword arguments, and the enclosing `if`/`for`/`use` conditions. Bounded by `limit`. |
+| `renforge_explain` | Explain where game content is defined and what it does, read from the running game's loaded syntax trees without evaluating anything. Works for `.rpa`/`.rpyc`-only games. No selector returns an index of labels and screens with `file:line` (filtered by a `query` name substring) and file counts; `label` lists a label's statements; `screen` lists a screen's displayable tree; `id` (a control from `renforge_observe`) or `source` (a `file:line` from a control or input candidate) returns the statement there, its keyword arguments, and the enclosing `if`/`for`/`use` conditions; `search` finds text in every loaded statement. Results for a label, screen, id, or source carry `values` (the plain variables their conditions read), and `variables` reads named store variables or dotted fields as data. Bounded by `limit`. |
 | `renforge_get_var` | Read a store variable. |
 | `renforge_set_var` | Write a store variable. |
 | `renforge_poll_events` | Read label, dialogue, confirmed ending, exception, and business events (`quick_save.completed`, `skip.stopped`, …) from a cursor. Events may carry `correlation_id` and `timestamp`. |
@@ -1181,6 +1183,9 @@ destination because no `destination` was passed — omits the key instead of
 returning an empty list, so an empty list always means "wrote nothing". The
 journal's `files_touched_recorded` flag tells those two cases apart without
 having to remember which tools are which.
+`renforge_mod` lists the mod file and its manifest for `write`, every file
+`remove` deleted (manifest included) as `files_deleted`, and the zip's absolute
+path for `package`.
 `renforge_saves` additionally labels the external savedir with `savedir`.
 `renforge_saves(action="import")` lists each slot file it copied into the
 session savedir (absolute paths), including on `SAVE_IMPORT_FAILED`, where it
@@ -1220,7 +1225,7 @@ Set these next to the `renforge serve` command in the MCP client config.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `RENFORGE_TOOLSETS` | all groups | Comma-separated tool groups the server lists (see [Toolsets](#toolsets)). Unknown names are an error. |
+| `RENFORGE_TOOLSETS` | all groups | Comma-separated tool groups the server lists (see [Toolsets](#toolsets)); `renforge_info` is always listed. Unknown names, or a value naming no group, are an error. |
 | `RENFORGE_POLICY` | `off` | `enforce` requires `authorize=true` for destructive and open-world calls. Invalid values fail closed to `enforce`. See [POLICY.md](POLICY.md). |
 | `RENFORGE_POLICY_ALLOW`, `RENFORGE_POLICY_ALLOW_RISK` | empty | Comma-separated operations or risk classes allowed without `authorize`; combined with the project policy file's lists. |
 | `RENFORGE_ISOLATION` | `existing` | `temporary` (any case) isolates every launch's saves, persistent data, preferences, and HOME by default; any other value keeps the user's own, as before. `renforge_session` always isolates. |

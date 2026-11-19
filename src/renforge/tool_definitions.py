@@ -311,17 +311,18 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         description=(
             "Start or attach a running game session with Live Editor enabled by default (pass editor=false for non-editor "
             "runtime launch). Launch starts the background startup flow, usually returning while startup is still in progress; "
+            "poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. "
             "Runtime control requires Ren'Py 8.0 or newer. Pre-8 bundled games or selected SDKs return "
             "UNSUPPORTED_RENPY_VERSION before SDK download, bridge injection, or process launch; an explicit "
             "newer SDK does not bypass a legacy game's incompatibility. "
-            "poll `renforge_launch_status` and capture with `renforge_screenshot` before interaction. "
             "Saves and HOME default to the user's own; pass `savedir=temporary` (or set `RENFORGE_ISOLATION=temporary`) "
             "to isolate saves, persistent data, preferences, and HOME so the session does not read or write the user's "
             "normal Ren'Py state. The ready payload includes `session_id` and an `isolation` object (a reused game started "
             "by another process has no `session_id`; its `isolation` is what its bridge reports). "
             "It may download/cache the selected SDK, inject session-owned `.rpy` files and editor assets under `game/`, and "
             "publish authenticated ownership/bridge metadata under `<state>/control/`, where `<state>` is this project's RenForge "
-            "folder outside the game (`RENFORGE_STATE_DIR` or `~/.local/state/renforge`, then `projects/<name>-<hash>`). `renforge_stop` removes only owned "
+            "folder outside the game (`projects/<name>-<hash>` under `RENFORGE_STATE_DIR`, `$XDG_STATE_HOME/renforge` "
+            "(`~/.local/state/renforge` by default), or `%LOCALAPPDATA%\\renforge` on Windows). `renforge_stop` removes only owned "
             "session artifacts. " + _LAUNCH_POLICY +
             "Copy selected host slots into an isolated session with `renforge_saves(action=\"import\")` instead of "
             "bind-mounting the user tree."
@@ -482,7 +483,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             readOnlyHint=False,
             idempotentHint=False,
             destructiveHint=True,
-            openWorldHint=False,
+            # launch starts the game's own process, as renforge_launch does.
+            openWorldHint=True,
         ),
         parameters={
             "project_path": "Project root of the game.",
@@ -567,7 +569,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "jump targets) and returns file:line with the enclosing label, e.g. to find what gates a message. "
             "Results for a label, screen, id, or source also carry `values`: the current values of the plain "
             "variables their conditions read. `variables` reads named store variables or dotted fields "
-            "(`calendar.dayCount`, `persistent.seen_intro`) as data, so what is on screen can be checked "
+            "(`player.day`, `persistent.seen_intro`) as data, so what is on screen can be checked "
             "against the state of the playthrough; game objects come back as their simple public fields, and a "
             "long list or dict lists its first entries with `size` and `truncated` (read a key by path: `ran.scene_a`). "
             "Nothing is called or evaluated. Output is bounded by `limit`."
@@ -586,7 +588,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "source": "A `file:line` reported as `source` by renforge_observe controls or input candidates.",
             "query": "Index only: case-insensitive substring to filter label and screen names.",
             "search": "Case-insensitive text to find in all loaded statements, including Python source.",
-            "variables": "Store variable names or dotted fields to read as data, e.g. [\"day\", \"calendar.dayCount\"].",
+            "variables": "Store variable names or dotted fields to read as data, e.g. [\"day\", \"player.day\"].",
             "limit": "Maximum statements, nodes, or index entries to return (1-2000, default 200).",
         },
         parameter_schemas={
@@ -654,7 +656,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "The one play step: act on a control, a key, or nothing, then continue to the next decision. "
             "Pass observation_id from the renforge_observe (or previous renforge_act) snapshot you decided on; "
             "acting on a control in a changed game refuses with error=stale and returns the current observation, "
-            "while continuing (no id) proceeds from the current state. id is a control id "
+            "while continuing (no id) proceeds from the current state. id is a control or chrome id "
             "from that snapshot (an id it does not list is refused with error=missing and the current observation), "
             "or key/<name> for a physical key (a-z, up, down, left, right, escape, return, space, tab; the "
             "observation's keys say which ones a screen binds). "
@@ -681,7 +683,10 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         parameters={
             "project_path": "Project root of the running live session.",
             "observation_id": "observation_id of the snapshot this action was chosen from.",
-            "id": "Control id from that snapshot, or key/<name>. Omit to just continue.",
+            "id": (
+                "Control id from that snapshot (from controls or chrome; a chrome id can open menus, save, load, or "
+                "quit like the game's own buttons), or key/<name>. Omit to just continue."
+            ),
             "value": "Input for the control: text, a number, {x, y}, a drop target id, or true/false for a key.",
             "screenshot": "Attach a size-bounded PNG of the resulting observation (default true).",
             "timeout": "Budget in seconds for the action and progression, from 0.1 to 120 (default 30).",
@@ -839,19 +844,25 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     "renforge_mod": ToolDefinition(
         description=(
             "Write, test, and remove mods under `game/mods/<name>/` with a `renforge-mod.json` manifest. Never modifies "
-            "game files outside that directory. `write` takes `path` and `content` (`.rpy`, `.txt`, `.json`, or `.md`). "
-            "`list` reports listed, missing, and unlisted files. `lint` returns project lint diagnostics that point into "
-            "the mod. `remove` deletes only manifest-listed files, their compiled `.rpyc` siblings, and empty directories; "
-            "unlisted files are kept and reported. `package` zips the mod into `<state>/mods/`. `reload` (no name: it "
+            "game files outside that directory. `write` takes `path` and `content` (`.rpy`, `.txt`, `.json`, or `.md`); "
+            "it refuses a folder RenForge did not create and any file the manifest does not list, so pick another name "
+            "when the game ships its own `game/mods/<name>/`. "
+            "`list` reports listed, missing, and unlisted files. `lint` lints a temporary shadow copy of the project, "
+            "as `renforge_validate` does (the project's init code runs there), and returns the diagnostics that point "
+            "into the mod, including parse errors; a failed lint with none returns `raw_tail`. "
+            "`remove` deletes only manifest-listed files, their compiled `.rpyc` siblings, and empty directories; "
+            "unlisted files are kept and reported. `package` zips the mod into `<state>/mods/`. `write`, `remove`, "
+            "and `package` return `files_touched`/`files_deleted` receipts. `reload` (no name: it "
             "reloads every script, wherever the mod lives) hot-reloads the running game and returns errors and a "
-            "fresh observation. `guide` returns modding idioms. Mod actions are "
+            "fresh compact observation. `guide` returns modding idioms. Mod actions are "
             "classified per action by the runtime policy."
         ),
         annotations=_ann(
             readOnlyHint=False,
             idempotentHint=False,
-            destructiveHint=False,
-            openWorldHint=False,
+            # Its worst actions write code the game runs, reload, and delete files.
+            destructiveHint=True,
+            openWorldHint=True,
         ),
         parameters={
             "project_path": "Project root of the game that owns the mod.",

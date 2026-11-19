@@ -16,8 +16,14 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable
 
-from .lint import run_lint
-from .util.files import PrivatePathError, ensure_nofollow_directory, read_text_nofollow, write_atomic
+from .lint import parse_lint_output
+from .util.files import (
+    PrivatePathError,
+    _component_is_link,
+    ensure_nofollow_directory,
+    read_text_nofollow,
+    write_atomic,
+)
 from .state import project_state_dir
 
 MANIFEST_NAME = "renforge-mod.json"
@@ -87,7 +93,19 @@ def _check_name(name: Any) -> str:
 
 
 def _game_dir(project_root: str | Path) -> Path:
-    return Path(project_root).expanduser() / "game"
+    # Resolve the root once: a symlink above the project (a linked games
+    # library, macOS /var, /home -> /var/home) is the user's own layout, and
+    # the no-follow write path refuses every link it meets. Links under game/
+    # are still refused.
+    return Path(project_root).expanduser().resolve() / "game"
+
+
+def _is_link(path: Path) -> bool:
+    """True for a symlink or, on Windows, a junction or other reparse point."""
+    try:
+        return _component_is_link(path)
+    except PrivatePathError:
+        return True
 
 
 def _mod_dir(project_root: str | Path, name: str) -> Path:
@@ -105,7 +123,9 @@ def _validate_relpath(path: Any) -> str:
     parts = path.split("/")
     if any(part in ("", ".", "..") for part in parts):
         raise ValueError("path must not contain empty, '.', or '..' components")
-    if path == MANIFEST_NAME:
+    # Any case and any folder: NTFS and APFS would map another spelling of
+    # the top-level name onto the real manifest.
+    if any(part.casefold() == MANIFEST_NAME for part in parts):
         raise ValueError(f"{MANIFEST_NAME} is managed by RenForge and cannot be written directly")
     if PurePosixPath(path).suffix not in ALLOWED_SUFFIXES:
         raise ValueError(f"path suffix must be one of {', '.join(ALLOWED_SUFFIXES)}")
@@ -122,7 +142,7 @@ def _resolve_target(project_root: str | Path, name: str, rel: str) -> Path:
         current = current / part
         chain.append(current)
     for component in chain:
-        if component.is_symlink():
+        if _is_link(component):
             raise ValueError(f"refusing to use symlink under game/: {component.name}")
     target = mod_dir / rel
     if not target.resolve().is_relative_to(mod_dir.resolve()):
@@ -140,7 +160,7 @@ def _is_safe_relpath(path: str) -> bool:
 
 def _load_manifest(mod_dir: Path) -> dict[str, Any] | None:
     manifest = mod_dir / MANIFEST_NAME
-    if manifest.is_symlink() or not manifest.is_file():
+    if _is_link(manifest) or not manifest.is_file():
         return None
     try:
         data = json.loads(read_text_nofollow(manifest))
@@ -177,7 +197,7 @@ def _files_on_disk(mod_dir: Path) -> list[str]:
         dirnames.sort()
         for filename in filenames:
             full = Path(root) / filename
-            if full.is_symlink() or not full.is_file():
+            if _is_link(full) or not full.is_file():
                 continue
             found.append(full.relative_to(mod_dir).as_posix())
     return sorted(found)
@@ -187,8 +207,40 @@ def _unlisted(mod_dir: Path, listed: set[str]) -> list[str]:
     return [rel for rel in _files_on_disk(mod_dir) if rel != MANIFEST_NAME and rel not in listed]
 
 
+def _compiled_sibling(rel: str) -> str | None:
+    return rel[: -len(".rpy")] + ".rpyc" if rel.endswith(".rpy") else None
+
+
+def _refuse_foreign_files(mod_dir: Path, name: str, rel: str, manifest: dict[str, Any] | None) -> None:
+    """Refuse a write that would take over a file RenForge did not create.
+
+    ``remove`` deletes every listed file and a listed ``.rpy``'s ``.rpyc``, so
+    listing a file the game shipped (games with their own mod loader use
+    ``game/mods/``) would delete it for good.
+    """
+    if manifest is None:
+        if _files_on_disk(mod_dir):
+            raise ValueError(
+                f"game/mods/{name}/ already holds files RenForge did not write; choose another mod name"
+            )
+        return
+    if rel in manifest["files"]:
+        return
+    compiled = _compiled_sibling(rel)
+    for candidate in (rel, compiled):
+        if candidate is not None and os.path.lexists(mod_dir / candidate):
+            raise ValueError(
+                f"game/mods/{name}/{candidate} exists but RenForge did not write it; "
+                "choose another path or another mod name"
+            )
+
+
 def write_file(project_root: str | Path, name: str, path: str, content: str) -> dict[str, Any]:
-    """Write ``content`` to ``game/mods/<name>/<path>`` and record it in the manifest."""
+    """Write ``content`` to ``game/mods/<name>/<path>`` and record it in the manifest.
+
+    Refuses to overwrite or list a file the mod's manifest does not already
+    list. ``files_touched`` names the file and the manifest, project-relative.
+    """
     _check_name(name)
     rel = _validate_relpath(path)
     if not isinstance(content, str):
@@ -202,6 +254,7 @@ def write_file(project_root: str | Path, name: str, path: str, content: str) -> 
     target = _resolve_target(project_root, name, rel)
     mod_dir = _mod_dir(project_root, name)
     manifest = _load_manifest(mod_dir)
+    _refuse_foreign_files(mod_dir, name, rel, manifest)
     listed = set(manifest["files"]) if manifest else set()
     listed.add(rel)
 
@@ -217,6 +270,7 @@ def write_file(project_root: str | Path, name: str, path: str, content: str) -> 
         "path": f"game/mods/{name}/{rel}",
         "bytes": len(data),
         "files": files,
+        "files_touched": sorted([f"game/mods/{name}/{rel}", f"game/mods/{name}/{MANIFEST_NAME}"]),
     }
 
 
@@ -226,7 +280,7 @@ def list_mods(project_root: str | Path) -> dict[str, Any]:
     mods: list[dict[str, Any]] = []
     if mods_dir.is_dir():
         for child in sorted(mods_dir.iterdir()):
-            if child.is_symlink() or not child.is_dir():
+            if _is_link(child) or not child.is_dir():
                 continue
             manifest = _load_manifest(child)
             if manifest is None:
@@ -247,6 +301,8 @@ def remove(project_root: str | Path, name: str) -> dict[str, Any]:
     """Delete a mod's listed files, their ``.rpyc`` siblings, and its manifest.
 
     Unlisted files are never deleted; they are reported under ``kept``.
+    ``files_deleted`` names every deleted file, manifest included,
+    project-relative.
     """
     _check_name(name)
     mod_dir = _mod_dir(project_root, name)
@@ -263,16 +319,16 @@ def remove(project_root: str | Path, name: str) -> dict[str, Any]:
         except ValueError:
             kept.append(rel)
             continue
-        if target.is_symlink():
+        if _is_link(target):
             kept.append(rel)
             continue
         if target.is_file() and target.resolve().is_relative_to(mod_dir.resolve()):
             target.unlink()
             removed.append(rel)
-        if rel.endswith(".rpy"):
-            compiled_rel = rel[: -len(".rpy")] + ".rpyc"
+        compiled_rel = _compiled_sibling(rel)
+        if compiled_rel is not None:
             compiled = mod_dir / compiled_rel
-            if compiled.is_file() and not compiled.is_symlink():
+            if compiled.is_file() and not _is_link(compiled):
                 compiled.unlink()
                 removed.append(compiled_rel)
 
@@ -289,11 +345,16 @@ def remove(project_root: str | Path, name: str) -> dict[str, Any]:
         mod_dir.rmdir()
     except OSError:
         pass
-    return {"ok": True, "removed": removed, "kept": sorted(set(kept))}
+    deleted = sorted(f"game/mods/{name}/{rel}" for rel in [*removed, MANIFEST_NAME])
+    return {"ok": True, "removed": removed, "kept": sorted(set(kept)), "files_deleted": deleted}
 
 
 def package(project_root: str | Path, name: str) -> dict[str, Any]:
-    """Zip a mod's listed files into ``<project state>/mods/<name>.zip``."""
+    """Zip a mod's listed files into ``<project state>/mods/<name>.zip``.
+
+    A listed file that is gone or not a valid mod path is skipped and named
+    under ``missing``. ``files_touched`` holds the zip's absolute path.
+    """
     _check_name(name)
     mod_dir = _mod_dir(project_root, name)
     manifest = _load_manifest(mod_dir)
@@ -313,8 +374,13 @@ def package(project_root: str | Path, name: str) -> dict[str, Any]:
     try:
         with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for rel in candidates:
-                source = _resolve_target(project_root, name, _validate_relpath(rel))
-                if not source.is_file() or source.is_symlink():
+                try:
+                    source = _resolve_target(project_root, name, _validate_relpath(rel))
+                except ValueError:
+                    # The manifest may come with the game, as list_mods notes.
+                    missing.append(rel)
+                    continue
+                if not source.is_file() or _is_link(source):
                     missing.append(rel)
                     continue
                 archive.write(source, arcname=f"game/mods/{name}/{rel}")
@@ -329,10 +395,21 @@ def package(project_root: str | Path, name: str) -> dict[str, Any]:
         except OSError:
             pass
         raise
-    result: dict[str, Any] = {"ok": True, "path": str(zip_path), "files": packed}
+    result: dict[str, Any] = {
+        "ok": True,
+        "path": str(zip_path),
+        "files": packed,
+        "files_touched": [str(zip_path)],
+    }
     if missing:
         result["missing"] = missing
     return result
+
+
+_RAW_TAIL_CHARS = 2000
+# Ren'Py reports a parse error as 'File "game/x.rpy", line 3: expected statement.',
+# which parse_lint_output does not turn into a file:line diagnostic.
+_PARSE_ERROR_RE = re.compile(r'^\s*File "(?P<file>[^"]+)", line (?P<line>\d+):\s*(?P<message>.*?)\s*$')
 
 
 def _diagnostic_in_mod(diagnostic: Any, name: str) -> bool:
@@ -342,23 +419,79 @@ def _diagnostic_in_mod(diagnostic: Any, name: str) -> bool:
     return re.search(rf"(^|/)mods/{re.escape(name)}/", file_path) is not None
 
 
+def _parse_errors(raw: str) -> list[dict[str, Any]]:
+    """Turn Ren'Py's ``File "...", line N: message`` lines into diagnostics."""
+    found: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        match = _PARSE_ERROR_RE.match(line)
+        if match is None:
+            continue
+        diagnostic: dict[str, Any] = {
+            "file": match.group("file"),
+            "line": int(match.group("line")),
+            "severity": "error",
+        }
+        if match.group("message"):
+            diagnostic["message"] = match.group("message")
+        found.append(diagnostic)
+    return found
+
+
+def _shadow_lint(project_root: str | Path) -> dict[str, Any]:
+    """Run Ren'Py lint on a clean shadow copy, as ``renforge_validate`` does.
+
+    Linting in place would compile ``.rpyc`` files and write ``game/cache``
+    outside the mod. The shadow also never uses an SDK found in the project.
+    """
+    from .tools.validate import validate_project
+
+    result = validate_project(str(project_root))
+    raw = "\n".join(part for part in (result.get("stdout"), result.get("stderr")) if part)
+    out: dict[str, Any] = {
+        "ok": result.get("ok") is True,
+        "returncode": result.get("returncode"),
+        "timed_out": bool(result.get("timed_out")),
+        "diagnostics": parse_lint_output(raw),
+        "raw": raw,
+    }
+    if result.get("error"):
+        out["error"] = result["error"]
+    return out
+
+
 def lint(
     project_root: str | Path,
     name: str,
-    run: Callable[..., dict[str, Any]] = run_lint,
+    run: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Run the project lint and keep only diagnostics that point into the mod."""
+    """Lint the project and keep only diagnostics that point into the mod.
+
+    ``run`` defaults to a lint of a shadow copy, so the game folder is never
+    written. The project's ``init`` code still runs, as with
+    ``renforge_validate``. When the lint fails with nothing in the mod,
+    ``raw_tail`` holds the end of Ren'Py's output; ``timed_out`` is passed on.
+    """
     _check_name(name)
-    result = run(project_root)
+    if _load_manifest(_mod_dir(project_root, name)) is None:
+        return {"ok": False, "error": f"unknown mod: {name}"}
+    result = (run or _shadow_lint)(project_root)
     if not isinstance(result, dict):
         result = {"ok": False, "error": "lint returned a non-object result"}
-    raw = result.get("diagnostics") or []
-    kept = [item for item in raw if _diagnostic_in_mod(item, name)]
+    raw_text = result.get("raw") if isinstance(result.get("raw"), str) else ""
+    candidates = list(result.get("diagnostics") or []) + _parse_errors(raw_text)
+    kept: list[Any] = []
+    for item in candidates:
+        if _diagnostic_in_mod(item, name) and item not in kept:
+            kept.append(item)
     out: dict[str, Any] = {
         "ok": bool(result.get("ok")) and not kept,
         "diagnostics": kept,
         "returncode": result.get("returncode"),
     }
+    if result.get("timed_out"):
+        out["timed_out"] = True
     if result.get("error"):
         out["error"] = result["error"]
+    if not out["ok"] and not kept and raw_text.strip():
+        out["raw_tail"] = raw_text[-_RAW_TAIL_CHARS:]
     return out

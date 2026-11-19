@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from .. import mods
+from ..compact import compact_observation
 from .live import control, get_errors, observe
 
 ACTIONS = ("write", "list", "lint", "reload", "remove", "package", "guide")
@@ -26,6 +27,10 @@ def _errors_changed(before: dict[str, Any], after: dict[str, Any]) -> bool:
 
 
 def _reload(project_path: str) -> dict[str, Any]:
+    """Reload the game's scripts, wait for a stable screen, and report new errors.
+
+    The observation is compact, like every play-tool observation.
+    """
     baseline = get_errors(project_path)
     baseline = baseline if isinstance(baseline, dict) else {}
     cursor = baseline.get("cursor", 0)
@@ -53,7 +58,7 @@ def _reload(project_path: str) -> dict[str, Any]:
     return {
         "ok": ok,
         "reload": reload_reply,
-        "observation": observation,
+        "observation": compact_observation(observation),
         "errors": errors,
     }
 
