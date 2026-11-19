@@ -17,6 +17,8 @@ init python:
     #   RENFORGE_BRIDGE_PROJECT_ROOT required canonical absolute project root
     #   RENFORGE_BRIDGE_PORT         default 0 (an ephemeral port is chosen)
     #   RENFORGE_BRIDGE_CONTROL_DIR  private control folder, outside the game
+    #   RENFORGE_BRIDGE_EVAL         unset or "on" lets eval and set_var run
+    #                                code; any other value switches them off
     # The launcher reserves starting metadata at
     #   <control dir>/bridge.json
     # Before serving, the bridge validates that record and publishes ready.
@@ -35,8 +37,10 @@ init python:
     import sys
     import threading
     # `time` is a store field. Games use that name for their own clock, which
-    # replaces the module before a label callback runs.
+    # replaces the module before a label callback runs. `math` is aliased
+    # for the same reason.
     import time as _renforge_time
+    import math as _renforge_math
     import types
 
     try:
@@ -571,8 +575,13 @@ init python:
         return {"ok": True, "channels": _renforge_h_get_audio_state(payload)}
 
     def _renforge_eval_refused():
-        """eval and set_var run arbitrary code; a launch can switch them off."""
-        if os.environ.get("RENFORGE_BRIDGE_EVAL", "on") == "off":
+        """eval and set_var run arbitrary code; a launch can switch them off.
+
+        Fails closed: only an unset RENFORGE_BRIDGE_EVAL or "on" (any case)
+        leaves them on, so "OFF", "0" or "false" switch them off too.
+        """
+        setting = os.environ.get("RENFORGE_BRIDGE_EVAL")
+        if setting is not None and setting.strip().casefold() != "on":
             return {"ok": False, "error": "eval_disabled",
                     "message": "This session's bridge does not run code (no debug or editor toolset)."}
         return None
@@ -698,7 +707,23 @@ init python:
 
     _RENFORGE_ACT_KEY_LETTERS = "abcdefghijklmnopqrstuvwxyz"
     _RENFORGE_ACT_KEY_ATTRS = _renforge_act_key_attrs()
-    _RENFORGE_ACT_KEY_LIST = "a-z, up, down, left, right, escape, return, space, tab"
+
+    def _renforge_act_key_list():
+        """The act keys an error lists, built from the key table so they never drift.
+
+        Letters collapse to "a-z"; an alias of a listed key ("esc", "enter")
+        is left out.
+        """
+        names = ["a-z"]
+        listed = set()
+        for name, attr in _RENFORGE_ACT_KEY_ATTRS.items():
+            if (len(name) == 1 and name in _RENFORGE_ACT_KEY_LETTERS) or attr in listed:
+                continue
+            listed.add(attr)
+            names.append(name)
+        return ", ".join(names)
+
+    _RENFORGE_ACT_KEY_LIST = _renforge_act_key_list()
 
     def _renforge_focused_input():
         """Return the focused Ren'Py Input, or an explicit diagnostic."""
@@ -765,6 +790,7 @@ init python:
         )
 
     def _renforge_input_char_allowed(widget, character):
+        """Whether the Input's ``allow`` and ``exclude`` (strings or regexes) let ``character`` in."""
         allow = getattr(widget, "allow", None)
         exclude = getattr(widget, "exclude", None)
         if allow:
@@ -784,9 +810,11 @@ init python:
         return True
 
     def _renforge_input_filtered(widget, text):
-        # Same limits Input.event applies while typing: allow, exclude, length.
+        """``text`` as the Input would keep it when typed: allow, exclude, length."""
+        # Input.event applies the limit with `if self.length:`, so 0 and None
+        # both mean no limit.
         length = getattr(widget, "length", None)
-        if isinstance(length, bool) or not isinstance(length, builtins.int) or length < 0:
+        if isinstance(length, bool) or not isinstance(length, builtins.int) or length <= 0:
             length = None
         accepted = ""
         for character in text:
@@ -801,7 +829,9 @@ init python:
         """Put `text` in the field, dropping whatever was already there.
 
         Returns the stored string, False when the field rejects it, or None
-        when this widget has no Ren'Py input value to replace.
+        when this widget has no Ren'Py input value to replace. An error from
+        the game's own callback (the InputValue's ``set_text``, which
+        ``update_text`` runs) propagates, so the reply names it.
         """
         filtered = _renforge_input_filtered(widget, text)
         if text and not filtered:
@@ -812,19 +842,16 @@ init python:
                 widget.caret_pos = len(filtered)
             except Exception:
                 pass
-            wrote = False
             try:
                 update(filtered, True, True)
-                wrote = True
-            except TypeError:
-                pass
-            except Exception:
-                pass
-            if not wrote:
-                try:
-                    update(filtered, True)
-                except Exception:
-                    return False
+            except TypeError as exc:
+                # Retry without check_size only when the call itself was
+                # refused: that TypeError has no frame inside update_text.
+                # Ren'Py's Input takes check_size on every supported 8.x.
+                traceback = exc.__traceback__
+                if traceback is None or traceback.tb_next is not None:
+                    raise
+                update(filtered, True)
             current = getattr(widget, "content", None)
             if current != filtered:
                 return False
@@ -833,10 +860,7 @@ init python:
         set_text = getattr(value, "set_text", None) if value is not None else None
         if not callable(set_text):
             return None
-        try:
-            set_text(filtered)
-        except Exception:
-            return False
+        set_text(filtered)
         try:
             widget.content = filtered
         except Exception:
@@ -848,6 +872,10 @@ init python:
         return filtered
 
     def _renforge_post_key(keycode, hold=None, text=""):
+        """Post a physical key: down and up, or only down (``hold`` True) or up (False).
+
+        Returns the phases posted, as "keydown"/"keyup".
+        """
         # A keyboard's key-down carries the character it types, and Ren'Py
         # matches a bare `key "d"` binding on that character.
         phases = (pygame.KEYDOWN, pygame.KEYUP) if hold is None else ((pygame.KEYDOWN,) if hold else (pygame.KEYUP,))
@@ -1423,11 +1451,16 @@ init python:
         if not callable(load):
             return {"ok": False, "error": "save loading is unavailable"}
 
+        # From 8.2 invoke_in_main_thread queues the load and returns, so this
+        # handler reports it below. Only an inline load (no queue) ends this
+        # request with the engine's restart and must report it here.
+        inline = not callable(getattr(renpy, "invoke_in_main_thread", None))
+
         def _do_load():
             try:
                 load(slot)
             except Exception as exc:
-                if _renforge_is_script_control_flow(exc):
+                if inline and _renforge_is_script_control_flow(exc):
                     # The engine restarts into the loaded game after the reply.
                     _renforge_emit_business("load.completed", slot=slot, restored_label=None)
                     setattr(exc, "renforge_result", {"ok": True, "slot": slot,
@@ -1577,6 +1610,32 @@ init python:
             stack.extend(reversed([child for child in children or () if child is not None]))
         return " ".join(parts)
 
+    def _renforge_tts_marks_selected(widget):
+        """Whether ``Button._tts_all`` added " selected" to this widget's label.
+
+        Ren'Py 8.5+ adds it when the style prefix is ``selected_``; older
+        engines when ``is_selected()``. From 8.2 only when the alt is the
+        default hover alt. Any other " selected" belongs to the alt text.
+        """
+        style = getattr(widget, "style", None)
+        hover_alt = getattr(style, "_hover_alt", None)
+        if callable(hover_alt):
+            try:
+                if getattr(style, "alt", None) != hover_alt():
+                    return False
+            except Exception:
+                pass
+        prefix = getattr(style, "prefix", None)
+        if isinstance(prefix, builtins.str):
+            return prefix.startswith("selected_")
+        is_selected = getattr(widget, "is_selected", None)
+        if callable(is_selected):
+            try:
+                return bool(is_selected())
+            except Exception:
+                return False
+        return False
+
     def _renforge_focus_text(widget):
         """Best-effort label for a Ren'Py focus widget.
 
@@ -1624,7 +1683,7 @@ init python:
                     if word and text.endswith(word):
                         text = text[:-len(word)]
                         break
-            else:
+            elif _renforge_tts_marks_selected(widget):
                 for word in suffixes("selected"):
                     if word and text.endswith(" " + word):
                         text = text[:-len(word) - 1]
@@ -1723,16 +1782,6 @@ init python:
             return False
         return left <= x < left + width and top <= y < top + height
 
-    def _renforge_center_point(element):
-        center = element.get("center") or {}
-        try:
-            return int(center.get("x")), int(center.get("y")), True
-        except (TypeError, ValueError, OverflowError):
-            return 0, 0, False
-
-    def _renforge_focus_screen(focus):
-        return getattr(focus, "screen", None)
-
     def _renforge_engine_modal_blocked(owner, inventory):
         """Whether a modal screen hides ``owner``, by Ren'Py's own rule.
 
@@ -1815,6 +1864,7 @@ init python:
 
 
     def _renforge_point_candidates(bounds):
+        """The probe points inside ``bounds``, in ``_RENFORGE_PROBE_POINTS`` order."""
         if not bounds or bounds.get("width", 0) <= 0 or bounds.get("height", 0) <= 0:
             return []
         x, y, w, h = (bounds[key] for key in ("x", "y", "width", "height"))
@@ -1822,12 +1872,14 @@ init python:
 
 
     def _renforge_engine_focus_ids():
+        """``id()`` of every widget in Ren'Py's own focus list."""
         focus_module = getattr(renpy.display, "focus", None)
         return {id(getattr(focus, "widget", None))
                 for focus in getattr(focus_module, "focus_list", ()) or ()}
 
 
     def _renforge_has_focus_mask(widget):
+        """Whether the widget's style sets a focus mask (only its opaque part is clickable)."""
         try:
             mask = getattr(getattr(widget, "style", None), "focus_mask", None)
         except Exception:
@@ -1914,7 +1966,7 @@ init python:
             if element.get("semantic"):
                 # Semantic operations bypass the pointer, so a probe cannot
                 # tell whether a modal screen above blocks them.
-                owner = widget if widget is not None else _renforge_focus_screen(focus)
+                owner = widget if widget is not None else getattr(focus, "screen", None)
                 blocked = (_renforge_engine_modal_blocked(owner, inventory)
                            if inventory is not None and owner is not None else None)
                 element["covered"] = bool(blocked)
@@ -1973,7 +2025,7 @@ init python:
         return None
 
     def _renforge_focus_action_name(focus, widget):
-        """Action class name, as upstream's UI-element ids use it."""
+        """Action class name, as UI-element ids (``screen.Action``) use it."""
         for owner in (widget, focus):
             if owner is None:
                 continue
@@ -1992,13 +2044,14 @@ init python:
                     continue
         return None
 
-    def _renforge_legacy_element_ids(pairs):
-        """Give UI-element tools upstream's ids, distinct from observe's.
+    def _renforge_ui_element_ids(pairs):
+        """Give each control its UI-element id, keeping observe's id in ``control_id``.
 
-        list_ui_elements, click_element, hover_element, scene_tree, and hit
-        tests are upstream tools: an explicit id, else the screen's widget
-        name, else screen.Action, else screen.text, else screen:role:text.
-        observe/act keep their own screen/... ids.
+        list_ui_elements, click_element, hover_element, scene_tree, and
+        hit_test name a control by an explicit id, else the screen's widget
+        name, else screen.Action, else screen.text, else screen:role:text,
+        with "#2", "#3" on repeats. observe and act use the screen/... id
+        kept in ``control_id``.
         """
         used = {}
         for ordinal, (focus, record) in enumerate(pairs):
@@ -2025,8 +2078,14 @@ init python:
         return pairs
 
     def _renforge_focusable_elements(max_items=None, max_text_chars=None, inventory=None):
+        """``(focus, element)`` pairs for every current control, with UI-element ids.
+
+        ``max_items`` keeps the first ones; ``max_text_chars`` truncates text
+        fields (the raw type and screen stay in ``_raw_type`` and
+        ``_raw_screen``). ``inventory`` reuses a scene inventory already built.
+        """
         pairs, _truncated = _renforge_observe_focus_pairs(inventory)
-        _renforge_legacy_element_ids(pairs)
+        _renforge_ui_element_ids(pairs)
         if max_items is not None:
             pairs = pairs[:max_items]
         if max_text_chars is not None:
@@ -2303,6 +2362,13 @@ init python:
                 _renforge_reset_testmouse_state()
 
     def _renforge_pointer_tick(cancel=False):
+        """Advance a pending pointer click by one main-thread tick.
+
+        A click is hovered first, then pressed once its due time comes, and
+        the waiting request is answered when it finishes, times out, the
+        interaction changes, or ``cancel`` is set. Returns True while a click
+        is still pending.
+        """
         bridge = _renforge_runtime.bridge
         pending = getattr(bridge, "pointer_click", None)
         if pending is None:
@@ -2352,6 +2418,29 @@ init python:
             return None
         return names[0] if len(names) == 1 else None
 
+    def _renforge_custom_action_value(widget):
+        """The click action a game's own displayable keeps, or None.
+
+        The attribute (see ``_renforge_custom_action_attr``) counts only when
+        it holds one or more actions: Ren'Py Actions when ``renpy.ui.Action``
+        exists, as control discovery requires, else callables. A counter or
+        flag such as ``click_count = 0`` is not an action, so the caller
+        clicks the pointer instead of running it.
+        """
+        attr = _renforge_custom_action_attr(widget)
+        if attr is None:
+            return None
+        value = getattr(widget, attr, None)
+        actions = _renforge_action_list(value)
+        if not actions:
+            return None
+        action_type = getattr(getattr(renpy, "ui", None), "Action", None)
+        if isinstance(action_type, type):
+            is_action = lambda item: isinstance(item, action_type)
+        else:
+            is_action = callable
+        return value if all(is_action(item) for item in actions) else None
+
     def _renforge_focus_action_value(focus):
         # Button.per_interact copies a sensitive action onto clicked, and
         # Button.event runs clicked. Prefer that, then the declared action.
@@ -2370,9 +2459,7 @@ init python:
                 return action
         # A game's own displayable may keep it under a click attribute.
         if widget is not None and not type(widget).__module__.startswith("renpy."):
-            attr = _renforge_custom_action_attr(widget)
-            if attr is not None:
-                return getattr(widget, attr, None)
+            return _renforge_custom_action_value(widget)
         return None
 
     def _renforge_with_focus_screen(focus, fn):
@@ -2422,29 +2509,34 @@ init python:
 
         return _renforge_with_focus_screen(focus, _run)
 
-    def _renforge_click_focus(focus, element=None):
-        """Click a focus center through shared synthetic input path."""
+    def _renforge_focus_point(focus, element=None):
+        """Where the pointer goes for a control, for a click or a hover.
+
+        The point the coverage probes or mask scan proved reaches it, else
+        the centre of its bounds, else of its focus rectangle, else Ren'Py's
+        test position for the focus.
+        """
+        if element is not None and element.get("click_point"):
+            return element["click_point"]["x"], element["click_point"]["y"]
+        if element is not None and element.get("bounds"):
+            bounds = element["bounds"]
+            return int(bounds["x"] + bounds["width"] // 2), int(bounds["y"] + bounds["height"] // 2)
         fx = getattr(focus, "x", None)
         fy = getattr(focus, "y", None)
         fw = getattr(focus, "w", None)
         fh = getattr(focus, "h", None)
-        if element is not None and element.get("bounds"):
-            bounds = element["bounds"]
-            x = int(bounds["x"] + bounds["width"] // 2)
-            y = int(bounds["y"] + bounds["height"] // 2)
-        elif fx is not None and fy is not None and fw and fh:
-            x = int(fx + fw // 2)
-            y = int(fy + fh // 2)
-        else:
-            find_position = getattr(getattr(renpy, "test", None), "testfocus", None)
-            find_position = getattr(find_position, "find_position", None)
-            if not callable(find_position):
-                raise RuntimeError("Ren'Py focus position API is unavailable")
-            px, py = find_position(focus, (None, None))
-            x, y = int(px), int(py)
+        if fx is not None and fy is not None and fw and fh:
+            return int(fx + fw // 2), int(fy + fh // 2)
+        find_position = getattr(getattr(renpy, "test", None), "testfocus", None)
+        find_position = getattr(find_position, "find_position", None)
+        if not callable(find_position):
+            raise RuntimeError("Ren'Py focus position API is unavailable")
+        px, py = find_position(focus, (None, None))
+        return int(px), int(py)
 
-        if element is not None and element.get("click_point"):
-            x, y = element["click_point"]["x"], element["click_point"]["y"]
+    def _renforge_click_focus(focus, element=None):
+        """Click a control at ``_renforge_focus_point`` through the shared pointer path."""
+        x, y = _renforge_focus_point(focus, element)
         try:
             _renforge_click_pointer(x, y)
         except Exception as exc:
@@ -2454,7 +2546,13 @@ init python:
             raise
         return x, y
 
-    def _renforge_resolve_ui_element(payload, action):
+    def _renforge_resolve_ui_element(payload, action, elements=None):
+        """Find the one UI element ``payload`` names by id and/or text.
+
+        Returns ``(focus, element, None)``, or ``(None, None, error reply)``.
+        ``elements`` are ``_renforge_focusable_elements()`` pairs a caller
+        already built for this request; None builds them.
+        """
         payload = payload or {}
         wanted_id = payload.get("id") or payload.get("element_id")
         wanted_text = payload.get("text")
@@ -2471,11 +2569,13 @@ init python:
         if wanted_screen is not None:
             wanted_screen = str(wanted_screen).casefold()
 
+        if elements is None:
+            elements = _renforge_focusable_elements()
         candidates = []
-        for focus, element in _renforge_focusable_elements():
+        for focus, element in elements:
             if wanted_screen and str(element.get("screen") or "").casefold() != wanted_screen:
                 continue
-            # Upstream element ids, widget names, and observe's control ids all resolve.
+            # UI-element ids, widget names, and observe's control ids all resolve.
             if (wanted_id is not None and str(element.get("id")) != wanted_id
                     and element.get("widget_id") != wanted_id
                     and element.get("control_id") != wanted_id):
@@ -2499,7 +2599,9 @@ init python:
     def _renforge_h_click_element(payload):
         payload = payload or {}
         expected_frame_id = payload.get("expected_frame_id") or payload.get("expected_screenshot")
-        focus, element, error = _renforge_resolve_ui_element(payload, "click_element")
+        # One scene walk serves the lookup and the hit stack after the click.
+        elements = _renforge_focusable_elements()
+        focus, element, error = _renforge_resolve_ui_element(payload, "click_element", elements)
         if error is not None:
             return error
 
@@ -2542,7 +2644,7 @@ init python:
             pending_end_interaction = exc
             x, y = getattr(exc, "renforge_pointer")
         # Report which focusable actually owns this coordinate (coverage).
-        hit = _renforge_hit_stack(x, y)
+        hit = _renforge_hit_stack(x, y, elements)
         topmost = hit.get("topmost")
         action_name = element.get("action")
         # Native quick-menu actions often run as a result of the click; emit a
@@ -2602,27 +2704,32 @@ init python:
             raise pending_end_interaction
         return result
 
-    def _renforge_hit_stack(x, y):
-        """Return the focus a click would hit, plus other rectangles at the point."""
-        elements = _renforge_focusable_elements()
+    def _renforge_hit_stack(x, y, elements=None):
+        """Return the focus a click would hit, plus other rectangles at the point.
+
+        ``topmost`` is what Ren'Py's own hit test names. When the engine says
+        the point hits nothing (a transparent part of a masked button), there
+        is no receiver and the rectangles there are all ``underneath``. Only
+        without a completed render does the topmost rectangle stand in.
+        ``elements`` are focusable-element pairs already built for this
+        request; None builds them.
+        """
+        if elements is None:
+            elements = _renforge_focusable_elements()
         hit = _renforge_render_hit(x, y)
         hits = [(focus, element) for focus, element in elements
                 if element.get("covered") is not True
                 and _renforge_bounds_contain(element.get("bounds") or {}, x, y)]
-        topmost = hits[-1][1] if hits else None
+        topmost = hits[-1][1] if hits and hit == "unavailable" else None
         if hit == "modal":
-            topmost = None
             hits = []
         elif isinstance(hit, tuple) and hit[0] == "displayable":
+            topmost = hits[-1][1] if hits else None
             for focus, element in elements:
                 if getattr(focus, "widget", None) is hit[1]:
                     topmost = element
                     break
-        underneath = []
-        if topmost is not None:
-            for _focus, element in reversed(hits):
-                if element is not topmost:
-                    underneath.append(element)
+        underneath = [element for _focus, element in reversed(hits) if element is not topmost]
         result = {
             "ok": True,
             "x": x,
@@ -2632,11 +2739,7 @@ init python:
             "underneath": underneath,
         }
         if topmost is not None and underneath:
-            result["warning"] = (
-                "The intended button is covered by another interactive displayable."
-                if False
-                else "Multiple interactive displayables overlap this point."
-            )
+            result["warning"] = "Multiple interactive displayables overlap this point."
         return result
 
     def _renforge_h_hit_test(payload):
@@ -2668,21 +2771,12 @@ init python:
             result["requested_coordinate_space"] = "screenshot"
         return result
 
-    def _renforge_move_mouse(focus):
-        fx = getattr(focus, "x", None)
-        fy = getattr(focus, "y", None)
-        fw = getattr(focus, "w", None)
-        fh = getattr(focus, "h", None)
-        if fx is not None and fy is not None and fw and fh:
-            x = int(fx + fw // 2)
-            y = int(fy + fh // 2)
-        else:
-            find_position = getattr(getattr(renpy, "test", None), "testfocus", None)
-            find_position = getattr(find_position, "find_position", None)
-            if not callable(find_position):
-                raise RuntimeError("Ren'Py focus position API is unavailable")
-            px, py = find_position(focus, (None, None))
-            x, y = int(px), int(py)
+    def _renforge_move_mouse(focus, element=None):
+        """Hover a control at the point a click would use (``_renforge_focus_point``).
+
+        Returns ``(x, y, method)``.
+        """
+        x, y = _renforge_focus_point(focus, element)
 
         interface = getattr(getattr(renpy, "display", None), "interface", None)
         if interface is not None:
@@ -2763,8 +2857,11 @@ init python:
                 }
         if not element.get("enabled", True):
             return {"ok": False, "error": "UI element is disabled", "element": element}
+        # As for a click: a covered control would hover whatever covers it.
+        if element.get("covered") or element.get("clickable") is False:
+            return {"ok": False, "error": "UI element has no eligible click", "element": element}
         try:
-            x, y, method = _renforge_move_mouse(focus)
+            x, y, method = _renforge_move_mouse(focus, element)
         except RuntimeError as exc:
             return {"ok": False, "error": str(exc), "element": element}
         result = {
@@ -2799,7 +2896,9 @@ init python:
     def _renforge_h_get_ui_element_bounds(payload):
         payload = payload or {}
         expected_frame_id = payload.get("expected_frame_id") or payload.get("expected_screenshot")
-        focus, element, error = _renforge_resolve_ui_element(payload, "get_ui_element_bounds")
+        inventory = _renforge_scene_inventory()
+        focus, element, error = _renforge_resolve_ui_element(
+            payload, "get_ui_element_bounds", _renforge_focusable_elements(inventory=inventory))
         if error is not None:
             return error
         screenshot_digest = None
@@ -2829,7 +2928,6 @@ init python:
         if widget is None or not hasattr(widget, "state_children") or not callable(getattr(widget, "get_child", None)):
             result["painted_bounds_reason"] = "element does not expose ImageButton state children"
         else:
-            inventory = _renforge_scene_inventory()
             rendered = next((entry for entry in inventory["geometry"]["renders"].get(id(widget), [])
                              if entry[2]["visible"] is True), None)
             if rendered is None:
@@ -2858,11 +2956,10 @@ init python:
                     points = [(a*x+c*y+tx, b*x+d*y+ty) for x, y in
                               ((left, top), (left+painted_width, top),
                                (left+painted_width, top+painted_height), (left, top+painted_height))]
-                    math = _renforge_runtime.interaction.math
-                    x = max(bounds["x"], math.floor(min(p[0] for p in points)))
-                    y = max(bounds["y"], math.floor(min(p[1] for p in points)))
-                    right = min(bounds["x"]+bounds["width"], math.ceil(max(p[0] for p in points)))
-                    bottom = min(bounds["y"]+bounds["height"], math.ceil(max(p[1] for p in points)))
+                    x = max(bounds["x"], _renforge_math.floor(min(p[0] for p in points)))
+                    y = max(bounds["y"], _renforge_math.floor(min(p[1] for p in points)))
+                    right = min(bounds["x"]+bounds["width"], _renforge_math.ceil(max(p[0] for p in points)))
+                    bottom = min(bounds["y"]+bounds["height"], _renforge_math.ceil(max(p[1] for p in points)))
                     result["painted_bounds"] = {"x": x, "y": y, "width": max(0, right-x), "height": max(0, bottom-y)}
                     result["painted_bounds_available"] = True
                     result["painted_bounds_source"] = "completed-render-alpha"
@@ -2923,7 +3020,7 @@ init python:
             return None, None
 
     def _renforge_to_logical_coordinates(x, y, coordinate_space, frame_data=None, descriptor=None):
-        """Convert screenshot pixels through the same seam used by click_at."""
+        """Convert screenshot pixels to logical coordinates (click_at, hit_test, scroll, drag)."""
         if coordinate_space == "logical":
             return x, y, frame_data, None
         if coordinate_space != "screenshot":
@@ -2938,7 +3035,7 @@ init python:
         if descriptor is not None:
             pixel_width, pixel_height = descriptor["width"], descriptor["height"]
         if not (0 <= x < pixel_width and 0 <= y < pixel_height):
-            return x, y, frame_data, "click_at point is outside the screenshot"
+            return x, y, frame_data, "point is outside the screenshot"
         x = int(round(x * float(logical_width) / float(pixel_width)))
         y = int(round(y * float(logical_height) / float(pixel_height)))
         x, y = min(x, logical_width - 1), min(y, logical_height - 1)
@@ -2951,7 +3048,7 @@ init python:
             if isinstance(raw_x, bool) or isinstance(raw_y, bool):
                 raise ValueError
             x, y = float(raw_x), float(raw_y)
-            if not _renforge_runtime.interaction.math.isfinite(x) or not _renforge_runtime.interaction.math.isfinite(y):
+            if not _renforge_math.isfinite(x) or not _renforge_math.isfinite(y):
                 raise ValueError
         except (TypeError, ValueError, OverflowError):
             return {"ok": False, "error": "click_at requires numeric x and y"}
