@@ -4704,6 +4704,10 @@ init python:
     ))
 
 
+    # The screens ShowMenu opens as Ren'Py's game menu (None is its default
+    # screen). interaction._GAME_MENU_SCREENS is a different list: screens a
+    # player is on whose buttons stay chrome, so it adds main_menu,
+    # navigation, confirm and yesno_prompt, which are not ShowMenu targets.
     _RENFORGE_GAME_MENU_SCREENS = frozenset((
         None, "game_menu", "save", "load", "preferences", "history", "help", "about",
     ))
