@@ -10,7 +10,7 @@ import struct
 import types
 
 import pytest
-from test_bridge_runtime import _FakeFocus, _FakeWidget, running_bridge  # noqa: F401 - shared bridge fixture
+from bridge_harness import _completed_render, _FakeFocus, _FakeWidget
 
 
 # --- load_slot ---------------------------------------------------------------
@@ -229,8 +229,6 @@ def test_click_element_builds_the_scene_inventory_once(running_bridge, monkeypat
 
 
 def test_get_ui_element_bounds_builds_the_scene_inventory_once(running_bridge, monkeypatch):
-    from test_bridge_runtime import _completed_render
-
     renpy = running_bridge.renpy
     widget = renpy.display.focus.focus_list[-1].widget
     renpy.config.screen_width, renpy.config.screen_height = 800, 600

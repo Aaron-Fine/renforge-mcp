@@ -679,8 +679,10 @@ To check that what is on screen fits the playthrough, `renforge_explain`
 also reads state: results for a label, screen, control, or source carry
 `values`, the current values of the plain variables their conditions read,
 and `variables=["day", "player.day"]` reads named store variables or
-dotted fields directly. Game objects come back as their simple public fields;
-functions are never called.
+dotted fields directly. Pass `variables` alone: combined with `label`,
+`screen`, `id`, `source`, `search` or `query` it is refused. It reads at most
+100 names; with more, the reply carries `truncated: true`. Game objects come
+back as their simple public fields; functions are never called.
 
 `chrome` holds the game's interface: the conventional `quick_menu`, injected
 `_renforge_` screens, and buttons whose only actions are Ren'Py interface
@@ -1007,6 +1009,11 @@ with nothing in the mod, `raw_tail` holds the end of Ren'Py's output. `guide` re
 | `renforge_search_docs` | Search the offline Ren'Py documentation. |
 | `renforge_get_doc` | Read an offline Ren'Py documentation page. |
 | `renforge_list_docs` | List available offline documentation pages. |
+
+`renforge_translation_stats`, `renforge_generate_translations` and
+`renforge_export_dialogue` refuse a `language` that is not a Ren'Py language
+name (a Python identifier such as `french`) with `code="LANGUAGE_INVALID"`
+before running Ren'Py, which joins it into `game/tl/<language>/` unchecked.
 
 ### Shadow validation
 

@@ -8,32 +8,7 @@ from __future__ import annotations
 
 import types
 
-import pytest
-
-from test_bridge_runtime import running_bridge  # noqa: F401 - shared bridge fixture
-
-
-def _node(kind: str, **attrs):
-    node = type(kind, (), {})()
-    for key, value in attrs.items():
-        setattr(node, key, value)
-    return node
-
-
-def _script_node(kind: str, filename: str, line: int, **attrs):
-    return _node(kind, filename=filename, linenumber=line, **attrs)
-
-
-def _set_script(bridge, labels: dict) -> None:
-    bridge.renpy.game = types.SimpleNamespace(script=types.SimpleNamespace(namemap=labels))
-
-
-def _set_screens(bridge, screens: dict) -> None:
-    bridge.renpy.display.screen = types.SimpleNamespace(screens=screens)
-
-
-def _screen(location, ast=None, parameters=None):
-    return types.SimpleNamespace(location=location, ast=ast, parameters=parameters)
+from bridge_harness import _node, _screen, _script_node, _set_screens, _set_script
 
 
 def _rows(reply):

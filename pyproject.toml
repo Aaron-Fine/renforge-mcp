@@ -56,5 +56,5 @@ include = ["src/renforge"]
 artifacts = ["src/renforge/ui/static/**"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 markers = ["live: full Ren'Py and bridge live scenario"]

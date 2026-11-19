@@ -475,7 +475,9 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "saves and HOME are always isolated, whatever RENFORGE_ISOLATION says. save, load, and list act "
             "only on a game whose saves and HOME are in RenForge's own folders (as launch starts it); a game "
             "on the player's saves, or in a folder outside RenForge's, is refused with "
-            "code=SESSION_NOT_ISOLATED, so these actions never touch the player's saves. "
+            "code=SESSION_NOT_ISOLATED, so these actions never touch the player's saves. import goes where the "
+            "running game keeps its saves; a running game whose saves are in a folder this server did not create "
+            "is refused with code=SESSION_SAVES_ELSEWHERE (stop it, launch with action=launch, then import). "
             "load and import require authorize=true when RENFORGE_POLICY=enforce, and list shows player_slots "
             "only with it."
         ),
@@ -588,7 +590,11 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "source": "A `file:line` reported as `source` by renforge_observe controls or input candidates.",
             "query": "Index only: case-insensitive substring to filter label and screen names.",
             "search": "Case-insensitive text to find in all loaded statements, including Python source.",
-            "variables": "Store variable names or dotted fields to read as data, e.g. [\"day\", \"player.day\"].",
+            "variables": (
+                "Store variable names or dotted fields to read as data, e.g. [\"day\", \"player.day\"]. "
+                "Pass it alone, without label, screen, id, source, search or query. At most 100 names are read; "
+                "with more, the reply has `truncated: true`."
+            ),
             "limit": "Maximum statements, nodes, or index entries to return (1-2000, default 200).",
         },
         parameter_schemas={

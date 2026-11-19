@@ -405,7 +405,8 @@ def test_every_dashboard_error_code_has_a_message() -> None:
     # A code with no errors.ts case shows the dashboard's generic
     # "unexpected" message instead of naming what was wrong.
     server = (REPO_ROOT / "src" / "renforge" / "ui" / "server.py").read_text(encoding="utf-8")
-    codes = set(re.findall(r'code="([a-z_]+)"', server))
+    # Every quoted code on a `code=` line, including both arms of a conditional.
+    codes = {code for line in re.findall(r'\bcode=(.*)', server) for code in re.findall(r'"([a-z_]+)"', line)}
     # A templated code takes its field names from the nearest loop above it.
     loops = list(re.finditer(r'for field, \w+ in \((.*)\):', server))
     for template in re.finditer(r'code=f"([a-z_]*)\{field\}([a-z_]*)"', server):
@@ -417,3 +418,5 @@ def test_every_dashboard_error_code_has_a_message() -> None:
     english = json.loads((I18N_DIR / "locales" / "en.json").read_text(encoding="utf-8"))["errors"]
     assert sorted(codes - cases) == []
     assert sorted(code for code in codes if code not in english) == []
+    # A case no route returns is a message the dashboard can never show.
+    assert sorted(cases - codes) == []
