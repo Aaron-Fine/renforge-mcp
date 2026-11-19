@@ -1,4 +1,4 @@
-"""Follow-up fixes in bridge.rpy, run against the fake runtime of test_bridge_runtime.
+"""Follow-up fixes in bridge.rpy, run against the fake runtime of bridge_harness.
 
 These pin the bridge halves of fixes whose Python halves landed elsewhere: the
 stuck-pause dismiss, the shared custom-action rule, one scene inventory per
