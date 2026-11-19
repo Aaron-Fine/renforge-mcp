@@ -24,7 +24,7 @@ from .util.files import (
     read_text_nofollow,
     write_atomic,
 )
-from .state import project_state_dir
+from .state import ensure_project_state_dir
 
 MANIFEST_NAME = "renforge-mod.json"
 ALLOWED_SUFFIXES = (".rpy", ".txt", ".json", ".md")
@@ -364,8 +364,10 @@ def package(project_root: str | Path, name: str) -> dict[str, Any]:
     candidates = sorted(
         rel for rel in manifest["files"] if not rel.endswith(".rpyc") and rel != MANIFEST_NAME
     )
-    out_dir = project_state_dir(project_root) / "mods"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        out_dir = ensure_project_state_dir(project_root, "mods")
+    except PrivatePathError as exc:
+        raise ValueError(f"refusing unsafe package folder: {exc}") from exc
     zip_path = out_dir / f"{name}.zip"
     fd, tmp = tempfile.mkstemp(dir=str(out_dir), prefix=f".{name}.", suffix=".zip.tmp")
     os.close(fd)

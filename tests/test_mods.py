@@ -219,6 +219,28 @@ def test_package_zips_listed_files_without_compiled_or_manifest(tmp_path) -> Non
         assert archive.read("game/mods/demo/readme.md") == b"hello"
 
 
+def test_package_does_not_follow_a_linked_state_folder(tmp_path) -> None:
+    """The zip goes into RenForge's own state folder, never through a link planted there."""
+    import os
+
+    root = _project(tmp_path)
+    mods.write_file(root, "demo", "a.rpy", "label a:\n    return\n")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    state = project_state_dir(root)
+    state.mkdir(parents=True, exist_ok=True)
+    try:
+        os.symlink(elsewhere, state / "mods", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+
+    result = mod_tools.mod(str(root), "package", name="demo")
+
+    assert result["ok"] is False
+    assert "unsafe" in result["error"]
+    assert list(elsewhere.iterdir()) == []
+
+
 def test_package_unknown_mod_is_an_error(tmp_path) -> None:
     root = _project(tmp_path)
 

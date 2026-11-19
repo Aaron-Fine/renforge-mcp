@@ -550,7 +550,7 @@ def build_wrappers(context):
             the session's saves folder, which the next launch uses.
             """
             from ..save_isolation import import_host_slots
-            from ..util.files import ensure_nofollow_directory
+            from ..state import ensure_project_state_dir
 
             saves = live.session_saves_dir(project_path)
             running = live.running_game_savedir(project_path)
@@ -567,7 +567,7 @@ def build_wrappers(context):
                 replaced = _has_slot(saves, name)
                 # The import creates only the saves folder itself; the state
                 # folder is RenForge's own (and already resolved), so make it here.
-                ensure_nofollow_directory(saves.parent)
+                ensure_project_state_dir(project_path)
                 result = import_host_slots(project_path, saves, slot=name, save_name=save_name)
             touched = list(result.get("files_touched") or [])
             if not result.get("ok"):
