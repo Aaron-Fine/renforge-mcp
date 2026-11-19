@@ -2339,15 +2339,30 @@ def session_saves_dir(project_path: str | Path) -> Path:
 
 
 def running_game_savedir(project_path: str | Path) -> str | None:
-    """The save folder the project's running game reports, or ``None``.
+    """The save folder the project's running game uses, or ``None``.
 
-    ``None`` when no game answers or its bridge cannot say (it predates
-    ``session_info``, or is busy).
+    For a game this process runs it is the folder this process gave it;
+    any other game is asked. ``None`` means no game is running, or one
+    whose bridge predates ``session_info`` cannot say. Any other failure
+    (a busy or still-starting game, a dropped connection) proves nothing
+    about where the game saves, so it raises :class:`BridgeError` for the
+    caller to report as retryable instead of guessing a folder.
     """
+    known = _known_savedir(project_path)
+    if known is not None:
+        return known
     try:
         info = _client(project_path).session_info()
-    except Exception:
-        return None
+    except BridgeNotRunningError as exc:
+        if exc.code == "NO_RUNNING_GAME":
+            return None
+        raise
+    except BridgeError as exc:
+        if "unknown_command" in str(exc) or "unknown command" in str(exc):
+            return None
+        raise
+    except Exception as exc:
+        raise BridgeError(f"{type(exc).__name__}: {exc}") from exc
     savedir = info.get("savedir") if isinstance(info, dict) else None
     return savedir if isinstance(savedir, str) and savedir else None
 

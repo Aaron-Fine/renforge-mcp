@@ -406,6 +406,80 @@ def test_session_import_goes_where_the_running_game_keeps_its_saves(tmp_path, mo
     assert session_tool(str(project), "import", slot="1-1")["replaced"] is True
 
 
+def test_session_import_never_guesses_the_folder_when_the_bridge_does_not_answer(tmp_path, monkeypatch) -> None:
+    """A busy bridge is not 'no game': the import must not land where the running game never loads it."""
+    import contextlib
+    import tempfile
+    from types import SimpleNamespace
+
+    from renforge.bridge.client import BridgeNotRunningError
+    from renforge.save_isolation import host_renpy_root
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    player = host_renpy_root(home=home) / "a-game"
+    player.mkdir(parents=True)
+    (player / "1-1-LT1.save").write_bytes(b"PLAYER")
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    (project / "game" / "options.rpy").write_text('define config.save_directory = "a-game"\n', encoding="utf-8")
+    busy = _UnansweringSessionClient("bridge request timed out")
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: busy))
+    app = _ToolRegistry()
+    _register_tools(app)
+    session_tool = app.tools["renforge_session"]
+    state_saves = project_state_dir(project) / "saves"
+
+    # A game this server did not start, and that does not answer: retry, write nothing.
+    refused = session_tool(str(project), "import", slot="1-1")
+    assert refused["ok"] is False and refused["files_touched"] == [], refused
+    assert "timed out" in refused["error"]
+    assert not state_saves.exists()
+
+    # A game still starting has not said where it saves either.
+    def starting(cls, root, **_k):
+        raise BridgeNotRunningError("the game is still starting", code="GAME_STARTING")
+
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(starting))
+    assert session_tool(str(project), "import", slot="1-1")["ok"] is False
+    assert not state_saves.exists()
+
+    # A game this server launched with savedir='temporary': its folder is known here.
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: busy))
+    session_root = tmp_path / "renforge-session-x"
+    session_saves = session_root / "saves"
+    session_saves.mkdir(parents=True)
+
+    class _OwnedTemporary:
+        temporary_savedir = session_saves
+        isolation = SimpleNamespace(savedir_mode="temporary", session_root=session_root)
+
+        @contextlib.contextmanager
+        def holding_open(self):
+            yield True
+
+    monkeypatch.setitem(live._SESSIONS, live._key(project), _OwnedTemporary())
+    imported = session_tool(str(project), "import", slot="1-1")
+    assert imported["ok"] is True, imported
+    assert (session_saves / "1-1-LT1.save").read_bytes() == b"PLAYER"
+    assert not state_saves.exists()
+
+    # No game at all: the import goes to the session's saves, which the next launch uses.
+    monkeypatch.delitem(live._SESSIONS, live._key(project))
+
+    def not_running(cls, root, **_k):
+        raise BridgeNotRunningError("no game", code="NO_RUNNING_GAME")
+
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(not_running))
+    assert session_tool(str(project), "import", slot="1-1")["ok"] is True
+    assert (state_saves / "1-1-LT1.save").read_bytes() == b"PLAYER"
+
+
 @pytest.mark.parametrize("policy", ["off", "enforce"])
 def test_session_saves_never_act_on_a_game_using_the_players_saves(tmp_path, monkeypatch, policy) -> None:
     """renforge_session promises the state folder, never the player's saves."""

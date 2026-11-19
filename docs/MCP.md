@@ -722,6 +722,8 @@ The import goes where the running game keeps its saves (a game this server
 launched with `savedir='temporary'` takes it in its own folder); a game whose
 saves are elsewhere and that this server cannot write into is refused with
 `code="SESSION_SAVES_ELSEWHERE"`.
+A running game whose bridge does not answer (busy, or still starting) gets
+the ordinary, retryable error, and nothing is copied.
 Under `RENFORGE_POLICY=enforce` both need `authorize=true`, since they read
 the player's own saves; without it, `list` returns only the session's slots
 and says the player's are hidden. `save`, `load`, and `list` answer

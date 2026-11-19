@@ -547,13 +547,22 @@ def build_wrappers(context):
             """Copy one of the player's slots into the saves a load will read; the player's file is only read.
 
             That is the running game's save folder when it reports one, else
-            the session's saves folder, which the next launch uses.
+            the session's saves folder, which the next launch uses. A game
+            that does not answer (busy, still starting) gets a retryable
+            error and nothing is copied.
             """
+            from ..bridge.client import BridgeError
             from ..save_isolation import import_host_slots
             from ..state import ensure_project_state_dir
 
             saves = live.session_saves_dir(project_path)
-            running = live.running_game_savedir(project_path)
+            try:
+                running = live.running_game_savedir(project_path)
+            except BridgeError as exc:
+                # Busy or still starting: where it saves is unknown, so nothing
+                # is copied anywhere a load might not read; the call may be retried.
+                return {"ok": False, "files_touched": [],
+                        "error": f"the running game did not say where it keeps its saves ({exc}); retry"}
             elsewhere = running is not None and not _same_folder(Path(running), saves)
             if elsewhere and not live.owns_session(project_path):
                 return _saves_elsewhere(running)
