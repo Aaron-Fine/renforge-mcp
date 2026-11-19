@@ -148,6 +148,26 @@ def test_bridge_client_control_helper():
     assert reply == {"ok": True, "action": "toggle_skip", "event": "toggle_skip"}
 
 
+def test_bridge_client_dismiss_if_sends_the_pause_opt_in_only_when_asked():
+    token = "dismiss-token"
+    requests = []
+
+    def serve(**kwargs):
+        def handler(line, conn):
+            requests.append(json.loads(line))
+            conn.sendall(b'{"ok": true, "interaction": 7}\n')
+
+        thread, port, _sock = _start_test_server(handler)
+        reply = BridgeClient(BridgeConfig(port=port, token=token)).dismiss_if(interaction=7, **kwargs)
+        thread.join(timeout=1.0)
+        return reply
+
+    assert serve(allow_pause=True) == {"ok": True, "interaction": 7}
+    assert serve()["ok"] is True
+    assert requests[0]["payload"] == {"interaction": 7, "allow_pause": True}
+    assert requests[1]["payload"] == {"interaction": 7}
+
+
 def test_bridge_client_save_slot_helper():
     token = "save-token"
     captured = {}

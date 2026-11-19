@@ -1082,8 +1082,16 @@ def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch)
     import time
     from renforge import progression
     monkeypatch.setattr(progression, "STUCK_PAUSE_SECONDS", 0.05)
-    nudges = []
-    stuck = _raw(interaction=7, stable=False, unstable_reason="pause", say_dismiss="dismiss")
+    stuck = _raw(interaction=7, stable=False, unstable_reason="pause", say_dismiss="dismiss",
+                 session_id="s1", observation_id="o1")
+    verdicts = []
+
+    def nudge(interaction):
+        # The bridge's own verdict on the fresh frame, as dismiss_if computes it.
+        snapshot = classify(stuck)
+        verdicts.append(guard_dismiss(snapshot, interaction, session_id="s1", observation_id="o1",
+                                      allow_pause=True))
+        return {"ok": verdicts[-1] is None, "error": verdicts[-1]}
 
     class Client:
         def progression(self, *args, **kwargs):
@@ -1091,8 +1099,8 @@ def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch)
 
     progression.run_native_skip(Client(), lambda shot: stuck, max_steps=5,
                                 deadline=time.monotonic() + 0.3, total_deadline=time.monotonic() + 0.4,
-                                nudge=nudges.append)
-    assert nudges == [7]
+                                nudge=nudge)
+    assert verdicts == [None]
     # Without a way to click (no nudge), it only waits.
     progression.run_native_skip(Client(), lambda shot: stuck, max_steps=5,
                                 deadline=time.monotonic() + 0.1, total_deadline=time.monotonic() + 0.2)
@@ -1272,6 +1280,25 @@ def test_a_scrolling_panel_beside_a_line_does_not_hold_it():
     # A slider bound to a value is input, so it still stops the line.
     slider = [_element(screen="stream", role="bar", text="volume")]
     assert classify(_raw(elements=slider, screens=screens))["forward"] == "choose"
+
+
+def test_dismiss_on_a_pending_pause_needs_the_explicit_pause_opt_in():
+    """Only the stuck-pause nudge may click a frame that is still a pause."""
+    pause = classify(_raw(interaction=7, stable=False, unstable_reason="pause",
+                          session_id="s1", observation_id="o1"))
+    assert guard_dismiss(pause, 7) == "unstable"
+    assert guard_dismiss(pause, 7, allow_pause=True) is None
+    assert guard_dismiss(pause, None, observation_id="o1", allow_pause=True) is None
+    # The opt-in skips only the stability check.
+    assert guard_dismiss(pause, 7, session_id="other", allow_pause=True) == "stale"
+    assert guard_dismiss(pause, 7, observation_id="other", allow_pause=True) == "stale"
+    assert guard_dismiss(pause, 8, allow_pause=True) == "stale"
+    hard = classify(_raw(stable=False, unstable_reason="pause", say_dismiss="dismiss_hard_pause"))
+    assert guard_dismiss(hard, 4, allow_pause=True) == "not_dismiss"
+    transition = classify(_raw(stable=False, unstable_reason="transition"))
+    assert guard_dismiss(transition, 4, allow_pause=True) == "unstable"
+    not_ready = classify(_raw(stable=False, unstable_reason="not_ready"))
+    assert guard_dismiss(not_ready, 4, allow_pause=True) == "unstable"
 
 
 def test_dismiss_past_optional_controls_still_refuses_menus_and_modals():

@@ -725,12 +725,21 @@ def validate_act_payload(payload: Mapping[str, Any]) -> str | None:
 
 
 def guard_identity(snapshot: Mapping[str, Any], interaction: Any, *,
-                   session_id: str | None = None, observation_id: str | None = None) -> str | None:
+                   session_id: str | None = None, observation_id: str | None = None,
+                   allow_pause: bool = False) -> str | None:
+    """Return ``"stale"`` or ``"unstable"``, or None when the token still names this frame.
+
+    A given ``session_id`` or ``observation_id`` must match; ``observation_id``
+    alone (``interaction`` None) is enough, since it covers the interaction.
+    The frame must be stable; ``allow_pause`` also accepts a frame that is
+    unstable only because a short pause is pending.
+    """
     if session_id is not None and snapshot.get("session_id") != session_id:
         return "stale"
     if observation_id is not None and snapshot.get("observation_id") != observation_id:
         return "stale"
-    if snapshot.get("stable") is not True:
+    pausing = allow_pause and snapshot.get("unstable_reason") == "pause"
+    if snapshot.get("stable") is not True and not pausing:
         return "unstable"
     if interaction is None and observation_id is not None:
         return None
@@ -794,9 +803,14 @@ def guard_act(
 
 def guard_dismiss(snapshot: Mapping[str, Any], interaction: Any, *,
                   session_id: str | None = None, observation_id: str | None = None,
-                  past_optional_controls: bool = False) -> str | None:
-    """Return a refusal, or None when ``queue_event('dismiss')`` is legal."""
-    refusal = guard_identity(snapshot, interaction, session_id=session_id, observation_id=observation_id)
+                  past_optional_controls: bool = False, allow_pause: bool = False) -> str | None:
+    """Return a refusal, or None when ``queue_event('dismiss')`` is legal.
+
+    ``allow_pause`` lets a line whose pause never ends (``{w=1.0}{nw}`` that
+    stays a pause) be clicked once; every other check still applies.
+    """
+    refusal = guard_identity(snapshot, interaction, session_id=session_id, observation_id=observation_id,
+                             allow_pause=allow_pause)
     if refusal:
         return refusal
     omitted = snapshot.get("omitted") or {}

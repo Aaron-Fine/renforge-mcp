@@ -104,6 +104,11 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, betwe
     Once started, poll only the operation's status (and ``between``, which
     drains events): a full observation per poll would compete with skipping
     for the game's main thread. The caller settles the final observation.
+
+    ``nudge(interaction)`` is called once when a line has stayed a pause past
+    ``STUCK_PAUSE_SECONDS``. It must post a guarded dismiss that accepts a
+    pending pause (``dismiss_if(..., allow_pause=True)``); the plain guard
+    refuses every unstable frame.
     """
     operation_id = uuid.uuid4().hex
     attempted = False
