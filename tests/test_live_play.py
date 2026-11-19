@@ -1,4 +1,4 @@
-"""renforge_play's continue path keeps to the caller's time budget."""
+"""Play and progression in tools.live: time budgets and observation failures."""
 
 from __future__ import annotations
 
@@ -51,3 +51,43 @@ def test_continue_reports_a_timeout_when_no_budget_is_left(monkeypatch) -> None:
     assert result["observation_status"] == "timeout"
     assert result["observation"] is None
     assert result["progress"]["stop"] == "timeout"
+
+
+def test_progression_reports_a_screenshot_that_does_not_decode(monkeypatch) -> None:
+    """PIL raises OSError for a corrupt image; the run's transcript must still come back."""
+    frame = {
+        "interaction": 4, "stable": True, "unstable_reason": None,
+        "statement": {"file": "game/script.rpy", "line": 22}, "label": "start",
+        "dialogue": {"who": None, "what": "Hello"},
+        "screens": [{"name": "say", "layer": "screens", "modal": False}],
+        "say_dismiss": "dismiss", "overlay_screens": [], "elements": [],
+        "omitted": {"focus_truncated": False, "unclassified": False}, "frame_hash": None,
+    }
+
+    class _Client:
+        _config = type("Cfg", (), {"host": "127.0.0.1", "port": 9, "token": "tok"})()
+
+        def observe(self, screenshot=False, deadline=None):
+            return {**frame, **({"screenshot": "corrupt"} if screenshot else {})}
+
+        def progression(self, action, operation_id, **_kwargs):
+            return {"ok": True, "progression": {"id": operation_id, "active": False, "stop": "none", "steps": 1}}
+
+        def poll_events(self, since=0, deadline=None):
+            return {"events": [{"seq": 1, "type": "label", "label": "start"}], "cursor": 1}
+
+    def fake_apply_screenshot(reply):
+        if "screenshot" in reply:
+            raise OSError("image file is truncated")
+        return dict(reply), None
+
+    monkeypatch.setattr(live, "_client", lambda _path: _Client())
+    monkeypatch.setattr(live, "apply_screenshot", fake_apply_screenshot)
+    monkeypatch.setattr(live, "_owned_session", lambda _path: None)
+    monkeypatch.setitem(live._crossed_after, live._key("/tmp/renforge-corrupt-shot"), (("x", 0, "y"), 0))
+
+    result = live.advance_until("/tmp/renforge-corrupt-shot", max_steps=5, timeout=2, screenshot=True)
+
+    assert result["observation_status"] == "transport_error"
+    assert "invalid screenshot" in result["observation_error"]
+    assert {"type": "label", "label": "start"} in result["crossed"]

@@ -1617,6 +1617,43 @@ def _mark_crossed(project_path: str, client: BridgeClient, seq: Any) -> None:
     _crossed_after[_key(project_path)] = (_bridge_session(client), seq)
 
 
+# A screenshot that does not decode; PIL raises OSError for a corrupt image.
+_INVALID_SCREENSHOT = (ValueError, TypeError, OSError)
+
+
+def _fetch_observation(client: BridgeClient, process: Any, *, screenshot: bool, deadline: float,
+                       png_box: dict[str, bytes]) -> dict:
+    """One observe for a settle or progression loop.
+
+    Returns the raw snapshot with ``ok`` true, or a failure with ``ok`` false,
+    a ``status`` and an ``error``. A screenshot it carries is kept in
+    ``png_box["png"]`` (see :func:`_attach_png`).
+    """
+    try:
+        reply = client.observe(screenshot=screenshot, deadline=deadline)
+    except BridgeError as exc:
+        return {"ok": False, "status": failure_status(exc, process), "error": str(exc)}
+    if not isinstance(reply, dict):
+        return {"ok": False, "status": "transport_error", "error": "observe reply must be an object"}
+    if reply.get("ok") is False or reply.get("error"):
+        return {"status": "transport_error", **reply, "ok": False}
+    try:
+        raw, png = apply_screenshot(reply)
+    except _INVALID_SCREENSHOT as exc:
+        return {"ok": False, "status": "transport_error", "error": f"invalid screenshot: {exc}"}
+    if isinstance(png, bytes):
+        png_box["png"] = png
+    raw["ok"] = True
+    return raw
+
+
+def _attach_png(result: dict, png_box: Mapping[str, bytes], snapshot: Mapping[str, Any] | None) -> None:
+    """Return the kept screenshot with *result* only when it shows *snapshot*'s frame."""
+    png = png_box.get("png")
+    if png is not None and snapshot is not None and hashlib.sha256(png).hexdigest() == snapshot.get("frame_hash"):
+        result["_png"] = png
+
+
 def _observation_from_reply(reply: dict) -> dict:
     if not isinstance(reply, dict):
         return {"ok": False, "error": "observe reply must be an object"}
@@ -1626,7 +1663,7 @@ def _observation_from_reply(reply: dict) -> dict:
         return result
     try:
         raw, png = apply_screenshot(reply)
-    except (ValueError, TypeError) as exc:
+    except _INVALID_SCREENSHOT as exc:
         return {"ok": False, "error": f"invalid screenshot: {exc}"}
     snapshot = classify(raw)
     snapshot["ok"] = True
@@ -1742,25 +1779,14 @@ def act(
             result["progress"] = progress
             result["observation_status"] = progress.get("observation_status", "timeout")
             return result
-        png_box = {}
+        png_box: dict[str, bytes] = {}
+
         def fetch(want_image):
-            try:
-                raw = client.observe(screenshot=want_image, deadline=deadline)
-                if raw.get("ok") is False:
-                    return raw
-                raw, png = apply_screenshot(raw)
-                if png is not None:
-                    png_box["png"] = png
-                return raw
-            except BridgeError as exc:
-                return {"ok": False, "status": failure_status(exc, process), "error": str(exc)}
-            except (ValueError, TypeError, OSError) as exc:
-                return {"ok": False, "status": "transport_error", "error": f"invalid screenshot: {exc}"}
+            return _fetch_observation(client, process, screenshot=want_image, deadline=deadline, png_box=png_box)
+
         snapshot, status, error = settle(fetch, deadline, screenshot=screenshot)
         result.update(observation=snapshot, observation_status=status)
-        png = png_box.get("png")
-        if png is not None and snapshot is not None and hashlib.sha256(png).hexdigest() == snapshot.get("frame_hash"):
-            result["_png"] = png
+        _attach_png(result, png_box, snapshot)
 
         if error:
             result["observation_error"] = error
@@ -1943,24 +1969,13 @@ def _advance_with_client(project_path: str, client: BridgeClient, *, max_steps: 
             cursor = next_cursor
 
     def fetch(want_image):
-        try:
-            request_end = min(wall_end, time.monotonic() + 5.0)
-            if time.monotonic() < progress_end:
-                request_end = min(request_end, progress_end)
-            reply = client.observe(screenshot=want_image and screenshot, deadline=request_end)
-        except BridgeError as exc:
-            return {"ok": False, "status": failure_status(exc, process), "error": str(exc)}
-        if not isinstance(reply, dict):
-            return {"ok": False, "status": "transport_error", "error": "observe reply must be an object"}
-        if reply.get("ok") is False or reply.get("error"):
-            return {**reply, "ok": False, "status": "transport_error"}
-        try:
-            raw, png = apply_screenshot(reply)
-        except (ValueError, TypeError) as exc:
-            return {"ok": False, "status": "transport_error", "error": f"invalid screenshot: {exc}"}
-        if isinstance(png, bytes):
-            png_box["png"] = png
-        raw["ok"] = True
+        request_end = min(wall_end, time.monotonic() + 5.0)
+        if time.monotonic() < progress_end:
+            request_end = min(request_end, progress_end)
+        raw = _fetch_observation(client, process, screenshot=want_image and screenshot,
+                                 deadline=request_end, png_box=png_box)
+        if raw.get("ok") is False:
+            return raw
         guard.update({name: raw.get(name) for name in ("session_id", "observation_id") if raw.get(name) is not None})
         seq = raw.get("event_seq")
         already = isinstance(seq, int) and not isinstance(seq, bool) and seq <= since
@@ -2011,9 +2026,7 @@ def _advance_with_client(project_path: str, client: BridgeClient, *, max_steps: 
         result["last_observation"] = prior
     if error:
         result["observation_error"] = error
-    png = png_box.get("png")
-    if png is not None and final is not None and hashlib.sha256(png).hexdigest() == final.get("frame_hash"):
-        result["_png"] = png
+    _attach_png(result, png_box, final)
     collect()
     result["crossed"] = crossed_transcript(events, frames)
     result["crossed_truncated"] = truncated or poll_failed
