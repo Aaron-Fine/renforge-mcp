@@ -348,7 +348,8 @@ def _screens(raw: Mapping[str, Any], overlay_screens: set[str]) -> list[dict[str
 def strip_text_tags(value: str) -> str:
     """Remove Ren'Py say tags, leaving the words the player would read.
 
-    ``{p}`` becomes a newline. ``{{`` and ``}}`` stay as literal braces.
+    ``{p}``, ``{p=N}`` and ``{vspace=N}`` become a newline and ``{space=N}`` a
+    space, so words never run together. ``{{`` and ``}}`` stay as literal braces.
     The injected bridge runs this same module, so host and game strip alike.
     """
     if not isinstance(value, str) or not value:
@@ -381,8 +382,12 @@ def strip_text_tags(value: str) -> str:
             tag = bool(probe) and probe.replace("_", "a").isalnum() and not probe[0].isdigit()
         if not tag:
             out.append(protected[start : end + 1])
-        elif body == "p":
+        elif body.startswith("/"):
+            pass
+        elif kind in ("p", "vspace"):
             out.append("\n")
+        elif kind == "space":
+            out.append(" ")
         index = end + 1
     return "".join(out).replace("\ue000", "{").replace("\ue001", "}").strip()
 

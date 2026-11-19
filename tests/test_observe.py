@@ -68,6 +68,14 @@ def test_dialogue_what_drops_text_tags():
     paragraph = classify(_raw(dialogue={"who": None, "what": "One{p}Two"}))
     assert paragraph["dialogue"]["what"] == "One\nTwo"
 
+
+def test_timed_paragraphs_and_spacing_tags_keep_words_apart():
+    from renforge.interaction import strip_text_tags
+    assert strip_text_tags("Hello.{p=1.0}World") == "Hello.\nWorld"
+    assert strip_text_tags("a{space=10}b") == "a b"
+    assert strip_text_tags("a{vspace=10}b") == "a\nb"
+    assert strip_text_tags("{i}a{/i}{w=0.5}b") == "ab"
+
     tags_only = classify(_raw(dialogue={"who": None, "what": "{w}{nw}"}))
     assert tags_only["dialogue"] is None
 
