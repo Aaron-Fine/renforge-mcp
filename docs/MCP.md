@@ -911,7 +911,9 @@ be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 1,000,000 UTF-8 bytes. Symlinks under `game/` are refused. `write` will not take
 over files it did not create: a `game/mods/<name>/` folder without a manifest
 (some games ship their own mods there), or a file (or a `.rpy`'s `.rpyc`) the
-manifest does not list, is refused, so choose another name. `lint` runs
+manifest does not list, is refused, so choose another name. `remove` also
+refuses a mod whose own folder, `game/mods`, or `game` is a link, and never
+enters a linked folder inside the mod. `lint` runs
 Ren'Py lint on a temporary shadow copy, as `renforge_validate` does, so the
 project's `init` code runs but nothing is written in the game. It uses the
 game's own engine version, like `version="stable"` elsewhere (the

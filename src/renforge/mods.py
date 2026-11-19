@@ -14,7 +14,7 @@ import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .lint import parse_lint_output
 from .util.files import (
@@ -159,6 +159,29 @@ def _is_safe_relpath(path: str) -> bool:
     return True
 
 
+def _refuse_linked_mod_dir(project_root: str | Path, name: str) -> None:
+    """Refuse a mod whose ``game``, ``game/mods`` or own folder is a link.
+
+    Through a link, deleting the manifest or empty folders would act on a
+    folder outside ``game/mods/<name>/`` while the receipt names the inside.
+    """
+    game = _game_dir(project_root)
+    for component in (game, game / "mods", _mod_dir(project_root, name)):
+        if _is_link(component):
+            raise ValueError(f"refusing to use symlink under game/: {component.name}")
+
+
+def _walk_unlinked(top: Path) -> Iterator[tuple[str, list[str], list[str]]]:
+    """``os.walk`` top-down that never enters a linked folder.
+
+    ``followlinks=False`` skips symlinks but still enters NTFS junctions, so
+    linked names are pruned from ``dirnames`` with the reparse-aware check.
+    """
+    for root, dirnames, filenames in os.walk(top):
+        dirnames[:] = sorted(d for d in dirnames if not _is_link(Path(root) / d))
+        yield root, dirnames, filenames
+
+
 def _load_manifest(mod_dir: Path) -> dict[str, Any] | None:
     manifest = mod_dir / MANIFEST_NAME
     if _is_link(manifest) or not manifest.is_file():
@@ -194,8 +217,7 @@ def _files_on_disk(mod_dir: Path) -> list[str]:
     found: list[str] = []
     if not mod_dir.is_dir():
         return found
-    for root, dirnames, filenames in os.walk(mod_dir):
-        dirnames.sort()
+    for root, _dirnames, filenames in _walk_unlinked(mod_dir):
         for filename in filenames:
             full = Path(root) / filename
             if _is_link(full) or not full.is_file():
@@ -302,10 +324,12 @@ def remove(project_root: str | Path, name: str) -> dict[str, Any]:
     """Delete a mod's listed files, their ``.rpyc`` siblings, and its manifest.
 
     Unlisted files are never deleted; they are reported under ``kept``.
-    ``files_deleted`` names every deleted file, manifest included,
-    project-relative.
+    Raises ``ValueError`` when ``game``, ``game/mods`` or the mod folder is a
+    link, and never enters a linked folder inside the mod. ``files_deleted``
+    names every deleted file, manifest included, project-relative.
     """
     _check_name(name)
+    _refuse_linked_mod_dir(project_root, name)
     mod_dir = _mod_dir(project_root, name)
     manifest = _load_manifest(mod_dir)
     if manifest is None:
@@ -336,12 +360,13 @@ def remove(project_root: str | Path, name: str) -> dict[str, Any]:
     (mod_dir / MANIFEST_NAME).unlink()
     kept.extend(_unlisted(mod_dir, set(files)))
 
-    for root, dirnames, _filenames in os.walk(mod_dir, topdown=False):
-        for dirname in dirnames:
-            try:
-                os.rmdir(Path(root) / dirname)
-            except OSError:
-                pass
+    # Deepest first; linked folders were pruned, so they are never removed.
+    folders = [Path(root) / d for root, dirnames, _ in _walk_unlinked(mod_dir) for d in dirnames]
+    for folder in reversed(folders):
+        try:
+            os.rmdir(folder)
+        except OSError:
+            pass
     try:
         mod_dir.rmdir()
     except OSError:
