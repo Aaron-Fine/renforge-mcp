@@ -37,6 +37,7 @@ _TEXT_ROLES = {"input"}
 
 
 def normalize_role(role: Any) -> str:
+    """Map a bridge widget role to button, bar, input, drag, its own name, or ``unknown``."""
     raw = role.strip().casefold() if isinstance(role, str) else ""
     if raw in _BUTTON_ROLES or "button" in raw or "hotspot" in raw:
         return "button"
@@ -50,6 +51,7 @@ def normalize_role(role: Any) -> str:
 
 
 def operations_for(role: str) -> list[str]:
+    """Return what ``act`` can do with a control of this normalized role (empty for none)."""
     if role == "button":
         return ["click"]
     if role == "input":
@@ -62,6 +64,10 @@ def operations_for(role: str) -> list[str]:
 
 
 def image_basename(image_name: Any) -> str | None:
+    """Return an image's name without directories, or None when there is none.
+
+    A Ren'Py image name (tag and attributes) is joined with spaces.
+    """
     if isinstance(image_name, (list, tuple)):
         # A Ren'Py image name: tag and attributes, never a path.
         parts = [part.strip() for part in image_name if isinstance(part, str) and part.strip()]
@@ -176,6 +182,7 @@ def _is_chrome(screen: str | None) -> bool:
 
 
 def normalize_say_dismiss(value: Any) -> str | None:
+    """Return ``dismiss``, else ``dismiss_hard_pause``, when the interaction listens for it, else None."""
     names: list[str] = []
     if isinstance(value, str):
         names = [value]

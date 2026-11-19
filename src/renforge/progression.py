@@ -27,6 +27,8 @@ def process_exit(process) -> dict | None:
 
 
 def failure_status(error: Exception, process=None) -> str:
+    """Name a bridge failure: ``exited`` or ``crash`` when the owned process
+    ended, ``timeout`` for a timed-out request, else ``transport_error``."""
     exited = process_exit(process)
     if exited is not None:
         return "exited" if exited["exit_code"] == 0 else "crash"
