@@ -2335,8 +2335,7 @@ def saves(
         )
 
     try:
-        # list_user only reads, so it must not create the project's .renforge.
-        project = RenpyProject(Path(project_path), create_cache=action != "list_user")
+        project = RenpyProject(Path(project_path))
     except Exception as exc:
         failure = {
             "ok": False,

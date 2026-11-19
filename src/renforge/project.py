@@ -56,9 +56,8 @@ class RenpyProject:
     """Represents a Ren'Py project directory."""
 
     root: Path
-    # Read-only callers (validation) must not add state to the project tree.
-    # RenForge state lives outside the game folder and is created on use, so
-    # nothing here creates it either way; the flag is kept for those callers.
+    # Has no effect: RenForge state lives outside the game folder and is
+    # created on use, so constructing a project never creates anything.
     create_cache: bool = field(default=True, compare=False, repr=False)
     game_dir: Path = field(init=False)
     cache_dir: Path = field(init=False)
