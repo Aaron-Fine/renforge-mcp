@@ -499,6 +499,41 @@ def test_session_saves_pass_a_busy_bridge_through_as_a_retryable_error(tmp_path,
     assert old.calls == []
 
 
+@pytest.mark.parametrize("slot", [
+    "/home/player/.renpy/a-game/1-1", "../../player/1-1", "sub/1-1", "sub\\1-1", "C:1-1",
+    "\\\\server\\share\\1-1", ".", "..", "1-1\x00",
+])
+@pytest.mark.parametrize("action", ["save", "load"])
+def test_save_and_load_refuse_a_slot_that_is_a_path(tmp_path, monkeypatch, slot, action) -> None:
+    """Ren'Py joins the slot onto its save folder, so a path slot would reach any folder, the player's included."""
+    import tempfile
+
+    from renforge.tools import live
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    # The session's own game: an ordinary slot name would be saved or loaded.
+    state_saves = project_state_dir(project) / "saves"
+    session_home = tmp_path / "renforge-session-x" / "home"
+    for path in (state_saves, session_home):
+        path.mkdir(parents=True)
+    client = _SessionSavesClient({"eval_enabled": True, "savedir": str(state_saves), "home": str(session_home),
+                                  "save_locations": [str(state_saves)]})
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: client))
+    monkeypatch.setattr(live, "wait_for_stable_observation", lambda *_a, **_k: {})
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    for result in (live.saves(str(project), action, slot=slot),
+                   live.saves(str(project), action, slot=slot, renforge_owned_only=True),
+                   app.tools["renforge_session"](str(project), action, slot=slot, authorize=True)):
+        assert result["ok"] is False and result["code"] == "SAVE_SLOT_INVALID", result
+    assert client.calls == []
+    assert live.saves(str(project), action, slot="quick-1", renforge_owned_only=True)["ok"] is True
+
+
 def test_live_tools_error_cleanly_without_a_running_game(tmp_path) -> None:
     from renforge.tools import live
 

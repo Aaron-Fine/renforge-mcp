@@ -57,6 +57,7 @@ from ..save_isolation import (
     SAVES_DIRNAME,
     select_host_slots,
     selector_error,
+    slot_name_error,
     storage_is_renforge_owned,
 )
 from ..sdk import get_or_install_sdk, require_supported_runtime
@@ -2213,6 +2214,11 @@ def _saves_argument_error(
     if action in {"save", "load"}:
         if not isinstance(slot, str) or not slot.strip():
             return {"ok": False, "error": "slot is required for action '%s'" % action}
+        slot_error = slot_name_error(slot)
+        if slot_error is not None:
+            # Ren'Py joins the slot onto its save folder, so a path would
+            # reach any folder (the player's saves included).
+            return {"ok": False, "code": "SAVE_SLOT_INVALID", "error": slot_error}
         if slots is not None:
             return {"ok": False, "error": "slots is only valid for action 'import'"}
     elif action == "import":

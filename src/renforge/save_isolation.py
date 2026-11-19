@@ -867,6 +867,23 @@ def selector_error(*, slot: Any = None, slots: Any = None, pattern: Any = None) 
     return _slot_pattern_error(pattern)
 
 
+def slot_name_error(slot: str) -> str | None:
+    """Why *slot* cannot name a save slot in the running game's save folder, or None.
+
+    Ren'Py builds a save file's path as ``os.path.join(directory, slot +
+    suffix)``, so a slot that is a path (absolute, with a drive, with either
+    separator, or ``.``/``..``) would read or write a file outside the
+    game's save folder, the player's own saves included. Such a slot is
+    refused on every OS, whatever separators the host uses.
+    """
+    # Both separators on every OS (os.sep and os.altsep are among them), and
+    # a Windows drive such as "C:", which os.path.join honours there.
+    if (any(char in slot for char in ("/", "\\", "\x00")) or slot.strip() in {".", ".."}
+            or PureWindowsPath(slot).drive):
+        return "slot must be a save slot name such as 1-1 or quick-1, not a path"
+    return None
+
+
 def _slot_pattern_error(pattern: Any) -> str | None:
     if pattern is not None and not isinstance(pattern, str):
         return "pattern must be a string"
