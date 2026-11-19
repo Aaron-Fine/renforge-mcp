@@ -86,6 +86,28 @@ def resolves_inside(path: Path, root: Path) -> bool:
         return False
 
 
+def receipt_path(project_root: str | Path, path: str | Path) -> str:
+    """Name ``path`` for a write receipt (``files_touched``, ``relative_path``).
+
+    A file inside the project is named by its project-relative POSIX path; a
+    file outside it, such as one in RenForge's state folder, by its absolute
+    POSIX path. A relative ``path`` is relative to the project root, never to
+    the server's working directory.
+    """
+    root = Path(project_root).expanduser().resolve()
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        resolved = candidate.absolute()
+    try:
+        return resolved.relative_to(root).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
 def read_text_nofollow(path: Path, *, encoding: str = "utf-8", errors: str = "strict") -> str:
     """Read a regular file as text, refusing symlinks.
 

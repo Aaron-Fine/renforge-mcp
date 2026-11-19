@@ -12,7 +12,7 @@ from typing import Any
 
 from .util import ensure_nofollow_directory
 from .state import project_state_dir
-from .util.files import append_nofollow, ensure_private_directory, write_json_atomic
+from .util.files import append_nofollow, ensure_private_directory, receipt_path, write_json_atomic
 
 
 _MAX_ACTIVITY_BYTES = 8192
@@ -225,11 +225,7 @@ def _write_files_sidecar(
     except Exception:
         return None
     _prune_files_sidecars(directory)
-    try:
-        return path.relative_to(project_root).as_posix()
-    except ValueError:
-        # RenForge state lives outside the game folder (see state.py).
-        return path.as_posix()
+    return receipt_path(project_root, path)
 
 
 def log_tool_call(
