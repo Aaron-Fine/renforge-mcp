@@ -223,7 +223,13 @@ def build_wrappers(context):
         return delegated if delegated is not None else live.launch_status(project_path)
 
 
-    def _start_launch(project_path: str, **kwargs: Any) -> dict:
+    def _start_launch(project_path: str, *, require_isolated: bool = False, **kwargs: Any) -> dict:
+        """Start (or join) a launch in the background; ``kwargs`` go to the launch.
+
+        ``require_isolated`` refuses, before anything starts, a launch whose
+        saves or HOME would resolve outside RenForge's own folders: a launch
+        the policy let through on the promise that it is isolated.
+        """
         requested_editor = bool(kwargs.get("editor", True))
         kwargs["editor"] = requested_editor
 
@@ -237,6 +243,12 @@ def build_wrappers(context):
         requirements = live.launch_requirements(
             project_path,
             **{field: kwargs.get(field) for field in ("warp", "savedir", "home", "persistent", "preferences")})
+        if require_isolated and not requirements["isolated"]:
+            message = ("This launch would keep its saves or HOME outside RenForge's own folders (for example, "
+                       "the state folder's saves folder is a link to another folder), so it would not be "
+                       "isolated. Remove the link and launch again.")
+            return {"ok": False, "ready": False, "code": "SESSION_NOT_ISOLATED",
+                    "phase": "validating_session_mode", "message": message, "error": message}
         return live.start_launch(
             project_path,
             _launch,
@@ -492,7 +504,7 @@ def build_wrappers(context):
                 # RENFORGE_ISOLATION=existing would default it to the player's:
                 # the policy classifies this launch as isolated.
                 result = _start_launch(project_path, editor=False, savedir=str(saves), home="temporary",
-                                       start_label=label.strip() if label else None)
+                                       start_label=label.strip() if label else None, require_isolated=True)
                 # Only a game this call starts goes to the label: a reused one
                 # stays where it is, and a refused launch starts nothing.
                 if label and isinstance(result, dict) and result.get("ok") and not result.get("already_running"):

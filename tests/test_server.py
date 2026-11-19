@@ -2293,6 +2293,45 @@ def test_session_launch_keeps_its_own_home_even_when_isolation_defaults_to_exist
     assert captured["editor"] is False
 
 
+def test_session_launch_refuses_a_saves_folder_linked_out_of_the_state_folder(tmp_path, monkeypatch) -> None:
+    """The policy lets a session launch through as isolated, so a planted link must not start it on the player's saves."""
+    import os
+
+    from renforge.save_isolation import host_renpy_root
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    player = host_renpy_root(home=home) / "a-game"
+    player.mkdir(parents=True)
+    state_saves = project_state_dir(project) / "saves"
+    state_saves.parent.mkdir(parents=True)
+    try:
+        os.symlink(player, state_saves, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    started: list = []
+    monkeypatch.setattr(live, "start_launch", lambda *a, **k: started.append(k) or {"ok": True, "ready": True})
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    refused = app.tools["renforge_session"](str(project), "launch")
+
+    assert refused["ok"] is False and refused["code"] == "SESSION_NOT_ISOLATED", refused
+    assert started == []
+
+    # The same launch on the state folder's own saves goes ahead.
+    state_saves.unlink()
+    assert app.tools["renforge_session"](str(project), "launch")["ok"] is True
+    assert len(started) == 1 and started[0]["requirements"]["isolated"] is True
+
+
 @pytest.mark.parametrize(("launched", "says_label"), [
     ({"ok": True, "ready": True, "already_running": False}, True),
     ({"ok": True, "ready": False, "status": "starting"}, True),
