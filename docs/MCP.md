@@ -287,8 +287,9 @@ changed.
 ## Where RenForge keeps its files
 
 RenForge never writes into a game's folder except for the bridge script it
-injects under `game/` while a session runs (removed on stop) and mods written
-on purpose under `game/mods/`. Everything else (activity log, bridge control
+injects under `game/` while a session runs (removed on stop), mods written
+on purpose under `game/mods/`, and the Live Editor exchange folder described
+below. Everything else (activity log, bridge control
 files, captures, scene snapshots, autopilot coverage, packaged mods, editor
 transactions) goes to a per-project state folder, `<state>`:
 
@@ -300,7 +301,11 @@ $RENFORGE_STATE_DIR/projects/<name>-<hash>/       # when set
 
 `<hash>` comes from the project's resolved path, so two copies of a game get
 separate folders. An optional `<project>/.renforge/policy.json` is still read
-from the project, because the project owner writes it.
+from the project, because the project owner writes it. A Live Editor save,
+undo or rollback of a game on another filesystem than `<state>` (a second
+drive) stages its files in `<project>/.renforge/editor-exchange/<transaction>/`
+instead, because the atomic exchange cannot cross filesystems. They are
+removed when the exchange settles; a conflict keeps them as evidence.
 
 ## Toolsets
 
@@ -875,7 +880,7 @@ unsupported, including their screen/layer and geometry when established.
 Handlers with nothing to point at (hidden, or at most one pixel, such as gamepad
 and key listeners) are left out. These regions have
 no inferred action, label, sensitivity, or clickability. Visible unresolved
-candidates set `omitted.unclassified=true`; both progression modes stop with
+candidates set `omitted.unclassified=true`; progression stops with
 `unsupported` and guarded dismiss refuses input. Known engine widgets and
 ordinary decorative displayables do not require custom adapters. Conditional
 custom handlers and story prerequisites remain unknown. A custom region may
