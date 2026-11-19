@@ -37,7 +37,10 @@ from ..sdk import RenpySdk, require_supported_runtime
 from .artifacts import (
     ArtifactOwnershipError,
     allocate_and_materialize,
+    bridge_basename,
+    editor_basename,
     remove_owned_artifacts,
+    session_init_basename,
 )
 from .client import BridgeClient, BridgeConfig, BridgeProtocolError
 from .control import read_bridge_info, write_starting_bridge_info
@@ -926,11 +929,16 @@ def _log_tail(project_root: Path, since_ns: int, lines: int = 8) -> list[str]:
     return [line.rstrip() for line in text.splitlines() if line.strip()][-lines:]
 
 
-def _scripts_compiled_since(project_root: Path, since_ns: int) -> bool:
-    """Whether Ren'Py wrote any .rpyc under game/ since ``since_ns``."""
+def _scripts_compiled_since(project_root: Path, since_ns: int, session_id: str) -> bool:
+    """Whether Ren'Py wrote any of the game's own .rpyc under game/ since ``since_ns``.
+
+    The scripts RenForge injects for ``session_id`` are new on every launch, so
+    Ren'Py always compiles them; they do not count.
+    """
+    own = {basename(session_id) + "c" for basename in (session_init_basename, bridge_basename, editor_basename)}
     for directory, _dirs, files in os.walk(project_root / "game"):
         for name in files:
-            if name.endswith(".rpyc"):
+            if name.endswith(".rpyc") and name not in own:
                 try:
                     if os.stat(os.path.join(directory, name)).st_mtime_ns >= since_ns:
                         return True
@@ -1285,7 +1293,7 @@ def _launch_after_project_lock(
                 game_error = _new_game_error(project.root, error_stamps)
                 game_error_seen = time.monotonic()
                 if game_error is not None:
-                    game_error["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns)
+                    game_error["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns, session_id)
             elif time.monotonic() - game_error_seen >= _GAME_ERROR_GRACE_S:
                 _raise_game_error(game_error)
             if process.poll() is not None:
@@ -1337,7 +1345,7 @@ def _launch_after_project_lock(
                 # parse-error screen; the game cannot be played.
                 parse_report = _new_game_error(project.root, error_stamps)
                 if parse_report is not None and parse_report["file"] == "errors.txt":
-                    parse_report["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns)
+                    parse_report["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns, session_id)
                     _raise_game_error(parse_report)
                 startup_ms = int((time.monotonic() - started) * 1000)
                 phases.append(

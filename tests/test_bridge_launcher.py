@@ -986,6 +986,31 @@ def test_a_launch_that_compiled_scripts_and_stopped_on_an_error_is_retried_once(
     assert excinfo.value.code == "GAME_STARTUP_ERROR" and launches["count"] == 1
 
 
+def test_renforges_own_compiled_scripts_do_not_count_as_changed_game_scripts(monkeypatch, tmp_path: Path) -> None:
+    """Ren'Py compiles the injected per-session scripts on every launch."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    (project_root / "game").mkdir(exist_ok=True)
+    launches = {"count": 0}
+
+    def failing_popen(*_args, **kwargs):
+        launches["count"] += 1
+        session_id = kwargs["env"]["RENFORGE_BRIDGE_SESSION_ID"]
+        for prefix in ("00renforge_session_", "zzrenforge_bridge_"):
+            (project_root / "game" / f"{prefix}{session_id}.rpyc").write_bytes(b"compiled")
+        (project_root / "traceback.txt").write_text("Exception: boom %d\n" % launches["count"], encoding="utf-8")
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", failing_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("renforge.bridge.launcher._GAME_ERROR_GRACE_S", 0.0)
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert excinfo.value.code == "GAME_STARTUP_ERROR"
+    assert launches["count"] == 1
+    assert excinfo.value.details["scripts_compiled"] is False
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the Wayland driver default is Linux-only")
 def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkeypatch, tmp_path: Path) -> None:
     """A transparent presplash needs a shaped window."""
