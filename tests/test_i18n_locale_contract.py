@@ -406,8 +406,13 @@ def test_every_dashboard_error_code_has_a_message() -> None:
     # "unexpected" message instead of naming what was wrong.
     server = (REPO_ROOT / "src" / "renforge" / "ui" / "server.py").read_text(encoding="utf-8")
     codes = set(re.findall(r'code="([a-z_]+)"', server))
-    for template in re.findall(r'code=f"([a-z_]*)\{field\}([a-z_]*)"', server):
-        codes.update(f"{template[0]}{field}{template[1]}" for field in ("display", "audio"))
+    # A templated code takes its field names from the nearest loop above it.
+    loops = list(re.finditer(r'for field, \w+ in \((.*)\):', server))
+    for template in re.finditer(r'code=f"([a-z_]*)\{field\}([a-z_]*)"', server):
+        loop = [found for found in loops if found.start() < template.start()][-1:]
+        fields = re.findall(r'\("([a-z_]+)", ', loop[0].group(1)) if loop else []
+        assert fields, f"no field names found for {template.group(0)}"
+        codes.update(f"{template.group(1)}{field}{template.group(2)}" for field in fields)
     cases = set(re.findall(r'case "([a-z_]+)":', (I18N_DIR / "errors.ts").read_text(encoding="utf-8")))
     english = json.loads((I18N_DIR / "locales" / "en.json").read_text(encoding="utf-8"))["errors"]
     assert sorted(codes - cases) == []

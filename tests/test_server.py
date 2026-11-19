@@ -408,7 +408,7 @@ def test_session_import_goes_where_the_running_game_keeps_its_saves(tmp_path, mo
 
 @pytest.mark.parametrize("policy", ["off", "enforce"])
 def test_session_saves_never_act_on_a_game_using_the_players_saves(tmp_path, monkeypatch, policy) -> None:
-    """renforge_session promises the state folder, never the player's saves (review 1b)."""
+    """renforge_session promises the state folder, never the player's saves."""
     pytest.importorskip("fastmcp", reason="fastmcp not installed")
     from fastmcp import Client
 

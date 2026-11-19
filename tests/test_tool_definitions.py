@@ -418,7 +418,7 @@ def test_catalog_states_exact_runtime_and_filesystem_contracts() -> None:
     assert "preference" in launch.parameters["preferences"].lower()
     assert "only" in launch.parameters["cleanup_on_stop"].lower()
     assert "disposable session directory" in launch.parameters["cleanup_on_stop"].lower()
-    # The fork keeps the launch gate: leaving RenForge's own folders needs authorize.
+    # Leaving RenForge's own folders needs authorize.
     assert "authorize=true" in launch.parameters["authorize"]
     assert "session_id" in launch.description
     assert "isolation" in launch.description.lower()

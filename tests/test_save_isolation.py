@@ -1163,10 +1163,10 @@ def test_import_refuses_a_session_root_swapped_for_a_link_before_the_call(
         os.unlink(isolation.session_root)
 
     assert result["ok"] is False
-    # The fork also counts any game's game/saves as the player's, so this
-    # link is refused before the copy (SAVE_IMPORT_NOT_ISOLATED); the variant
-    # below links to a folder no rule names and reaches the no-follow walk.
-    assert result["code"] in {"SAVE_IMPORT_FAILED", "SAVE_IMPORT_NOT_ISOLATED"}
+    # Any game's game/saves counts as the player's, so this link is refused
+    # before the copy; the variant below links to a folder no rule names and
+    # reaches the no-follow walk.
+    assert result["code"] == "SAVE_IMPORT_NOT_ISOLATED"
     assert (other / "1-1-LT1.save").read_bytes() == b"OTHERGAME-REAL-PROGRESS"
 
 
@@ -1774,8 +1774,8 @@ def test_every_import_failure_carries_an_empty_write_receipt(tmp_path: Path) -> 
     assert "files_touched" not in live.saves(str(tmp_path), "list_user", slot="1-1")
 
 
-# Fork-only rules on top of #125: stricter exposure matching, the running
-# game's save folder name, and one-shot Ren'Py tool runs.
+# Exposure matching, the running game's save folder name, and one-shot
+# Ren'Py tool runs.
 
 
 def test_session_storage_handles_first_initialization_and_reinitialization(monkeypatch, tmp_path):

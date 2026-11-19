@@ -14,11 +14,13 @@ from typing import Any
 import pytest
 
 from renforge.editor import EditorCoordinator, RuntimeProbe
+from renforge.editor.constants import TRANSACTION_DIRNAME
 from renforge.editor.coordinator import expected_measurement_method
 from renforge.editor.exceptions import EditorError
 from renforge.editor.source import peek_statement_kind
 from renforge.project import RenpyProject
 from renforge.sdk import RenpySdk
+from renforge.state import project_state_dir
 
 
 class _Probe(RuntimeProbe):
@@ -739,7 +741,7 @@ def test_commit_refuses_target_outside_write_scope_before_persisting(
     coordinator = EditorCoordinator(project, _make_sdk(tmp_path))
     coordinator.attach_runtime_probe(probe)
     endpoint = coordinator.start()
-    transaction_root = coordinator._transaction_root
+    transaction_root = project_state_dir(project.root) / TRANSACTION_DIRNAME
     baseline = source.read_bytes()
     try:
         with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
@@ -825,7 +827,7 @@ def test_style_backed_commit_refuses_gui_rpy_outside_write_scope(
     coordinator = EditorCoordinator(RenpyProject(root), _make_sdk(tmp_path), attestation_timeout=2.0)
     coordinator.attach_runtime_probe(probe)
     endpoint = coordinator.start()
-    transaction_root = coordinator._transaction_root
+    transaction_root = project_state_dir(root) / TRANSACTION_DIRNAME
     try:
         with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
             auth = _auth(sock, endpoint)
@@ -940,7 +942,7 @@ def test_scope_with_only_gui_rpy_allows_style_backed_commit(
     coordinator = EditorCoordinator(RenpyProject(root), _make_sdk(tmp_path))
     coordinator.attach_runtime_probe(probe)
     endpoint = coordinator.start()
-    transaction_root = coordinator._transaction_root
+    transaction_root = project_state_dir(root) / TRANSACTION_DIRNAME
     try:
         with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
             auth = _auth(sock, endpoint)
@@ -986,7 +988,7 @@ def test_commit_refuses_invalid_write_scope_before_persisting(
     coordinator = EditorCoordinator(project, _make_sdk(tmp_path))
     coordinator.attach_runtime_probe(probe)
     endpoint = coordinator.start()
-    transaction_root = coordinator._transaction_root
+    transaction_root = project_state_dir(project.root) / TRANSACTION_DIRNAME
     baseline = source.read_bytes()
     try:
         with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
@@ -1056,7 +1058,7 @@ def test_undo_commit_refuses_target_outside_write_scope(
     coordinator = EditorCoordinator(RenpyProject(root), _make_sdk(tmp_path), attestation_timeout=2.0)
     coordinator.attach_runtime_probe(probe)
     endpoint = coordinator.start()
-    transaction_root = coordinator._transaction_root
+    transaction_root = project_state_dir(root) / TRANSACTION_DIRNAME
     try:
         with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
             auth = _auth(sock, endpoint)

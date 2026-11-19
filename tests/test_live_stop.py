@@ -852,7 +852,7 @@ def _request_paths(tmp_path: Path, host_home: Path, knobs: dict) -> dict:
 
 
 # Requests whose savedir or HOME only might be the player's: they must not be
-# handed a running game that certainly uses the player's storage (review 1b).
+# handed a running game that certainly uses the player's storage.
 _MIGHT_BE_THE_PLAYERS = [
     ({"savedir": "OTHER_GAME_SAVES"}, ("existing", "existing")),
     ({"savedir": "HOST_TREE_OTHER_CASE"}, ("existing", "existing")),
@@ -1427,7 +1427,7 @@ def test_stop_game_reports_the_close_error_itself(tmp_path: Path) -> None:
     task.session = session
     live._LAUNCHES[key] = task
     try:
-        # It used to surface as UnboundLocalError from the cleanup code.
+        # The close error propagates unchanged, not as an error from the cleanup code.
         with pytest.raises(OSError, match="bridge socket gone"):
             live.stop_game(str(project))
     finally:
@@ -1540,9 +1540,9 @@ def test_an_explicit_savedir_on_a_warp_relaunch_is_honoured(tmp_path: Path, monk
 
 
 def test_a_warp_relaunch_isolates_storage_that_only_might_be_the_players(tmp_path: Path, monkeypatch) -> None:
-    # Review 1b: the replaced game's savedir is another game's game/saves.
-    # Only storage that certainly is the player's falls back to the server
-    # default; the rest stays isolated, as upstream does.
+    # The replaced game's savedir is another game's game/saves. Only storage
+    # that certainly is the player's falls back to the server default; the
+    # rest stays isolated.
     knobs = _relaunch_knobs(
         tmp_path,
         monkeypatch,

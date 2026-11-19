@@ -147,8 +147,8 @@ def test_enforce_denies_open_world_and_destructive_without_authorize(monkeypatch
     assert isolated_launch.risk == RISK_MUTATING
     assert exposed_launch.allowed is False
     assert exposed_launch.risk == RISK_DESTRUCTIVE
-    # Isolation is opt-in (0.7.6), so a launch with no knobs uses the player's
-    # saves; the fork's gate makes that destructive too.
+    # Isolation is opt-in, so a launch with no knobs uses the player's saves,
+    # which makes it destructive too.
     assert default_launch.allowed is False
     assert default_launch.risk == RISK_DESTRUCTIVE
 
@@ -415,7 +415,7 @@ def test_a_launch_into_a_folder_outside_renforge_and_temp_needs_authorize(tmp_pa
         assert evaluate("renforge_launch", {**params, "authorize": True}).allowed is True
     inside = state / "projects" / "demo-0123" / "saves"
     for value in (str(inside), f"  {inside}  "):
-        # An explicit savedir keeps the host HOME unless home is set (0.7.6).
+        # An explicit savedir keeps the host HOME unless home is set.
         decision = evaluate("renforge_launch", {"savedir": value, "home": "temporary"})
         assert decision.risk == RISK_MUTATING, value
         assert decision.allowed is True
