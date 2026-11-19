@@ -657,16 +657,6 @@ def test_a_launch_that_arrives_while_another_starts_must_match_it(tmp_path: Path
         live._LAUNCHES.pop(live._key(project), None)
 
 
-class _InfoClient(_StateClient):
-    def __init__(self, info: dict | None) -> None:
-        self.info = info
-
-    def session_info(self) -> dict:
-        if self.info is None:
-            raise live.BridgeError("bridge error on 'session_info': unknown command")
-        return self.info
-
-
 @pytest.mark.parametrize("info, toolsets, code", [
     # An older bridge cannot say: assume the worst.
     (None, "", "SESSION_ISOLATION_MISMATCH"),
@@ -1043,6 +1033,24 @@ def test_launch_status_preserves_editor_for_owned_session(tmp_path: Path) -> Non
     assert result["isolated"] is True
     assert result["eval_enabled"] is True
     live._SESSIONS.pop(key, None)
+
+
+def test_launch_status_of_an_owned_session_without_an_isolation_record_assumes_the_worst(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    session = _OwnedRunningSession(editor=True)
+    session.isolation = None
+    live._SESSIONS[key] = session
+    try:
+        result = live.launch_status(str(project))
+        refused = live.launch_game(str(project), editor=True, savedir="temporary")
+    finally:
+        live._SESSIONS.pop(key, None)
+
+    assert result["ready"] is True
+    assert result["isolated"] is False
+    assert refused["code"] == "SESSION_ISOLATION_MISMATCH"
+    assert refused["existing_exposes_user_saves"] is True
 
 
 def test_warp_refuses_to_stop_a_live_external_bridge(tmp_path: Path, monkeypatch) -> None:

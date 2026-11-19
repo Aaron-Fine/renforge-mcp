@@ -548,6 +548,8 @@ def test_host_saves_stay_in_the_renpy_root_whatever_the_game_declares(
     (host_save_root / "OtherGame" / "1-1-LT1.save").write_bytes(b"OTHER")
 
     assert host_save_directories(project) == []
+    # The running game's config.save_directory (renforge_session list/import) is held to the same rule.
+    assert host_save_directories(project, save_name=save_directory) == []
     assert list_host_slots(project)["slots"] == []
 
 
