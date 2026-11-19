@@ -2418,28 +2418,38 @@ init python:
             return None
         return names[0] if len(names) == 1 else None
 
-    def _renforge_custom_action_value(widget):
-        """The click action a game's own displayable keeps, or None.
+    def _renforge_custom_actions(widget):
+        """``(value, actions)`` from a game's own displayable's click attribute, or None.
 
         The attribute (see ``_renforge_custom_action_attr``) counts only when
-        it holds one or more actions: Ren'Py Actions when ``renpy.ui.Action``
-        exists, as control discovery requires, else callables. A counter or
-        flag such as ``click_count = 0`` is not an action, so the caller
-        clicks the pointer instead of running it.
+        everything it holds is an action: a Ren'Py Action when
+        ``renpy.ui.Action`` exists, else a callable. A counter or flag such
+        as ``click_count = 0`` is not an action, so this returns None. An
+        attribute holding nothing (``action = None``) gives ``(value, [])``:
+        control discovery lists that widget as a disabled button, as Ren'Py
+        does a button with no action, while a click has nothing to run.
         """
         attr = _renforge_custom_action_attr(widget)
         if attr is None:
             return None
         value = getattr(widget, attr, None)
         actions = _renforge_action_list(value)
-        if not actions:
-            return None
         action_type = getattr(getattr(renpy, "ui", None), "Action", None)
         if isinstance(action_type, type):
             is_action = lambda item: isinstance(item, action_type)
         else:
             is_action = callable
-        return value if all(is_action(item) for item in actions) else None
+        return (value, actions) if all(is_action(item) for item in actions) else None
+
+    def _renforge_custom_action_value(widget):
+        """The click action a game's own displayable keeps, or None.
+
+        Only an attribute that holds one or more actions counts (see
+        ``_renforge_custom_actions``); otherwise the caller clicks the pointer
+        instead of running it.
+        """
+        found = _renforge_custom_actions(widget)
+        return found[0] if found is not None and found[1] else None
 
     def _renforge_focus_action_value(focus):
         # Button.per_interact copies a sensitive action onto clicked, and
@@ -2620,10 +2630,13 @@ init python:
         if element.get("covered") or element.get("clickable") is False:
             return {"ok": False, "error": "UI element has no eligible click", "element": element}
         if element.get("semantic") and "click" in element.get("operations", ()):
-            raw = _renforge_observe_raw(False, include_readout=False)
-            refusal = _renforge_runtime.interaction.guard_identity(raw, raw["interaction"])
-            if refusal:
-                return {"ok": False, "error": refusal, "observation": raw}
+            # Running the action needs a settled frame, as act does. Only a
+            # refusal pays for a second scene walk: its reply carries the
+            # observation.
+            stable, _reason = _renforge_observe_stability()
+            if stable is not True:
+                return {"ok": False, "error": "unstable",
+                        "observation": _renforge_observe_raw(False, include_readout=False)}
             result = {"ok": True, "id": element["id"], "text": element.get("text"),
                       "screen": element.get("screen"), "bounds": element.get("bounds"), "via": "action"}
             try:
@@ -5029,22 +5042,20 @@ init python:
 
         Such a widget keeps them in ``action`` (or one ``*click*`` attribute,
         such as ``click_action``) and follows the engine's button convention:
-        running the action is the click.
+        running the action is the click. ``_renforge_custom_actions`` decides
+        what counts, as it does for the click; discovery also needs
+        ``renpy.ui.Action``, so a bare callable is never listed.
         """
-        action_type = getattr(getattr(renpy, "ui", None), "Action", None)
-        if not isinstance(action_type, type):
+        if not isinstance(getattr(getattr(renpy, "ui", None), "Action", None), type):
             return
         sensitivity = getattr(getattr(renpy.display, "behavior", None), "is_sensitive", None)
         for widget, layer, name, screen, _parents in inventory["nodes"]:
             if id(widget) in seen_widgets or type(widget).__module__.startswith("renpy."):
                 continue
-            attr = _renforge_custom_action_attr(widget)
-            if attr is None:
+            found = _renforge_custom_actions(widget)
+            if found is None:
                 continue
-            value = getattr(widget, attr, None)
-            actions = _renforge_action_list(value)
-            if not all(isinstance(item, action_type) for item in actions):
-                continue
+            value, actions = found
             geometry = _renforge_widget_geometry(widget, inventory)
             if geometry["visible"] is not True:
                 continue
@@ -5144,7 +5155,7 @@ init python:
 
 
     def _renforge_observe_focus_pairs(inventory=None):
-        """Collect current controls once; legacy listings are views of these pairs.
+        """Collect current controls once; observe and the UI-element tools both read these pairs.
 
         Returns ``(pairs, truncated)``: ``(focus, record)`` for the focus list,
         inputs, bars/viewports/drags, unfocused Buttons, a game's own action
@@ -5336,7 +5347,6 @@ init python:
                                available=root is not None, truncated=False)
         if root is None:
             return result
-        math = _renforge_runtime.interaction.math
 
         def point(matrix, x, y):
             a, b, c, d, tx, ty = matrix
@@ -5410,7 +5420,7 @@ init python:
             try:
                 w, h = float(render.width), float(render.height)
                 corners = rectangle(matrix, w, h)
-                if not all(math.isfinite(v) for p in corners for v in p):
+                if not all(_renforge_math.isfinite(v) for p in corners for v in p):
                     raise ValueError("non-finite geometry")
                 polygon = corners
                 for index, edge in enumerate(clip):
@@ -5418,10 +5428,10 @@ init python:
                 if not clip or getattr(render, "alpha", 1) <= 0 or w <= 0 or h <= 0:
                     polygon = ()
                 if polygon and not reason:
-                    x = math.floor(min(p[0] for p in polygon))
-                    y = math.floor(min(p[1] for p in polygon))
-                    right = math.ceil(max(p[0] for p in polygon))
-                    bottom = math.ceil(max(p[1] for p in polygon))
+                    x = _renforge_math.floor(min(p[0] for p in polygon))
+                    y = _renforge_math.floor(min(p[1] for p in polygon))
+                    right = _renforge_math.ceil(max(p[0] for p in polygon))
+                    bottom = _renforge_math.ceil(max(p[1] for p in polygon))
                     bounds = builtins.dict(x=x, y=y, width=right-x, height=bottom-y)
                     visible = bounds["width"] > 0 and bounds["height"] > 0
                 else:
@@ -7106,13 +7116,19 @@ init python:
 
 
     def _renforge_h_dismiss_if(payload):
+        """Queue ``dismiss`` only when ``guard_dismiss`` accepts a fresh frame.
+
+        ``past_optional_controls`` and ``allow_pause`` opt in only when they are
+        literally true; ``allow_pause`` lets a line held by a pending pause be
+        clicked once (the stuck-pause nudge)."""
         payload = payload or {}
         raw = _renforge_observe_raw(False, include_readout=False)
         snapshot = _renforge_runtime.interaction.classify(raw)
         refusal = _renforge_runtime.interaction.guard_dismiss(
             snapshot, payload.get("interaction"), session_id=payload.get("session_id"),
             observation_id=payload.get("observation_id"),
-            past_optional_controls=payload.get("past_optional_controls") is True)
+            past_optional_controls=payload.get("past_optional_controls") is True,
+            allow_pause=payload.get("allow_pause") is True)
         if refusal:
             return {"ok": False, "error": refusal, "interaction": raw["interaction"]}
         renpy.exports.queue_event("dismiss")
@@ -7380,18 +7396,14 @@ init python:
 
 
     def _renforge_kinetic_kind(node):
-        if node is None:
-            return None
-        try:
-            name = node.__class__.__name__
-        except Exception:
-            return None
-        if name == "Bar":
-            return "bar"
-        if name == "Viewport":
-            return "viewport"
-        if name == "Drag":
-            return "drag"
+        """``"bar"``, ``"viewport"`` or ``"drag"`` for those engine widgets, else None.
+
+        Subclasses (VPGrid, a game's own Bar or Drag) count as their base
+        class, as ``_renforge_is_engine_widget`` decides elsewhere in observe.
+        """
+        for name, kind in (("Bar", "bar"), ("Viewport", "viewport"), ("Drag", "drag")):
+            if _renforge_is_engine_widget(node, name):
+                return kind
         return None
 
 
