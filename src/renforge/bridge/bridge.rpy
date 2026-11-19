@@ -37,8 +37,10 @@ init python:
     import sys
     import threading
     # `time` is a store field. Games use that name for their own clock, which
-    # replaces the module before a label callback runs.
+    # replaces the module before a label callback runs. `math` is aliased
+    # for the same reason.
     import time as _renforge_time
+    import math as _renforge_math
     import types
 
     try:
@@ -705,7 +707,23 @@ init python:
 
     _RENFORGE_ACT_KEY_LETTERS = "abcdefghijklmnopqrstuvwxyz"
     _RENFORGE_ACT_KEY_ATTRS = _renforge_act_key_attrs()
-    _RENFORGE_ACT_KEY_LIST = "a-z, up, down, left, right, escape, return, space, tab"
+
+    def _renforge_act_key_list():
+        """The act keys an error lists, built from the key table so they never drift.
+
+        Letters collapse to "a-z"; an alias of a listed key ("esc", "enter")
+        is left out.
+        """
+        names = ["a-z"]
+        listed = set()
+        for name, attr in _RENFORGE_ACT_KEY_ATTRS.items():
+            if (len(name) == 1 and name in _RENFORGE_ACT_KEY_LETTERS) or attr in listed:
+                continue
+            listed.add(attr)
+            names.append(name)
+        return ", ".join(names)
+
+    _RENFORGE_ACT_KEY_LIST = _renforge_act_key_list()
 
     def _renforge_focused_input():
         """Return the focused Ren'Py Input, or an explicit diagnostic."""
@@ -1759,16 +1777,6 @@ init python:
             return False
         return left <= x < left + width and top <= y < top + height
 
-    def _renforge_center_point(element):
-        center = element.get("center") or {}
-        try:
-            return int(center.get("x")), int(center.get("y")), True
-        except (TypeError, ValueError, OverflowError):
-            return 0, 0, False
-
-    def _renforge_focus_screen(focus):
-        return getattr(focus, "screen", None)
-
     def _renforge_engine_modal_blocked(owner, inventory):
         """Whether a modal screen hides ``owner``, by Ren'Py's own rule.
 
@@ -1950,7 +1958,7 @@ init python:
             if element.get("semantic"):
                 # Semantic operations bypass the pointer, so a probe cannot
                 # tell whether a modal screen above blocks them.
-                owner = widget if widget is not None else _renforge_focus_screen(focus)
+                owner = widget if widget is not None else getattr(focus, "screen", None)
                 blocked = (_renforge_engine_modal_blocked(owner, inventory)
                            if inventory is not None and owner is not None else None)
                 element["covered"] = bool(blocked)
@@ -2926,11 +2934,10 @@ init python:
                     points = [(a*x+c*y+tx, b*x+d*y+ty) for x, y in
                               ((left, top), (left+painted_width, top),
                                (left+painted_width, top+painted_height), (left, top+painted_height))]
-                    math = _renforge_runtime.interaction.math
-                    x = max(bounds["x"], math.floor(min(p[0] for p in points)))
-                    y = max(bounds["y"], math.floor(min(p[1] for p in points)))
-                    right = min(bounds["x"]+bounds["width"], math.ceil(max(p[0] for p in points)))
-                    bottom = min(bounds["y"]+bounds["height"], math.ceil(max(p[1] for p in points)))
+                    x = max(bounds["x"], _renforge_math.floor(min(p[0] for p in points)))
+                    y = max(bounds["y"], _renforge_math.floor(min(p[1] for p in points)))
+                    right = min(bounds["x"]+bounds["width"], _renforge_math.ceil(max(p[0] for p in points)))
+                    bottom = min(bounds["y"]+bounds["height"], _renforge_math.ceil(max(p[1] for p in points)))
                     result["painted_bounds"] = {"x": x, "y": y, "width": max(0, right-x), "height": max(0, bottom-y)}
                     result["painted_bounds_available"] = True
                     result["painted_bounds_source"] = "completed-render-alpha"
@@ -3019,7 +3026,7 @@ init python:
             if isinstance(raw_x, bool) or isinstance(raw_y, bool):
                 raise ValueError
             x, y = float(raw_x), float(raw_y)
-            if not _renforge_runtime.interaction.math.isfinite(x) or not _renforge_runtime.interaction.math.isfinite(y):
+            if not _renforge_math.isfinite(x) or not _renforge_math.isfinite(y):
                 raise ValueError
         except (TypeError, ValueError, OverflowError):
             return {"ok": False, "error": "click_at requires numeric x and y"}
