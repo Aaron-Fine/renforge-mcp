@@ -1054,9 +1054,10 @@ def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkey
 
     # Ren'Py 8.4's pygame_sdl2 says "Invalid window".
     from renforge.bridge.launcher import _shaped_presplash_failed
-    older = LaunchError("DISPLAY_START_FAILED", "exited", phase="starting_renpy", details={"stderr": (
-        '  File "renpy/display/presplash.py", line 131, in start\n'
-        "    window = pygame_sdl2.display.Window(\npygame_sdl2.error.error: Invalid window\n")})
+    older = LaunchError("DISPLAY_START_FAILED", "exited", phase="starting_renpy", details={
+        "video_driver": "wayland,x11", "stderr": (
+            '  File "renpy/display/presplash.py", line 131, in start\n'
+            "    window = pygame_sdl2.display.Window(\npygame_sdl2.error.error: Invalid window\n")})
     assert _shaped_presplash_failed(older, None) is True
 
     # A driver the user chose is theirs: no retry.
@@ -1064,6 +1065,71 @@ def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkey
     with pytest.raises(LaunchError):
         launch_with_bridge(sdk, project, startup_timeout=30.0, extra_env={"SDL_VIDEODRIVER": "wayland,x11"})
     assert drivers == ["wayland,x11"]
+
+
+def _presplash_failure_process() -> "_FakeProcess":
+    class _Stream:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def read(self, _size=-1):
+            payload, self._payload = self._payload, b""
+            return payload
+
+    process = _FakeProcess()
+    process.returncode = 1
+    process.stdout = _Stream(b"")
+    process.stderr = _Stream(
+        b'  File "renpy/display/presplash.py", line 131, in start\n'
+        b"    window = pygame_sdl2.display.Window(\npygame_sdl2.error.error: Invalid window\n")
+    return process
+
+
+def test_a_presplash_failure_without_the_wayland_driver_is_not_relaunched(monkeypatch, tmp_path: Path) -> None:
+    """Only a launch that used SDL's Wayland driver can be helped by X11."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("SDL_VIDEODRIVER", raising=False)
+    project, sdk, _project_root = _make_project(tmp_path)
+    drivers = []
+
+    def fake_popen(*_args, **kwargs):
+        drivers.append(kwargs["env"].get("SDL_VIDEODRIVER"))
+        return _presplash_failure_process()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert drivers == [None]
+    assert "presplash" in excinfo.value.details["stderr"]
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the Wayland driver default is Linux-only")
+def test_a_failed_relaunch_keeps_the_first_launchs_error(monkeypatch, tmp_path: Path) -> None:
+    """The first error names the real cause; the relaunch's may not."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.delenv("SDL_VIDEODRIVER", raising=False)
+    project, sdk, _project_root = _make_project(tmp_path)
+    drivers = []
+
+    def fake_popen(*_args, **kwargs):
+        drivers.append(kwargs["env"].get("SDL_VIDEODRIVER"))
+        if len(drivers) == 1:
+            return _presplash_failure_process()
+        process = _FakeProcess()
+        process.returncode = 1
+        return process
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert drivers == ["wayland,x11", "x11"]
+    first = excinfo.value.details["first_attempt"]
+    assert first["code"] in {"DISPLAY_START_FAILED", "RENPY_PROCESS_EXITED"}
+    assert "presplash" in first["details"]["stderr"]
 
 
 def test_a_launch_whose_scripts_do_not_parse_fails_even_with_the_bridge_up(monkeypatch, tmp_path: Path) -> None:

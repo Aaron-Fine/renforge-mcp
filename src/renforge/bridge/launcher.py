@@ -1319,7 +1319,8 @@ def _launch_after_project_lock(
                     phase="starting_renpy",
                     suggested_fix=suggested,
                     details={"stdout": out[-4000:], "stderr": err[-4000:], "returncode": process.returncode,
-                             "log_tail": _log_tail(project.root, spawned_ns)},
+                             "log_tail": _log_tail(project.root, spawned_ns),
+                             **({"video_driver": env["SDL_VIDEODRIVER"]} if env.get("SDL_VIDEODRIVER") else {})},
                 )
             try:
                 info = read_bridge_info(
@@ -1439,6 +1440,9 @@ def launch_with_bridge(sdk: RenpySdk, project: RenpyProject, **options: Any) -> 
     - A presplash with transparent corners opens a shaped window, which SDL's
       Wayland driver cannot create, so the game exits at once. X11 (XWayland)
       can.
+
+    When the second launch fails too, its error carries the first one in
+    ``details.first_attempt``.
     """
     try:
         return _launch_with_bridge_once(sdk, project, **options)
@@ -1452,16 +1456,23 @@ def launch_with_bridge(sdk: RenpySdk, project: RenpyProject, **options: Any) -> 
         else:
             raise
         first = exc
-    session = _launch_with_bridge_once(sdk, project, **options)
+    try:
+        session = _launch_with_bridge_once(sdk, project, **options)
+    except LaunchError as second:
+        second.details = {**second.details, "first_attempt": first.to_dict()}
+        raise
     session.startup_warning = f"{reason}: {first.message}"
     return session
 
 
 def _shaped_presplash_failed(exc: LaunchError, extra_env: dict[str, str] | None) -> bool:
+    """Whether a launch that used SDL's Wayland driver could not open its presplash window."""
     if exc.code not in ("DISPLAY_START_FAILED", "RENPY_PROCESS_EXITED"):
         return False
     if (extra_env or {}).get("SDL_VIDEODRIVER") or os.environ.get("SDL_VIDEODRIVER"):
         return False  # the user chose the driver
+    if not str((exc.details or {}).get("video_driver") or "").startswith("wayland"):
+        return False  # X11 is what the launch already used, or does not exist here
     stderr = str((exc.details or {}).get("stderr") or "")
     # Ren'Py 8.5 bundles its own pygame, whose error carries no message.
     return "presplash" in stderr and "Window" in stderr and (
