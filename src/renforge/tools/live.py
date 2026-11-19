@@ -2341,12 +2341,47 @@ def saves(
     return result
 
 
+def session_saves_dir(project_path: str | Path) -> Path:
+    """The folder ``renforge_session`` keeps its saves in (not created): the
+    project's state folder, so they survive relaunches."""
+    return project_state_dir(project_path) / "saves"
+
+
+def running_game_savedir(project_path: str | Path) -> str | None:
+    """The save folder the project's running game reports, or ``None``.
+
+    ``None`` when no game answers or its bridge cannot say (it predates
+    ``session_info``, or is busy).
+    """
+    try:
+        info = _client(project_path).session_info()
+    except Exception:
+        return None
+    savedir = info.get("savedir") if isinstance(info, dict) else None
+    return savedir if isinstance(savedir, str) and savedir else None
+
+
+def import_into_owned_session(project_path: str | Path, *, slot: str, save_name: str | None = None) -> dict:
+    """Copy one of the player's slots into the save folder of the game this process runs.
+
+    Only a game launched with ``savedir='temporary'`` takes it
+    (``SAVE_IMPORT_NOT_ISOLATED`` otherwise; ``NO_ISOLATED_SESSION`` when this
+    process runs no game). ``save_name`` is the game's ``config.save_directory``
+    when its scripts cannot be read.
+    """
+    project = RenpyProject(Path(project_path))
+    result = _import_into_owned_session(project.root, slot=slot, slots=None, pattern=None, save_name=save_name)
+    result.setdefault("files_touched", [])
+    return result
+
+
 def _import_into_owned_session(
     project_root: Path,
     *,
     slot: str | None,
     slots: list[str] | None,
     pattern: str | None,
+    save_name: str | None = None,
 ) -> dict:
     session = _owned_session(project_root)
     destination = getattr(session, "temporary_savedir", None) if session is not None else None
@@ -2377,7 +2412,7 @@ def _import_into_owned_session(
     destination = root.parent.resolve() / root.name / SAVES_DIRNAME
     # Listing reads the game's own folders, which may be slow or hostile, so
     # it runs before the session is held open: only the copy delays a stop.
-    selection = select_host_slots(project_root, slot=slot, slots=slots, pattern=pattern)
+    selection = select_host_slots(project_root, slot=slot, slots=slots, pattern=pattern, save_name=save_name)
     if not selection.get("ok"):
         return selection
     # A stop waits for the copy, and a copy never starts after a stop.

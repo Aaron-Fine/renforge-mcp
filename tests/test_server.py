@@ -355,6 +355,57 @@ class _SessionSavesClient:
         return {"ok": True, "slot": slot}
 
 
+def test_session_import_goes_where_the_running_game_keeps_its_saves(tmp_path, monkeypatch) -> None:
+    """A load reads the running game's own save folder, so an import must land there."""
+    import contextlib
+    import tempfile
+    from types import SimpleNamespace
+
+    from renforge.save_isolation import host_renpy_root
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    player = host_renpy_root(home=home) / "a-game"
+    player.mkdir(parents=True)
+    (player / "1-1-LT1.save").write_bytes(b"PLAYER")
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    session_root = tmp_path / "renforge-session-x"
+    session_saves = session_root / "saves"
+    session_saves.mkdir(parents=True)
+    client = _SessionSavesClient({"eval_enabled": True, "savedir": str(session_saves),
+                                  "home": str(session_root / "home"), "save_locations": [str(session_saves)]})
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: client))
+    app = _ToolRegistry()
+    _register_tools(app)
+    session_tool = app.tools["renforge_session"]
+
+    # A game this server did not start: its folder is not one it may write into.
+    refused = session_tool(str(project), "import", slot="1-1")
+    assert refused["ok"] is False and refused["code"] == "SESSION_SAVES_ELSEWHERE"
+    assert not (project_state_dir(project) / "saves").exists()
+
+    class _OwnedTemporary:
+        temporary_savedir = session_saves
+        isolation = SimpleNamespace(savedir_mode="temporary", session_root=session_root)
+
+        @contextlib.contextmanager
+        def holding_open(self):
+            yield True
+
+    monkeypatch.setitem(live._SESSIONS, live._key(project), _OwnedTemporary())
+    imported = session_tool(str(project), "import", slot="1-1")
+    assert imported["ok"] is True and imported["slot"] == "1-1" and imported["replaced"] is False
+    assert (session_saves / "1-1-LT1.save").read_bytes() == b"PLAYER"
+    assert not (project_state_dir(project) / "saves").exists()
+    assert session_tool(str(project), "import", slot="1-1")["replaced"] is True
+
+
 @pytest.mark.parametrize("policy", ["off", "enforce"])
 def test_session_saves_never_act_on_a_game_using_the_players_saves(tmp_path, monkeypatch, policy) -> None:
     """renforge_session promises the state folder, never the player's saves (review 1b)."""
