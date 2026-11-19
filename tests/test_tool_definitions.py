@@ -380,6 +380,11 @@ def test_risky_runtime_annotation_matrix_is_conservative() -> None:
         "renforge_click_at",
         "renforge_position_element",
         "renforge_set_var",
+        # Play-loop and mod tools: annotate the worst action (a mod write is
+        # code the game runs; session launch starts the game's process).
+        "renforge_act",
+        "renforge_session",
+        "renforge_mod",
     }
     for name in arbitrary_python_tools | arbitrary_game_action_tools:
         annotations = TOOL_DEFINITIONS[name].annotations
@@ -657,3 +662,17 @@ def test_validate_tool_documents_the_clean_shadow_contract() -> None:
     assert "game-relative" in definition.parameters["staged"].lower()
     assert "shadow_path" in definition.parameters["keep_shadow"]
     assert definition.parameter_schemas["timeout"] == {"minimum": 0, "maximum": 600}
+
+
+def test_action_enums_match_the_policy_tables() -> None:
+    # An action missing from its policy table is MALFORMED and refused only
+    # under enforce, which tests with the policy off would never notice.
+    from renforge import policy
+    from renforge.tool_registration.lifecycle import SESSION_ACTIONS
+    from renforge.tools.mods import ACTIONS as MOD_TOOL_ACTIONS
+
+    for name, table in policy._ACTION_TABLES.items():
+        enum = TOOL_DEFINITIONS[name].parameter_schemas["action"]["enum"]
+        assert sorted(enum) == sorted(table), name
+    assert sorted(MOD_TOOL_ACTIONS) == sorted(policy.MOD_ACTIONS)
+    assert sorted(SESSION_ACTIONS) == sorted(policy.SESSION_ACTIONS)
