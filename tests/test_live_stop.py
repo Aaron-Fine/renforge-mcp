@@ -1652,3 +1652,13 @@ def test_a_launch_with_a_start_label_refuses_to_take_over_an_external_bridge(tmp
 
     assert result["ok"] is False
     assert result["code"] == "BRIDGE_PROJECT_LOCKED"
+
+
+@pytest.mark.parametrize("selector", ["banana", "8.x"])
+def test_a_malformed_version_selector_is_invalid_not_unsupported(tmp_path, monkeypatch, selector):
+    project = _make_project(tmp_path)
+    monkeypatch.setattr(live, "get_or_install_sdk", lambda *args, **kwargs: pytest.fail("must not resolve/download SDK"))
+    result = live.launch_game(str(project), version=selector)
+    assert result["ok"] is False
+    assert result["code"] == "INVALID_RENPY_VERSION"
+    assert result["phase"] == "checking_runtime_compatibility"

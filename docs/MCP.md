@@ -146,12 +146,18 @@ download, bridge injection, or process launch. If either is below 8.0, launch
 returns `code="UNSUPPORTED_RENPY_VERSION"`,
 `phase="checking_runtime_compatibility"`, and details containing the detected
 version, selected version, minimum version, and incompatibility source. The agent
-should stop for that game. Selecting a newer SDK does not bypass a legacy game's
+should stop for that game. A `version` that is neither `stable` nor a
+semantic version such as `8.3.7` returns `code="INVALID_RENPY_VERSION"` in the
+same phase. Selecting a newer SDK does not bypass a legacy game's
 engine requirement. A 7.5/8.0 build that lists both engines counts as 8.x
 only when it ships a Python 3 runtime (`lib/py3-*`); with only `lib/py2-*` its
 own launcher runs the Python 2 engine its scripts are written for, so it is
-refused. Projects without bundled engine metadata use the normal
-configured stable SDK, which must also be 8.0 or newer. The same restriction
+refused. With `version="stable"` (the default) the SDK follows the game's own
+engine: a `renpy_version` pin in the project's `renforge.json`
+(`{"renpy_version": "8.3.7"}`, a file Ren'Py never reads, for source
+projects), else the shipped engine's version, else the
+`game/script_version.txt` that Ren'Py writes into builds. Projects with none
+of these use the normal configured stable SDK, which must also be 8.0 or newer. The same restriction
 applies to autopilot and the low-level bridge launcher.
 
 ## Save isolation
