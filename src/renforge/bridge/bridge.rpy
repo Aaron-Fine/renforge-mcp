@@ -2418,28 +2418,38 @@ init python:
             return None
         return names[0] if len(names) == 1 else None
 
-    def _renforge_custom_action_value(widget):
-        """The click action a game's own displayable keeps, or None.
+    def _renforge_custom_actions(widget):
+        """``(value, actions)`` from a game's own displayable's click attribute, or None.
 
         The attribute (see ``_renforge_custom_action_attr``) counts only when
-        it holds one or more actions: Ren'Py Actions when ``renpy.ui.Action``
-        exists, as control discovery requires, else callables. A counter or
-        flag such as ``click_count = 0`` is not an action, so the caller
-        clicks the pointer instead of running it.
+        everything it holds is an action: a Ren'Py Action when
+        ``renpy.ui.Action`` exists, else a callable. A counter or flag such
+        as ``click_count = 0`` is not an action, so this returns None. An
+        attribute holding nothing (``action = None``) gives ``(value, [])``:
+        control discovery lists that widget as a disabled button, as Ren'Py
+        does a button with no action, while a click has nothing to run.
         """
         attr = _renforge_custom_action_attr(widget)
         if attr is None:
             return None
         value = getattr(widget, attr, None)
         actions = _renforge_action_list(value)
-        if not actions:
-            return None
         action_type = getattr(getattr(renpy, "ui", None), "Action", None)
         if isinstance(action_type, type):
             is_action = lambda item: isinstance(item, action_type)
         else:
             is_action = callable
-        return value if all(is_action(item) for item in actions) else None
+        return (value, actions) if all(is_action(item) for item in actions) else None
+
+    def _renforge_custom_action_value(widget):
+        """The click action a game's own displayable keeps, or None.
+
+        Only an attribute that holds one or more actions counts (see
+        ``_renforge_custom_actions``); otherwise the caller clicks the pointer
+        instead of running it.
+        """
+        found = _renforge_custom_actions(widget)
+        return found[0] if found is not None and found[1] else None
 
     def _renforge_focus_action_value(focus):
         # Button.per_interact copies a sensitive action onto clicked, and
@@ -5029,22 +5039,20 @@ init python:
 
         Such a widget keeps them in ``action`` (or one ``*click*`` attribute,
         such as ``click_action``) and follows the engine's button convention:
-        running the action is the click.
+        running the action is the click. ``_renforge_custom_actions`` decides
+        what counts, as it does for the click; discovery also needs
+        ``renpy.ui.Action``, so a bare callable is never listed.
         """
-        action_type = getattr(getattr(renpy, "ui", None), "Action", None)
-        if not isinstance(action_type, type):
+        if not isinstance(getattr(getattr(renpy, "ui", None), "Action", None), type):
             return
         sensitivity = getattr(getattr(renpy.display, "behavior", None), "is_sensitive", None)
         for widget, layer, name, screen, _parents in inventory["nodes"]:
             if id(widget) in seen_widgets or type(widget).__module__.startswith("renpy."):
                 continue
-            attr = _renforge_custom_action_attr(widget)
-            if attr is None:
+            found = _renforge_custom_actions(widget)
+            if found is None:
                 continue
-            value = getattr(widget, attr, None)
-            actions = _renforge_action_list(value)
-            if not all(isinstance(item, action_type) for item in actions):
-                continue
+            value, actions = found
             geometry = _renforge_widget_geometry(widget, inventory)
             if geometry["visible"] is not True:
                 continue

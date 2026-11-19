@@ -64,3 +64,62 @@ def test_dismiss_if_pause_opt_in_keeps_every_other_check(running_bridge, monkeyp
     reply = running_bridge.client.dismiss_if(interaction=raw["interaction"], allow_pause=True)
     assert reply.get("ok") is False and reply.get("error") == error, reply
     assert running_bridge.renpy._queued_events == []
+
+
+# --- custom click attributes: one rule for discovery and the click ------------
+
+
+def _custom_widget_scene(running_bridge, widgets):
+    """Draw ``widgets`` side by side on one screen, with ``renpy.ui.Action`` defined."""
+    from test_bridge_runtime import _arm_stable_interaction, _completed_render
+
+    renpy = running_bridge.renpy
+
+    class ScreenDisplayable:
+        screen_name = ("hotspots", None)
+        layer = "screens"
+        modal = False
+        hiding = False
+        widgets = {}
+        scope = {}
+
+    screen = ScreenDisplayable()
+    screen.children = list(widgets)
+    renpy.display.behavior.is_sensitive = lambda action: True
+    _arm_stable_interaction(running_bridge, generation=9)
+    renpy.game.context = lambda: types.SimpleNamespace(interacting=True,
+        scene_lists=types.SimpleNamespace(layers={"screens": [types.SimpleNamespace(displayable=screen)]}))
+    renpy.config.screen_width, renpy.config.screen_height = 800, 600
+    renpy.display.render = types.SimpleNamespace(screen_render=_completed_render(800, 600, [screen],
+        children=[(_completed_render(60, 40, [widget]), 100 * index, 100, True, True)
+                  for index, widget in enumerate(widgets)]))
+
+
+def test_custom_click_attributes_are_judged_alike_by_discovery_and_the_click(running_bridge, monkeypatch):
+    """Actions make an enabled control, nothing a disabled one, a counter none."""
+    from renforge.interaction import classify
+
+    renpy = running_bridge.renpy
+
+    class Action:
+        def __call__(self):
+            return None
+
+    class Hotspot:
+        def __init__(self, **attrs):
+            vars(self).update(attrs)
+
+        def event(self, ev, x, y, st):
+            raise AssertionError("inspection must not invoke custom input")
+
+    acting, empty, counter = Hotspot(click_action=[Action()]), Hotspot(action=None), Hotspot(click_count=0)
+    monkeypatch.setattr(renpy, "ui", types.SimpleNamespace(Action=Action), raising=False)
+    _custom_widget_scene(running_bridge, [acting, empty, counter])
+
+    controls = classify(running_bridge.client.observe(screenshot=False))["controls"]
+    listed = {control["bounds"]["x"]: control["enabled"] for control in controls}
+    assert listed == {0: True, 100: False}
+
+    value = running_bridge.globs["_renforge_custom_action_value"]
+    assert value(acting) == acting.click_action
+    assert value(empty) is None and value(counter) is None
