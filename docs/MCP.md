@@ -1010,6 +1010,11 @@ with nothing in the mod, `raw_tail` holds the end of Ren'Py's output. `guide` re
 | `renforge_get_doc` | Read an offline Ren'Py documentation page. |
 | `renforge_list_docs` | List available offline documentation pages. |
 
+`renforge_translation_stats`, `renforge_generate_translations` and
+`renforge_export_dialogue` refuse a `language` that is not a Ren'Py language
+name (a Python identifier such as `french`) with `code="LANGUAGE_INVALID"`
+before running Ren'Py, which joins it into `game/tl/<language>/` unchecked.
+
 ### Shadow validation
 
 `renforge_validate` runs `renpy lint` against a **clean shadow copy** of the
