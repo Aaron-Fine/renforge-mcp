@@ -163,6 +163,12 @@ def build_wrappers(context):
         statements, ``screen`` its displayable tree, and ``id`` (a control id
         from ``renforge_observe``) or ``source`` (a ``file:line`` from observe or
         an input candidate) the statement there with its enclosing conditions.
+        ``search`` finds case-insensitive text in every loaded statement
+        (dialogue, Python source, conditions, menu choices, jump targets).
+        ``variables`` reads named store variables or dotted fields as data
+        (the one selector that returns game state rather than code); nothing
+        is called or evaluated. ``limit`` (1-2000) bounds the statements,
+        nodes, or index entries returned.
         """
         return _log_tool_call(
             name="renforge_explain",
