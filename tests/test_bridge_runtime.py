@@ -1260,7 +1260,7 @@ def test_act_text_replaces_a_prefilled_input(running_bridge):
     renpy.display.interface.text_rect = (100, 200, 400, 36)
     renpy.get_filename_line = lambda: ("game/script.rpy", 60)
     bridge = sys.modules["_renforge_runtime"].bridge
-    bridge.current_label = "week1_contestants_arrive"
+    bridge.current_label = "chapter1_arrival"
     bridge.last_say = ""
     bridge.last_who = ""
     renpy.config.start_interact_callbacks[0]()
@@ -1518,7 +1518,7 @@ def test_unlabeled_button_action_includes_its_target(running_bridge):
     assert by_action['Start("start")']["text"] == "START"
 
 
-def test_action_strings_name_setvariable_function_and_camper(running_bridge):
+def test_action_strings_name_setvariable_function_and_character(running_bridge):
     format_action = running_bridge.globs["_renforge_observe_format_action"]
 
     class SetVariable:
@@ -1532,7 +1532,7 @@ def test_action_strings_name_setvariable_function_and_camper(running_bridge):
     mangled = type("_m1_00musicroom__MusicRoomPlay", (), {"filename": "audio/theme.mp3"})
     assert format_action(mangled()) == 'MusicRoomPlay("audio/theme.mp3")'
 
-    def ChangeLocation():
+    def GoTo():
         pass
 
     class Function:
@@ -1541,23 +1541,23 @@ def test_action_strings_name_setvariable_function_and_camper(running_bridge):
             self.args = args
             self.kwargs = {} if kwargs is None else kwargs
 
-    assert format_action(Function(ChangeLocation, kwargs={"newLocation": "beach"})) == (
-        'Function(ChangeLocation, newLocation="beach")'
+    assert format_action(Function(GoTo, kwargs={"place": "harbor"})) == (
+        'Function(GoTo, place="harbor")'
     )
-    assert format_action(Function(ChangeLocation, kwargs={"hard": False})) == (
-        "Function(ChangeLocation, hard=False)"
+    assert format_action(Function(GoTo, kwargs={"hard": False})) == (
+        "Function(GoTo, hard=False)"
     )
 
-    class Camper:
+    class Person:
         def __init__(self):
-            self.name = "Courtney"
-            self.fileName = "courtney"
+            self.name = "Rowan"
+            self.fileName = "rowan"
 
-    def StartFreeroamInteraction(camper):
+    def StartTalk(person):
         pass
 
-    assert format_action(Function(StartFreeroamInteraction, args=(Camper(),))) == (
-        'Function(StartFreeroamInteraction, "courtney")'
+    assert format_action(Function(StartTalk, args=(Person(),))) == (
+        'Function(StartTalk, "rowan")'
     )
 
     class IfAction:
@@ -1565,8 +1565,8 @@ def test_action_strings_name_setvariable_function_and_camper(running_bridge):
             self.true = true
 
     IfAction.__name__ = "If"
-    assert format_action(IfAction(Function(ChangeLocation, kwargs={"newLocation": "beach"}))) == (
-        'Function(ChangeLocation, newLocation="beach")'
+    assert format_action(IfAction(Function(GoTo, kwargs={"place": "harbor"}))) == (
+        'Function(GoTo, place="harbor")'
     )
 
     class SetDict:
@@ -1797,12 +1797,12 @@ def test_act_runs_the_button_action_and_image_only_splits_siblings(running_bridg
 
     renpy = running_bridge.renpy
 
-    def AdvanceTime():
+    def NextHour():
         return None
 
     class Function:
         def __init__(self):
-            self.callable = AdvanceTime
+            self.callable = NextHour
             self.args = ()
             self.kwargs = {}
             self.calls = 0
@@ -1811,7 +1811,7 @@ def test_act_runs_the_button_action_and_image_only_splits_siblings(running_bridg
             self.calls += 1
             jump = getattr(self, "jump", None)
             if jump is not None:
-                raise jump("beach")
+                raise jump("harbor")
             return "advanced"
 
     class Return:
@@ -1840,7 +1840,7 @@ def test_act_runs_the_button_action_and_image_only_splits_siblings(running_bridg
     advance = Function()
     okay = Return()
     cancel = Return()
-    hourglass = _focus(ImageButton("images/button_time.png", advance), 0)
+    hourglass = _focus(ImageButton("images/button_clock.png", advance), 0)
     ok = _focus(ImageButton("images/ok.png", okay), 50)
     dismissed = _focus(ImageButton("images/cancel.png", cancel), 100)
     plain_widget = ImageButton("images/button_plain.png")
@@ -1868,17 +1868,17 @@ def test_act_runs_the_button_action_and_image_only_splits_siblings(running_bridg
     snapshot = classify(running_bridge.client.observe(screenshot=False))
     by_id = {item["id"]: item for item in snapshot["controls"]}
     assert set(by_id) == {
-        "sandbox/Function(AdvanceTime)",
+        "sandbox/Function(NextHour)",
         "sandbox/Return/ok.png",
         "sandbox/Return/cancel.png",
         "sandbox/button_plain.png",
     }
-    assert by_id["sandbox/Function(AdvanceTime)"]["image"] == "button_time.png"
+    assert by_id["sandbox/Function(NextHour)"]["image"] == "button_clock.png"
     assert by_id["sandbox/Return/ok.png"]["image"] == "ok.png"
 
     reply = running_bridge.client.act(
         interaction=5,
-        control_id="sandbox/Function(AdvanceTime)",
+        control_id="sandbox/Function(NextHour)",
     )
     assert reply.get("ok") is True, reply
     assert reply["via"] == "action"
@@ -1908,7 +1908,7 @@ def test_act_runs_the_button_action_and_image_only_splits_siblings(running_bridg
     advance.jump = JumpOut
     with pytest.raises(JumpOut) as raised:
         running_bridge.globs["_renforge_h_act"](
-            {"interaction": 5, "id": "sandbox/Function(AdvanceTime)"}
+            {"interaction": 5, "id": "sandbox/Function(NextHour)"}
         )
     preserved = getattr(raised.value, "renforge_result", None)
     assert preserved["via"] == "action"
@@ -2281,9 +2281,9 @@ def test_poll_events_captures_labels_and_say_lines(running_bridge):
         def __init__(self, name):
             self.name = name
 
-    running_bridge.renpy.store.chef = Character("Chef")
-    running_bridge.renpy.store._last_say_who = "chef"
-    running_bridge.renpy.store._last_say_what = "{b}Listen up!{/b}"
+    running_bridge.renpy.store.guide = Character("Guide")
+    running_bridge.renpy.store._last_say_who = "guide"
+    running_bridge.renpy.store._last_say_what = "{b}Line one.{/b}"
     for cb in config.all_character_callbacks:
         cb("begin")
         cb("show")
@@ -2291,8 +2291,8 @@ def test_poll_events_captures_labels_and_say_lines(running_bridge):
     later = running_bridge.client.poll_events(since=reply["cursor"])
     says = [e for e in later["events"] if e["type"] == "say"]
     assert len(says) == 1
-    assert says[0]["who"] == "Chef"
-    assert says[0]["what"] == "{b}Listen up!{/b}"
+    assert says[0]["who"] == "Guide"
+    assert says[0]["what"] == "{b}Line one.{/b}"
 
     # `since=cursor` returns only newer events.
     assert running_bridge.client.poll_events(since=later["cursor"])["events"] == []
@@ -3818,14 +3818,14 @@ def test_without_a_render_coverage_trusts_the_engine_focus_list(running_bridge):
 
 def test_render_hit_marks_only_the_displayable_a_click_would_reach(running_bridge):
     renpy = running_bridge.renpy
-    modal = _screen("minigame_message", modal=True, zorder=100)
-    hottub = _screen("minigame_hottub", modal=False, zorder=0)
+    modal = _screen("popup_message", modal=True, zorder=100)
+    board = _screen("minigame", modal=False, zorder=0)
     button = _FakeWidget("OK")
     drag = _FakeWidget("")
     button_focus = _FakeFocus("OK", 860, 540, 200, 80, widget=button)
     button_focus.screen = modal
     drag_focus = _FakeFocus("", 0, 0, 1920, 1080, widget=drag)
-    drag_focus.screen = hottub
+    drag_focus.screen = board
     modal_sentinel = object()
 
     def focus_at_point(x, y, screen):
@@ -3846,16 +3846,16 @@ def test_render_hit_marks_only_the_displayable_a_click_would_reach(running_bridg
         renpy.display.focus.focus_list[:] = original
         del renpy.display.render
     by_screen = {element["screen"]: element for element in elements}
-    assert by_screen["minigame_message"]["covered"] is False
-    assert by_screen["minigame_hottub"]["covered"] is True
-    assert hit["topmost"]["screen"] == "minigame_message"
+    assert by_screen["popup_message"]["covered"] is False
+    assert by_screen["minigame"]["covered"] is True
+    assert hit["topmost"]["screen"] == "popup_message"
 
 
 def test_action_runs_with_the_focus_screen_pushed(running_bridge):
     """Hide() reads the current screen. Running the action must push it first."""
     renpy = running_bridge.renpy
     globs = running_bridge.globs
-    screen = _screen("minigame_message", modal=True, zorder=100)
+    screen = _screen("popup_message", modal=True, zorder=100)
     stack = [None]
     hidden = []
 
@@ -3894,7 +3894,7 @@ def test_action_runs_with_the_focus_screen_pushed(running_bridge):
     finally:
         del renpy.display.screen
         del renpy.current_screen
-    assert hidden == ["minigame_message"]
+    assert hidden == ["popup_message"]
     assert stack == [None]
 
 
@@ -3902,7 +3902,7 @@ def test_pointer_click_pushes_the_focused_screen(running_bridge):
     renpy = running_bridge.renpy
     globs = running_bridge.globs
     pygame = globs["pygame"]
-    screen = _screen("minigame_message", modal=True, zorder=100)
+    screen = _screen("popup_message", modal=True, zorder=100)
     stack = [None]
     seen = []
 
@@ -3951,7 +3951,7 @@ def test_pointer_click_pushes_the_focused_screen(running_bridge):
             focus_module.get_focused = original_focused
         del renpy.display.screen
         del renpy.current_screen
-    assert seen == ["minigame_message"]
+    assert seen == ["popup_message"]
     assert stack == [None]
 
 
@@ -6655,9 +6655,9 @@ def test_custom_displayables_keeping_actions_under_a_click_attribute_are_control
             calls.append(self.name)
 
     class Interactable:
-        def __init__(self, click_action, xray_action=None):
+        def __init__(self, click_action, alt_action=None):
             self.click_action = click_action
-            self.xray_action = xray_action
+            self.alt_action = alt_action
 
         def event(self, ev, x, y, st):
             raise AssertionError('inspection must not invoke custom input')
@@ -6998,7 +6998,7 @@ def test_a_hiding_choice_screen_offers_no_menu_entries(running_bridge):
         hiding = False
         widgets = {}
 
-    item = types.SimpleNamespace(caption="Screaming Gophers", action=object())
+    item = types.SimpleNamespace(caption="Team A", action=object())
     screen = ScreenDisplayable()
     screen.scope = {"items": [item]}
     screen.children = []
@@ -7012,7 +7012,7 @@ def test_a_hiding_choice_screen_offers_no_menu_entries(running_bridge):
     assert snapshot['controls'] == []
     screen.phase = 2
     snapshot = classify(running_bridge.client.observe(screenshot=False))
-    assert [control['text'] for control in snapshot['controls']] == ['Screaming Gophers']
+    assert [control['text'] for control in snapshot['controls']] == ['Team A']
 
 
 
@@ -7177,7 +7177,7 @@ def test_progression_skips_through_a_pause_without_judging_the_screens_behind_it
     raw["stable"], raw["unstable_reason"] = False, reason
     # A stale hub is still drawn under the pause; it must not stop progression.
     raw["elements"] = [{"screen": "hub", "role": "button", "enabled": True, "clickable": True,
-                        "covered": False, "action": "Jump('beach')"}]
+                        "covered": False, "action": "Jump('harbor')"}]
     running_bridge.globs["_renforge_progress_tick"]()
     assert bridge.progression["active"] is True
     assert renpy.config.skipping == "slow"
@@ -7465,7 +7465,7 @@ def test_explain_reads_state_as_data_without_running_game_code(running_bridge):
     names = running_bridge.globs["_renforge_condition_names"]
     assert set(names("if calendar.dayCount > 7 and not calendar.isNight() and friend_rp >= 10")) == {
         "calendar.dayCount", "friend_rp"}
-    assert names("persistent.mod_tips_enabled and _choice_rec") == ["persistent.mod_tips_enabled", "_choice_rec"]
+    assert names("persistent.tips_enabled and _choice_rec") == ["persistent.tips_enabled", "_choice_rec"]
     values = running_bridge.globs["_renforge_explain_condition_values"](
         {"conditions": ["if friend_rp >= 10", "if event_available('talk', 'yard')"]})
     assert values == {"friend_rp": 12}
@@ -7473,14 +7473,14 @@ def test_explain_reads_state_as_data_without_running_game_code(running_bridge):
     import enum
 
     class Day(enum.Enum):
-        SUNDAY = 7
+        MONDAY = 1
 
-    store.camper, store.day = Calendar(), Day.SUNDAY
+    store.member, store.day = Calendar(), Day.MONDAY
     loop = running_bridge.globs["_renforge_explain_condition_values"]({"nodes": [
-        {"kind": "for", "text": "camper in screamingGophers"},
-        {"kind": "if", "text": "camper.currentStatus == 1"},
-        {"kind": "if", "text": "day == Day.SUNDAY"}]})
-    assert loop == {"day": "Day.SUNDAY"}
+        {"kind": "for", "text": "member in team_a"},
+        {"kind": "if", "text": "member.status == 1"},
+        {"kind": "if", "text": "day == Day.MONDAY"}]})
+    assert loop == {"day": "Day.MONDAY"}
 
 
 def test_control_facts_carry_the_buttons_tooltip(running_bridge):
@@ -7528,7 +7528,7 @@ def test_input_prompt_is_the_text_as_drawn(running_bridge):
 def test_focus_masked_buttons_report_the_region_a_click_reaches(running_bridge, monkeypatch):
     """A suspect board: full-screen buttons whose focus_mask is one photo."""
     globs = running_bridge.globs
-    photo = types.SimpleNamespace(style=types.SimpleNamespace(focus_mask="tarapic mask.webp"))
+    photo = types.SimpleNamespace(style=types.SimpleNamespace(focus_mask="portrait mask.webp"))
     plain = types.SimpleNamespace(style=types.SimpleNamespace(focus_mask=None))
 
     calls = []

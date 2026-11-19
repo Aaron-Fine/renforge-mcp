@@ -164,15 +164,15 @@ def test_hard_pause_imagebuttons_choose_by_idle_image_name():
     snapshot = classify(
         _raw(
             say_dismiss="dismiss_hard_pause",
-            label="cabins",
-            screens=[{"name": "freeroam_cabins", "layer": "master", "modal": False}],
+            label="hub",
+            screens=[{"name": "hub", "layer": "master", "modal": False}],
             elements=[
                 _element(
-                    screen="freeroam_cabins",
+                    screen="hub",
                     role="imagebutton",
                     text=None,
                     widget_id=None,
-                    image_name="images/button_cabin_door_1.png",
+                    image_name="images/button_door_1.png",
                     action="Function",
                     ordinal=3,
                 )
@@ -182,8 +182,8 @@ def test_hard_pause_imagebuttons_choose_by_idle_image_name():
 
     assert snapshot["forward"] == "choose"
     assert snapshot["screens"][0]["modal"] is False
-    assert _ids(snapshot) == ["freeroam_cabins/Function"]
-    assert snapshot["controls"][0]["image"] == "button_cabin_door_1.png"
+    assert _ids(snapshot) == ["hub/Function"]
+    assert snapshot["controls"][0]["image"] == "button_door_1.png"
     assert snapshot["controls"][0]["synthetic"] is False
     assert snapshot["controls"][0]["action"] == "Function"
     assert guard_dismiss(snapshot, 4) == "not_dismiss"
@@ -377,8 +377,8 @@ def test_action_names_the_control_and_image_only_splits_siblings():
                     screen="sandbox",
                     role="imagebutton",
                     text=None,
-                    image_name="images/button_time.png",
-                    action="Function(AdvanceTime)",
+                    image_name="images/button_clock.png",
+                    action="Function(NextHour)",
                     ordinal=0,
                 ),
                 _element(
@@ -426,7 +426,7 @@ def test_action_names_the_control_and_image_only_splits_siblings():
     )
 
     assert _ids(snapshot) == [
-        "sandbox/Function(AdvanceTime)",
+        "sandbox/Function(NextHour)",
         "sandbox/Function(ShowMap)",
         "map/Return/ok.png",
         "map/Return/cancel.png",
@@ -434,7 +434,7 @@ def test_action_names_the_control_and_image_only_splits_siblings():
         "map/Return/door.png#2",
     ]
     assert [item["image"] for item in snapshot["controls"]] == [
-        "button_time.png",
+        "button_clock.png",
         "button_map.png",
         "ok.png",
         "cancel.png",
@@ -738,31 +738,31 @@ def test_crossed_transcript_keeps_labels_queued_before_the_first_frame():
     events = [
         {"seq": 0, "type": "label", "label": "_start"},
         {"seq": 1, "type": "label", "label": "advance_time"},
-        {"seq": 2, "type": "label", "label": "week1_challenge1_cliff"},
-        {"seq": 3, "type": "say", "who": "Chef", "what": "{b}Listen up!{/b}"},
+        {"seq": 2, "type": "label", "label": "chapter1_scene_a"},
+        {"seq": 3, "type": "say", "who": "Guide", "what": "{b}Line one.{/b}"},
         {"seq": 4, "type": "business", "name": "ignored"},
-        {"seq": 6, "type": "label", "label": "week1_challenge1_hottub"},
-        {"seq": 7, "type": "say", "who": None, "what": "Chris suddenly appears on the beach with you."},
+        {"seq": 6, "type": "label", "label": "chapter1_scene_b"},
+        {"seq": 7, "type": "say", "who": None, "what": "A stranger appears beside you."},
     ]
     frames = [
         {
             "event_seq": 5,
-            "label": "week1_challenge1_cliff",
-            "dialogue": {"who": "Chef", "what": "{b}Listen up!{/b}"},
+            "label": "chapter1_scene_a",
+            "dialogue": {"who": "Guide", "what": "{b}Line one.{/b}"},
         },
         {
             "event_seq": 8,
-            "label": "week1_challenge1_hottub",
-            "dialogue": {"who": None, "what": "Chris suddenly appears on the beach with you."},
+            "label": "chapter1_scene_b",
+            "dialogue": {"who": None, "what": "A stranger appears beside you."},
         },
     ]
 
     assert crossed_transcript(events, frames) == [
         {"type": "label", "label": "advance_time"},
-        {"type": "label", "label": "week1_challenge1_cliff"},
-        {"type": "say", "who": "Chef", "what": "Listen up!"},
-        {"type": "label", "label": "week1_challenge1_hottub"},
-        {"type": "say", "who": None, "what": "Chris suddenly appears on the beach with you."},
+        {"type": "label", "label": "chapter1_scene_a"},
+        {"type": "say", "who": "Guide", "what": "Line one."},
+        {"type": "label", "label": "chapter1_scene_b"},
+        {"type": "say", "who": None, "what": "A stranger appears beside you."},
     ]
 
 
@@ -785,19 +785,19 @@ def test_advance_until_returns_lines_queued_before_its_first_look(monkeypatch):
     frames = [
         _raw(
             interaction=1,
-            label="week1_challenge1_cliff",
-            dialogue={"who": "Chef", "what": "Listen up!"},
+            label="chapter1_scene_a",
+            dialogue={"who": "Guide", "what": "Line one."},
             event_seq=5,
             say_dismiss="dismiss",
         ),
         _raw(
             interaction=2,
-            label="week1_challenge1_hottub",
+            label="chapter1_scene_b",
             dialogue=None,
             event_seq=8,
             say_dismiss=None,
-            screens=[{"name": "minigame_hottub", "layer": "master", "modal": True}],
-            elements=[_element(screen="minigame_hottub", text="Skip")],
+            screens=[{"name": "minigame", "layer": "master", "modal": True}],
+            elements=[_element(screen="minigame", text="Skip")],
         ),
     ]
     index = {"i": 0}
@@ -815,10 +815,10 @@ def test_advance_until_returns_lines_queued_before_its_first_look(monkeypatch):
 
         def poll_events(self, since=0, deadline=None):
             events = [
-                {"seq": 1, "type": "label", "label": "freeroam_cabins"},
+                {"seq": 1, "type": "label", "label": "hub"},
                 {"seq": 3, "type": "label", "label": "advance_time"},
-                {"seq": 4, "type": "label", "label": "week1_challenge1_cliff"},
-                {"seq": 6, "type": "label", "label": "week1_challenge1_hottub"},
+                {"seq": 4, "type": "label", "label": "chapter1_scene_a"},
+                {"seq": 6, "type": "label", "label": "chapter1_scene_b"},
             ]
             return {"events": [event for event in events if event["seq"] > since], "cursor": 8}
 
@@ -832,9 +832,9 @@ def test_advance_until_returns_lines_queued_before_its_first_look(monkeypatch):
     assert result["steps"] == 1
     assert result["crossed"] == [
         {"type": "label", "label": "advance_time"},
-        {"type": "label", "label": "week1_challenge1_cliff"},
-        {"type": "say", "who": "Chef", "what": "Listen up!"},
-        {"type": "label", "label": "week1_challenge1_hottub"},
+        {"type": "label", "label": "chapter1_scene_a"},
+        {"type": "say", "who": "Guide", "what": "Line one."},
+        {"type": "label", "label": "chapter1_scene_b"},
     ]
     assert live._crossed_after[live._key("/tmp/renforge-crossed")][1] == 8
 
