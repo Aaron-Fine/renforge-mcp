@@ -6676,6 +6676,14 @@ init python:
     _RENFORGE_EXPLAIN_VARIABLES_MAX = 100
 
     def _renforge_h_explain(payload):
+        """Explain game content from the loaded syntax trees, never evaluating it.
+
+        Payload: ``variables`` (a list of store names or dotted fields, read
+        as data; pass it alone) or one selector handled by
+        ``_renforge_h_explain_selected``. Label, screen, control and source
+        results also carry ``values``, the current values of the plain
+        variables their conditions read. Errors: ``variables must be a list
+        of names``, ``pass variables alone, ...`` and the selector errors."""
         payload = payload or {}
         if payload.get("variables") is not None:
             names = payload["variables"]
@@ -6700,6 +6708,15 @@ init python:
         return result
 
     def _renforge_h_explain_selected(payload):
+        """Answer explain for at most one selector.
+
+        ``label`` (its statements), ``screen`` (its displayable tree), ``id``
+        (a control's screen-language statement and enclosing conditions),
+        ``source`` (``file:line``) or ``search`` (text in every loaded
+        statement); none gives the label and screen index, filtered by
+        ``query``. ``limit`` bounds entries (1-2000, default 200). Errors:
+        ``pass at most one of ...``, ``<key> must be a string``, ``unknown
+        label``/``unknown screen`` and ``search must not be empty``."""
         selectors = [key for key in ("label", "screen", "id", "source", "search") if payload.get(key) is not None]
         if len(selectors) > 1:
             return {"ok": False, "error": "pass at most one of label, screen, id, source, search"}
@@ -6769,6 +6786,8 @@ init python:
 
 
     def _renforge_progress_finish(reason):
+        """End the active progression with stop ``reason``, restoring the skip
+        state, skip delay, periodic timer and preferences it changed."""
         bridge = _renforge_runtime.bridge
         operation = bridge.progression if bridge is not None else None
         if operation is None or not operation["active"]:
@@ -6789,6 +6808,13 @@ init python:
             setattr(prefs, name, value)
 
     def _renforge_progress_tick():
+        """Advance the active progression by one check; runs on every drain.
+
+        Stops it (``timeout``, ``max_steps``, ``loop``, ``unsupported`` or a
+        decision boundary from the interaction contract) or lets the engine
+        skip the current line with native slow skip, clicking instead when
+        the game has turned skipping off. Pauses and transitions are skipped
+        without judging the screens behind them."""
         bridge = _renforge_runtime.bridge
         operation = bridge.progression if bridge is not None else None
         if operation is None or not operation["active"]:
@@ -6882,6 +6908,17 @@ init python:
             renpy.config.skipping = None
 
     def _renforge_h_progression(payload):
+        """Start, poll or stop a bounded skip through dialogue the bridge owns.
+
+        ``action: "start"`` takes an ``id``, the observation's
+        ``interaction``/``session_id``/``observation_id``, ``max_steps``
+        (1-200), ``timeout`` (0.05-120 s) and optional ``expires_at`` (epoch
+        seconds); ``"status"`` and ``"stop"`` (optional ``reason``, default
+        ``cancelled``) take the same ``id``. Replies ``{"ok": True,
+        "progression": {"id", "active", "stop", "steps"}}``. Errors:
+        ``stale_operation``, ``invalid_operation``, ``progression_busy``,
+        ``invalid_budget``, ``expired``, ``already_skipping``,
+        ``unsupported`` and the interaction contract's identity guards."""
         payload = payload or {}
         bridge = _renforge_runtime.bridge
         operation = bridge.progression
