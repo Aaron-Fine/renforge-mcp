@@ -2508,7 +2508,13 @@ init python:
             raise
         return x, y
 
-    def _renforge_resolve_ui_element(payload, action):
+    def _renforge_resolve_ui_element(payload, action, elements=None):
+        """Find the one UI element ``payload`` names by id and/or text.
+
+        Returns ``(focus, element, None)``, or ``(None, None, error reply)``.
+        ``elements`` are ``_renforge_focusable_elements()`` pairs a caller
+        already built for this request; None builds them.
+        """
         payload = payload or {}
         wanted_id = payload.get("id") or payload.get("element_id")
         wanted_text = payload.get("text")
@@ -2525,8 +2531,10 @@ init python:
         if wanted_screen is not None:
             wanted_screen = str(wanted_screen).casefold()
 
+        if elements is None:
+            elements = _renforge_focusable_elements()
         candidates = []
-        for focus, element in _renforge_focusable_elements():
+        for focus, element in elements:
             if wanted_screen and str(element.get("screen") or "").casefold() != wanted_screen:
                 continue
             # Upstream element ids, widget names, and observe's control ids all resolve.
@@ -2553,7 +2561,9 @@ init python:
     def _renforge_h_click_element(payload):
         payload = payload or {}
         expected_frame_id = payload.get("expected_frame_id") or payload.get("expected_screenshot")
-        focus, element, error = _renforge_resolve_ui_element(payload, "click_element")
+        # One scene walk serves the lookup and the hit stack after the click.
+        elements = _renforge_focusable_elements()
+        focus, element, error = _renforge_resolve_ui_element(payload, "click_element", elements)
         if error is not None:
             return error
 
@@ -2596,7 +2606,7 @@ init python:
             pending_end_interaction = exc
             x, y = getattr(exc, "renforge_pointer")
         # Report which focusable actually owns this coordinate (coverage).
-        hit = _renforge_hit_stack(x, y)
+        hit = _renforge_hit_stack(x, y, elements)
         topmost = hit.get("topmost")
         action_name = element.get("action")
         # Native quick-menu actions often run as a result of the click; emit a
@@ -2656,15 +2666,18 @@ init python:
             raise pending_end_interaction
         return result
 
-    def _renforge_hit_stack(x, y):
+    def _renforge_hit_stack(x, y, elements=None):
         """Return the focus a click would hit, plus other rectangles at the point.
 
         ``topmost`` is what Ren'Py's own hit test names. When the engine says
         the point hits nothing (a transparent part of a masked button), there
         is no receiver and the rectangles there are all ``underneath``. Only
         without a completed render does the topmost rectangle stand in.
+        ``elements`` are focusable-element pairs already built for this
+        request; None builds them.
         """
-        elements = _renforge_focusable_elements()
+        if elements is None:
+            elements = _renforge_focusable_elements()
         hit = _renforge_render_hit(x, y)
         hits = [(focus, element) for focus, element in elements
                 if element.get("covered") is not True
@@ -2851,7 +2864,9 @@ init python:
     def _renforge_h_get_ui_element_bounds(payload):
         payload = payload or {}
         expected_frame_id = payload.get("expected_frame_id") or payload.get("expected_screenshot")
-        focus, element, error = _renforge_resolve_ui_element(payload, "get_ui_element_bounds")
+        inventory = _renforge_scene_inventory()
+        focus, element, error = _renforge_resolve_ui_element(
+            payload, "get_ui_element_bounds", _renforge_focusable_elements(inventory=inventory))
         if error is not None:
             return error
         screenshot_digest = None
@@ -2881,7 +2896,6 @@ init python:
         if widget is None or not hasattr(widget, "state_children") or not callable(getattr(widget, "get_child", None)):
             result["painted_bounds_reason"] = "element does not expose ImageButton state children"
         else:
-            inventory = _renforge_scene_inventory()
             rendered = next((entry for entry in inventory["geometry"]["renders"].get(id(widget), [])
                              if entry[2]["visible"] is True), None)
             if rendered is None:

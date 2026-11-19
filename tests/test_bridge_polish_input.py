@@ -201,3 +201,44 @@ def test_hit_test_falls_back_to_rectangles_without_a_render(running_bridge, monk
     hit = running_bridge.client.hit_test(60, 20)
     assert hit["topmost"]["id"] == "go"
     assert hit["underneath"] == []
+
+
+# --- one scene inventory per request ---------------------------------------
+
+
+def _count_inventories(running_bridge, monkeypatch):
+    globs = running_bridge.globs
+    original = globs["_renforge_scene_inventory"]
+    calls = []
+
+    def counting():
+        calls.append(1)
+        return original()
+
+    monkeypatch.setitem(globs, "_renforge_scene_inventory", counting)
+    return calls
+
+
+def test_click_element_builds_the_scene_inventory_once(running_bridge, monkeypatch):
+    element = running_bridge.client.list_ui_elements()[1]
+    calls = _count_inventories(running_bridge, monkeypatch)
+    clicked = running_bridge.client.click_element(id=element["id"])
+    assert clicked["ok"] is True, clicked
+    assert clicked["received_by"]["id"] == element["id"]
+    assert len(calls) == 1
+
+
+def test_get_ui_element_bounds_builds_the_scene_inventory_once(running_bridge, monkeypatch):
+    from test_bridge_runtime import _completed_render
+
+    renpy = running_bridge.renpy
+    widget = renpy.display.focus.focus_list[-1].widget
+    renpy.config.screen_width, renpy.config.screen_height = 800, 600
+    renpy.display.render = types.SimpleNamespace(screen_render=_completed_render(800, 600,
+        children=[(_completed_render(100, 30, [widget]), 200, 100, True, True)]))
+    element = running_bridge.client.list_ui_elements()[-1]
+    calls = _count_inventories(running_bridge, monkeypatch)
+    reply = running_bridge.client.get_ui_element_bounds(id=element["id"])
+    assert reply["painted_bounds_available"] is True, reply
+    assert reply["painted_bounds"] == {"x": 204, "y": 106, "width": 80, "height": 14}
+    assert len(calls) == 1
