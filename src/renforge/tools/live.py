@@ -652,22 +652,6 @@ def _session_mode_mismatch(
     return result
 
 
-def _external_session_isolation(client: Any) -> dict[str, Any]:
-    """Where a game this process did not start keeps its saves and HOME.
-
-    ``exposes_user_saves`` is false only when HOME and every active save
-    location sit in RenForge's own folders (the state folder, where
-    ``renforge_session`` keeps its saves, or a session root) and none of them
-    reaches the player's storage anyway. Ren'Py also reads
-    ``game/saves`` and ``config.extra_savedirs`` unless an isolated launch
-    removed them, and either may hold the player's saves wherever it points,
-    so anything else, including a path that cannot be resolved or a bridge
-    that cannot list its locations (an older one), counts as exposing: an
-    isolated launch must never be handed a game it cannot vouch for.
-    """
-    return _external_session_facts(client)["isolation"]
-
-
 def _external_isolation_report(info: Mapping[str, Any]) -> dict[str, Any]:
     savedir, home = info.get("savedir"), info.get("home")
     locations = info.get("save_locations")
@@ -685,8 +669,14 @@ def _external_exposed_components(report: dict[str, Any]) -> frozenset[str]:
 
     HOME is isolated only when the bridge reports one in RenForge's own
     folders; saves only when it lists save locations and every one is there
-    (:func:`storage_is_renforge_owned`). Anything unreported or unresolvable
-    counts as the player's.
+    (:func:`storage_is_renforge_owned`): the state folder, where
+    ``renforge_session`` keeps its saves, or a session root, and none of them
+    reaching the player's storage anyway. Ren'Py also reads ``game/saves``
+    and ``config.extra_savedirs`` unless an isolated launch removed them, and
+    either may hold the player's saves wherever it points, so anything
+    unreported or unresolvable, including a bridge that cannot list its
+    locations (an older one), counts as the player's: an isolated launch must
+    never be handed a game it cannot vouch for.
     """
     exposed: set[str] = set()
     if not storage_is_renforge_owned(report.get("home"), home=True):
@@ -851,7 +841,8 @@ def _owned_session_facts(session: Any) -> dict[str, Any]:
 def _external_session_facts(client: BridgeClient) -> dict[str, Any]:
     """What a bridge this process did not start says about itself; an older one is assumed the worst.
 
-    ``isolation`` is :func:`_external_session_isolation`'s report. ``isolated``
+    ``isolation`` reports where the game keeps its saves and HOME, and whether
+    that exposes the player's (:func:`_external_exposed_components`). ``isolated``
     needs HOME and every reported save location (at least one) in RenForge's
     own folders, which is exactly when no component is exposed.
     """
