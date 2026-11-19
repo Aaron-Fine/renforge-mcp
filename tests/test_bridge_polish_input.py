@@ -364,3 +364,18 @@ def test_eval_runs_when_unset_or_on(running_bridge, monkeypatch, value):
     else:
         monkeypatch.setenv("RENFORGE_BRIDGE_EVAL", value)
     assert running_bridge.client.eval_expr("1 + 1") == 2
+
+
+# --- coordinate errors ------------------------------------------------------
+
+
+def _png_header(width, height):
+    return b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR" + struct.pack(">II", width, height) + b"\x00" * 16
+
+
+def test_shared_coordinate_errors_do_not_name_click_at(running_bridge):
+    running_bridge.renpy.screenshot_to_bytes = lambda size: _png_header(960, 540)
+    reply = running_bridge.client.request(
+        "hit_test", {"x": 5000, "y": 5, "coordinate_space": "screenshot"})
+    assert reply["ok"] is False
+    assert reply["error"] == "point is outside the screenshot"

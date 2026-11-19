@@ -2991,7 +2991,7 @@ init python:
             return None, None
 
     def _renforge_to_logical_coordinates(x, y, coordinate_space, frame_data=None, descriptor=None):
-        """Convert screenshot pixels through the same seam used by click_at."""
+        """Convert screenshot pixels to logical coordinates (click_at, hit_test, scroll, drag)."""
         if coordinate_space == "logical":
             return x, y, frame_data, None
         if coordinate_space != "screenshot":
@@ -3006,7 +3006,7 @@ init python:
         if descriptor is not None:
             pixel_width, pixel_height = descriptor["width"], descriptor["height"]
         if not (0 <= x < pixel_width and 0 <= y < pixel_height):
-            return x, y, frame_data, "click_at point is outside the screenshot"
+            return x, y, frame_data, "point is outside the screenshot"
         x = int(round(x * float(logical_width) / float(pixel_width)))
         y = int(round(y * float(logical_height) / float(pixel_height)))
         x, y = min(x, logical_width - 1), min(y, logical_height - 1)
