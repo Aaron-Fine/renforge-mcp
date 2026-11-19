@@ -63,7 +63,9 @@ versioning.
   paths, since that folder is outside the project.
 - `renforge_session(action="import")` returns a `files_touched` write
   receipt and passes on the import's own failure codes; a missing slot is
-  `NO_MATCHING_SAVE_SLOTS`.
+  `NO_MATCHING_SAVE_SLOTS`. It copies the slot to where the running game
+  keeps its saves; a running game whose saves are in a folder this server
+  did not create is refused with `SESSION_SAVES_ELSEWHERE`.
 - `renforge_autopilot` always launches isolated; `RENFORGE_ISOLATION=existing`
   gave it the player's saves, and it takes no `authorize`.
 - Tools that need a running game say so when none is: `code="NO_RUNNING_GAME"`
@@ -87,11 +89,12 @@ versioning.
 - RenForge keeps its per-project state outside the game folder, under
   `RENFORGE_STATE_DIR` or `~/.local/state/renforge/projects/<name>-<hash>/`.
   Opening or launching a project no longer creates `<project>/.renforge`.
-  A Live Editor save, undo or rollback of a game on another filesystem than
-  the state folder (a second drive) stages its exchange files in
-  `<project>/.renforge/editor-exchange/` instead, because the atomic exchange
-  cannot cross filesystems, and removes them when it is done; a conflict
-  keeps them as evidence.
+  On a case-insensitive volume every spelling of a project path shares one
+  state folder and one bridge lock. A Live Editor save, undo or rollback of
+  a game on another filesystem than the state folder (a second drive)
+  stages its exchange files in `<project>/.renforge/editor-exchange/`
+  instead, because the atomic exchange cannot cross filesystems, and removes
+  them when it is done; a conflict keeps them as evidence.
 - Launches in a Wayland session use `SDL_VIDEODRIVER=wayland,x11` so games
   start while the screen is locked. The startup deadline defaults to 180 s and
   reads `RENFORGE_STARTUP_TIMEOUT`.
@@ -129,9 +132,12 @@ versioning.
   controls carry `values` for the variables their conditions read. Values
   skip loop variables and attribute roots, show enums as `Day.SUNDAY`, and
   read class-level defaults. A long list or dict says it is cut short
-  (`size`, `truncated`) instead of silently dropping entries. `explain(source=...)` on a menu, `if`, or
+  (`size`, `truncated`) instead of silently dropping entries. `variables`
+  is passed alone (with another selector it is refused) and reads at most
+  100 names, saying `truncated` when given more. `explain(source=...)` on a menu, `if`, or
   `while` lists what each branch does, and label and screen entries name
-  their file only when it differs from the result's own.
+  their file only when it differs from the result's own. Search lists a
+  screen's matches in source order with whole snippets.
 - Acting with an observation that is slightly out of date is accepted when
   only unrelated parts of the screen changed (a notification closing) and the
   target control is unchanged. Menu captions are read without text tags,
@@ -150,7 +156,9 @@ versioning.
   the engine restarts into the save.
 - `renforge_session(action="launch", label=...)` starts the story at a label
   for testing and modding, also in archive-only games; observations carry
-  `started_at_label` because earlier story state never ran.
+  `started_at_label` because earlier story state never ran. The label is
+  applied only at startup, so such a launch always starts a fresh game: one
+  this server runs is replaced, one started elsewhere is refused.
 - Play sessions keep their saves across launches in the project's RenForge
   state folder. Continuing skips through pauses, clicks past a line that only
   has optional buttons beside it, ignores HUD buttons on `show screen` screens
@@ -162,7 +170,9 @@ versioning.
 - Lint, compile dumps, translation runs, and shadow lint run Ren'Py with a
   disposable HOME and one disposable save location. Ren'Py writes a game's
   persistent data on every start, so these used to rewrite the player's
-  `~/.renpy/<game>/persistent` and `game/saves/persistent`.
+  `~/.renpy/<game>/persistent` and `game/saves/persistent`. RenForge's
+  save and JSON-dump adapters ship as `.rpe` archives, so Ren'Py 8.0-8.2,
+  which ignore `.rpe.py` files, load them too.
 - Lint reads Ren'Py 8's `file.rpy:12 message` lines. `renforge_mod(action="lint")`
   used to report every mod clean.
 - `renforge_mod(action="reload")` takes no mod name: it reloads every script,
@@ -356,7 +366,7 @@ versioning.
   whose Ren'Py save folder resolves into the player's tree counts too, as
   does a save path inside any game's `game/saves`, not only this project's.
 - A reply that times out while the game's main thread is busy (entering a
-  scene that decodes large images) no longer ends `act` or `advance_until`
+  scene that decodes large images) no longer ends `act`
   with `stop="timeout"`: progression and the final observation ask again
   while budget remains.
 - `renforge_mod` moves to its own `mod` toolset. Writing and reloading a mod
@@ -390,6 +400,12 @@ versioning.
 - Runtime compatibility checks reject games/SDKs below Ren'Py 8.0 with
   `UNSUPPORTED_RENPY_VERSION` before download, injection, or launch. Explicit
   SDK overrides do not bypass a legacy game's engine requirement.
+- With `version="stable"` (the default) the SDK follows the game's own
+  engine: a `renpy_version` pin in the project's `renforge.json`
+  (`{"renpy_version": "8.3.7"}`, a file Ren'Py never reads, for source
+  projects), else the shipped engine's version, else
+  `game/script_version.txt`. A `version` that is neither `stable` nor
+  `X.Y.Z` returns `INVALID_RENPY_VERSION`.
 - Engine-based ending evidence in gameplay observations and progression:
   `stop="end"` confirms a root script return at the main menu; `main_menu`
   distinguishes initial menus and explicit restarts. Evidence persists until a
@@ -401,8 +417,8 @@ versioning.
 
 - Simplified shared discovery: owning screen instances supply named widget IDs,
   and the collector assigns IDs/facts once for observation and actions. Removed
-  obsolete discovery helpers and scene placement calculations; both host
-  progression modes now live in `progression.py`, with compatibility exports.
+  obsolete discovery helpers and scene placement calculations; host
+  progression lives in `progression.py`.
 - Updated gameplay/tool guidance for clipped menu entries, incomplete discovery,
   content-based frame guards, and process-exit status.
   Historical harness proposals are distinguished from current TODOs.
@@ -414,8 +430,8 @@ versioning.
 - Scene geometry uses completed renders and composes transforms/clipping.
   Repeated placements retain render paths; alpha inspection uses cached renders.
   Bounded focus probes find usable points on partially covered/masked controls.
-- Unsupported custom event handlers are explicit input candidates and stop both
-  progression modes. Conditional custom eligibility remains unknown.
+- Unsupported custom event handlers are explicit input candidates and stop
+  progression. Conditional custom eligibility remains unknown.
 - Owned process termination distinguishes clean exits from nonzero exits while
   preserving historical observations and leaving story completion unconfirmed.
 - Observations wait for active screens to appear in the completed render;
@@ -427,10 +443,10 @@ versioning.
 
 - Session storage initialization handles an absent save scanner thread and an
   absent Emscripten flag while preserving the single isolated save location.
-- Default progression uses bounded native skip, with interaction-level guards,
+- Progression uses bounded native skip, with interaction-level guards,
   time/step leases, temporary unread-text and presentation preferences, and
-  guaranteed restoration while the engine is responsive. `mode="dismiss"`
-  preserves guarded dismissal; both modes stop before actionable UI.
+  guaranteed restoration while the engine is responsive. It stops before
+  actionable UI.
 - Standalone progression accepts `screenshot=false`. Gameplay PNGs are bounded
   for MCP transport and report scaling metadata with hashes of returned bytes.
 - Frame timeouts, transport failures, verified runtime errors, and uncertain
@@ -442,10 +458,9 @@ versioning.
 - Host and injected bridge now share one gameplay contract for IDs,
   classification, text cleanup, operations, and guards. Discovery reuses one
   bounded scene inventory, and action guards reuse its widget references.
-- `renforge_act` returns the next stable observation by default, with optional
-  `advance=true` progression, `submit=false` input editing, and session and
-  observation guards. Action success remains separate from follow-up status;
-  `observe=false` preserves the previous action-only response.
+- `renforge_act` returns the next stable observation, guarded by the
+  observation it acts on. Action success remains separate from follow-up
+  status.
 - Custom overlay hubs remain gameplay controls. Held keys can be released after
   interaction changes; viewport axes are validated before mutation; drag
   capabilities and target eligibility are checked before callbacks run.
@@ -506,6 +521,19 @@ versioning.
   name with `LANGUAGE_INVALID` before running Ren'Py, which joins it into
   `game/tl/<language>/` unchecked, so `../..` wrote translation files outside
   the project. The dashboard's translation routes use the same check.
+- Play loop: continuing clicks past a line held by a pause that never ends
+  (the bridge refused that click as unstable) and keeps to the caller's
+  time budget. A speaker defined as `character.e`, quoted, or a dynamic name
+  is reported as `who`; a soft pause no longer repeats the last line as
+  `dialogue`; words stay apart across `{p=N}`, `{space=N}` and `{vspace=N}`.
+  An `Input` with `length=0` takes any length, an input callback's error is
+  reported instead of success, a hover lands where a click would, a queued
+  `load_slot` reports the load once, and the ending is confirmed at the main
+  menu's first interaction even before anything observes. A game's own
+  subclass of an engine bar, viewport, drag or button is classified like
+  the engine widget.
+- Autopilot ends a run when the bridge refuses a choice and lists it under
+  `choice_errors`, instead of counting the menu as explored.
 
 ## [0.7.6] - 2026-11-18
 
