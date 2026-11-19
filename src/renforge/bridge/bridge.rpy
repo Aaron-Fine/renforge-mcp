@@ -5649,9 +5649,11 @@ init python:
         return True, None
 
 
-    def _renforge_game_lifecycle():
-        # Use engine context flags, never game-defined screen/label names.
-        bridge = _renforge_runtime.bridge
+    def _renforge_engine_main_menu():
+        """True at the engine's main menu, False in gameplay, None when unknown.
+
+        Reads engine context flags, never game-defined screen or label names.
+        """
         try:
             context = renpy.context()
             main_menu = getattr(context, "_main_menu", None)
@@ -5659,13 +5661,29 @@ init python:
                 main_menu = getattr(renpy.store, "main_menu", None)
         except Exception:
             main_menu = None
-        if not isinstance(main_menu, bool):
+        return main_menu if isinstance(main_menu, bool) else None
+
+    def _renforge_commit_ending():
+        """Confirm a pending script return as the ending once the main menu is up.
+
+        Called from the start-interaction hook, so the ``ending`` event fires
+        once whether or not anything observes, and before the player can
+        start a new game. Observe only reads the result.
+        """
+        bridge = _renforge_runtime.bridge
+        if bridge is None or bridge.pending_ending is None or _renforge_engine_main_menu() is not True:
+            return
+        bridge.ending_counter += 1
+        bridge.ending = dict(bridge.pending_ending, id=bridge.ending_counter)
+        bridge.pending_ending = None
+        bridge.push_event("ending", bridge.ending)
+
+    def _renforge_game_lifecycle():
+        """The game's phase (playing, main_menu, ended, unknown) and its ending; a pure read."""
+        bridge = _renforge_runtime.bridge
+        main_menu = _renforge_engine_main_menu()
+        if main_menu is None:
             return {"phase": "unknown", "ending": None}
-        if main_menu and bridge is not None and bridge.pending_ending is not None:
-            bridge.ending_counter += 1
-            bridge.ending = dict(bridge.pending_ending, id=bridge.ending_counter)
-            bridge.pending_ending = None
-            bridge.push_event("ending", bridge.ending)
         ending = bridge.ending if main_menu and bridge is not None else None
         return {"phase": "ended" if ending else "main_menu" if main_menu else "playing",
                 "ending": ending}
@@ -8876,6 +8894,7 @@ init python:
                 if operation["steps"] >= operation["max_steps"]:
                     _renforge_progress_finish("max_steps")
             bridge.observe_generation = int(getattr(bridge, "observe_generation", 0)) + 1
+            _renforge_commit_ending()
             if not getattr(bridge, "transitions_applied", False):
                 # Preferences exist by the first interaction. The launcher asks
                 # for this only when the session's preferences are isolated.

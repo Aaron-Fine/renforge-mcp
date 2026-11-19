@@ -185,3 +185,61 @@ def test_menu_caption_shown_without_interaction_is_the_menu_dialogue(running_bri
 
     start_interact()
     assert running_bridge.client.observe(screenshot=False)["dialogue"] is None
+
+
+# --- ending lifecycle -------------------------------------------------------
+
+
+def _script_return_to_main_menu(renpy, monkeypatch):
+    context = types.SimpleNamespace(_main_menu=False, _menu=False)
+    monkeypatch.setattr(renpy, "context", lambda: context, raising=False)
+    monkeypatch.setattr(renpy, "context_nesting_level", lambda: 0, raising=False)
+    monkeypatch.setattr(renpy, "get_return_stack", lambda: [], raising=False)
+    monkeypatch.setattr(renpy, "get_filename_line", lambda: ("game/story.rpy", 42), raising=False)
+    for callback in renpy.config.statement_callbacks:
+        callback("return")
+    context._main_menu = True
+    return context
+
+
+def _ending_events(bridge):
+    return [event for event in bridge.events if event["type"] == "ending"]
+
+
+def test_ending_event_fires_at_the_main_menu_without_an_observe(running_bridge, monkeypatch):
+    renpy = running_bridge.renpy
+    _script_return_to_main_menu(renpy, monkeypatch)
+
+    renpy.config.start_interact_callbacks[0]()
+
+    bridge = _bridge()
+    assert [event["reason"] for event in _ending_events(bridge)] == ["script_return"]
+    assert running_bridge.globs["_renforge_game_lifecycle"]() == {"phase": "ended", "ending": {
+        "id": 1, "reason": "script_return", "statement": {"file": "game/story.rpy", "line": 42}}}
+    # A second menu interaction does not confirm it again.
+    renpy.config.start_interact_callbacks[0]()
+    assert len(_ending_events(bridge)) == 1
+
+
+def test_ending_survives_starting_a_new_game_before_any_observe(running_bridge, monkeypatch):
+    renpy = running_bridge.renpy
+    _script_return_to_main_menu(renpy, monkeypatch)
+    renpy.config.start_interact_callbacks[0]()
+    for callback in renpy.config.label_callbacks:
+        callback("start", False)
+
+    assert len(_ending_events(_bridge())) == 1
+
+
+def test_lifecycle_read_changes_nothing(running_bridge, monkeypatch):
+    """observe is read-only: reading the lifecycle neither confirms nor emits."""
+    renpy = running_bridge.renpy
+    _script_return_to_main_menu(renpy, monkeypatch)
+    bridge = _bridge()
+    pending = dict(bridge.pending_ending)
+
+    running_bridge.globs["_renforge_game_lifecycle"]()
+
+    assert bridge.pending_ending == pending
+    assert bridge.ending is None and bridge.ending_counter == 0
+    assert _ending_events(bridge) == []

@@ -6149,6 +6149,8 @@ def test_terminal_return_requires_menu_confirmation_and_is_latched(running_bridg
         callback("return")
     assert lifecycle() == {"phase": "playing", "ending": None}
     context._main_menu = True
+    # The main menu's first interaction confirms the ending; observe only reads it.
+    renpy.config.start_interact_callbacks[0]()
     ended = lifecycle()
     assert ended == {"phase": "ended", "ending": {
         "id": 1, "reason": "script_return", "statement": {"file": "game/story.rpy", "line": 42}}}
