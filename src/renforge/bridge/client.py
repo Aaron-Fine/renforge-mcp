@@ -6,6 +6,7 @@ import base64
 import hashlib
 import socket
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -111,6 +112,11 @@ class BridgeClient:
 
     def __init__(self, config: BridgeConfig):
         self._config = config
+
+    @property
+    def config(self) -> BridgeConfig:
+        """The bridge endpoint and token this client talks to."""
+        return self._config
 
     @classmethod
     def from_project(cls, project_root: str | Path, *, timeout: float = 5.0) -> "BridgeClient":
@@ -401,7 +407,17 @@ class BridgeClient:
             payload["drop"] = drop
         if input_value is not None:
             payload["input"] = input_value
-        reply = self.request("act", payload, deadline=deadline)
+        return self.send_act(payload, deadline=deadline)
+
+    def send_act(self, payload: Mapping[str, Any], *, deadline: float | None = None) -> dict:
+        """Send one act request with *payload* exactly as given.
+
+        For a caller that built and validated the payload itself; the keys are
+        the bridge's (``id``, ``input``, ``submit`` and so on, as :meth:`act`
+        builds them). The reply follows :meth:`act`'s contract: an error the
+        bridge did not mark ``ok: false`` leaves the outcome unknown.
+        """
+        reply = self.request("act", dict(payload), deadline=deadline)
         if reply.get("error") is not None and reply.get("ok") is not False:
             return {**reply, "ok": False, "action_outcome": "unknown", "retry_safe": False}
         return self._normalize_error_reply(reply)

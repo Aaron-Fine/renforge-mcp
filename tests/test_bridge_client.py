@@ -168,6 +168,29 @@ def test_bridge_client_dismiss_if_sends_the_pause_opt_in_only_when_asked():
     assert requests[1]["payload"] == {"interaction": 7}
 
 
+def test_bridge_client_sends_an_act_payload_as_given_with_acts_reply_contract():
+    token = "act-token"
+    requests = []
+    replies = iter([b'{"ok": true, "operation": "click"}\n', b'{"error": "lost"}\n'])
+
+    def send(payload):
+        def handler(line, conn):
+            requests.append(json.loads(line))
+            conn.sendall(next(replies))
+
+        thread, port, _sock = _start_test_server(handler)
+        reply = BridgeClient(BridgeConfig(port=port, token=token)).send_act(payload)
+        thread.join(timeout=1.0)
+        return reply
+
+    payload = {"interaction": 4, "id": "say/go", "observation_id": "o1", "text": "Alex", "submit": False}
+    assert send(payload) == {"ok": True, "operation": "click"}
+    assert requests[0]["command"] == "act" and requests[0]["payload"] == payload
+    # An error without ok:false leaves the outcome unknown, as act reports it.
+    assert send({"interaction": 4, "key": "a"}) == {
+        "error": "lost", "ok": False, "action_outcome": "unknown", "retry_safe": False}
+
+
 def test_bridge_client_save_slot_helper():
     token = "save-token"
     captured = {}
@@ -665,10 +688,10 @@ def test_from_project_builds_client_from_ready_bridge_info(tmp_path: Path) -> No
 
     client = BridgeClient.from_project(root, timeout=2.5)
 
-    assert client._config.host == "127.0.0.1"
-    assert client._config.port == payload["port"]
-    assert client._config.token == token
-    assert client._config.timeout == 2.5
+    assert client.config.host == "127.0.0.1"
+    assert client.config.port == payload["port"]
+    assert client.config.token == token
+    assert client.config.timeout == 2.5
 
 
 def test_from_project_rejects_starting_bridge_info(tmp_path: Path) -> None:

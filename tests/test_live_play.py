@@ -65,7 +65,7 @@ def test_progression_reports_a_screenshot_that_does_not_decode(monkeypatch) -> N
     }
 
     class _Client:
-        _config = type("Cfg", (), {"host": "127.0.0.1", "port": 9, "token": "tok"})()
+        config = type("Cfg", (), {"host": "127.0.0.1", "port": 9, "token": "tok"})()
 
         def observe(self, screenshot=False, deadline=None):
             return {**frame, **({"screenshot": "corrupt"} if screenshot else {})}
@@ -109,7 +109,7 @@ def test_the_stuck_pause_nudge_asks_the_bridge_to_accept_a_pending_pause(monkeyp
     dismisses: list[dict] = []
 
     class _Client:
-        _config = type("Cfg", (), {"host": "127.0.0.1", "port": 9, "token": "tok"})()
+        config = type("Cfg", (), {"host": "127.0.0.1", "port": 9, "token": "tok"})()
 
         def observe(self, screenshot=False, deadline=None):
             return dict(stuck)

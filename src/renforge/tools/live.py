@@ -1181,7 +1181,7 @@ def launch_game(
         "environment": session_obj.environment,
     }
     try:
-        result["bridge_port"] = session_obj.client._config.port
+        result["bridge_port"] = session_obj.client.config.port
     except Exception:
         pass
     if language is not None:
@@ -1569,7 +1569,7 @@ _crossed_after: dict[str, tuple[tuple[str, int, str], int]] = {}
 
 
 def _bridge_session(client: BridgeClient) -> tuple[str, int, str]:
-    config = client._config
+    config = client.config
     return (config.host, int(config.port), config.token)
 
 
@@ -1715,12 +1715,7 @@ def act(
         process = _owned_process(project_path, client)
         deadline = time.monotonic() + timeout
         try:
-            result = client.act(
-                interaction=interaction, control_id=control_id, text=text, key=key,
-                hold=hold, value=value, x=x, y=y, drop=drop, submit=submit,
-                session_id=session_id, observation_id=observation_id, deadline=deadline,
-                input_value=input_value,
-            )
+            result = client.send_act(payload, deadline=deadline)
         except BridgeError as exc:
             return {"ok": False, "action_outcome": "unknown", "retry_safe": False,
                     "error": str(exc), "observation_status": failure_status(exc, process),

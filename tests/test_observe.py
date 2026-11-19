@@ -59,20 +59,20 @@ class _FakeBridge:
 
     ``observe`` returns what *observe* gives (or raises what it raises); the
     default is to fail the test, for flows that never observe. ``poll_events``
-    returns no events unless *poll* answers for a cursor. ``act`` records its
-    arguments in ``acts`` and answers with *act*.
+    returns no events unless *poll* answers for a cursor. ``send_act`` records
+    each payload in ``acts`` and answers with *act(payload)*.
     """
 
     def __init__(self, token, *, observe=None, poll=None, act=None):
-        self._config = SimpleNamespace(host="127.0.0.1", port=1, token=token)
+        self.config = SimpleNamespace(host="127.0.0.1", port=1, token=token)
         self._observe = observe
         self._poll = poll
         self._act = act
         self.acts = []
 
-    def act(self, **kwargs):
-        self.acts.append(kwargs)
-        return self._act(**kwargs)
+    def send_act(self, payload, **_kwargs):
+        self.acts.append(payload)
+        return self._act(payload)
 
     def observe(self, **_kwargs):
         if self._observe is None:
@@ -704,7 +704,7 @@ def test_advance_until_returns_lines_queued_before_its_first_look(monkeypatch):
 
     class Client:
         def __init__(self):
-            self._config = type("Cfg", (), {"host": "127.0.0.1", "port": 9, "token": "tok"})()
+            self.config = type("Cfg", (), {"host": "127.0.0.1", "port": 9, "token": "tok"})()
 
         def observe(self, screenshot=False, deadline=None):
             return frames[min(index["i"], len(frames) - 1)]
@@ -806,7 +806,7 @@ def test_act_reports_followup_failure_without_retrying_successful_input(monkeypa
     from renforge.bridge.client import BridgeError
 
     client = _FakeBridge("followup", observe=lambda: _raise(BridgeError("disconnected")),
-                         act=lambda **_kwargs: {"ok": True, "operation": "click"})
+                         act=lambda _payload: {"ok": True, "operation": "click"})
     monkeypatch.setattr(live, "_client", lambda path: client)
     result = live.act("/tmp/action-flow", 4, "say/go", timeout=1)
     assert result["ok"] is True
@@ -819,7 +819,7 @@ def test_act_reports_followup_failure_without_retrying_successful_input(monkeypa
 def test_act_forwards_its_guard_then_progresses(monkeypatch):
     from renforge.tools import live
 
-    client = _FakeBridge("act-progress", act=lambda **_kwargs: {"ok": True})
+    client = _FakeBridge("act-progress", act=lambda _payload: {"ok": True})
     monkeypatch.setattr(live, "_client", lambda path: client)
     calls = []
 
@@ -830,7 +830,7 @@ def test_act_forwards_its_guard_then_progresses(monkeypatch):
 
     monkeypatch.setattr(live, "_advance_with_client", progress)
     result = live.act("/tmp/action-flow", 4, "say/go", screenshot=False, session_id="a", observation_id="old")
-    assert client.acts[0]["session_id"] == "a" and client.acts[0]["observation_id"] == "old"
+    assert client.acts == [{"interaction": 4, "id": "say/go", "session_id": "a", "observation_id": "old"}]
     assert result["observation_status"] == "ready"
     assert result["progress"]["stop"] == "choose"
     assert result["progress"]["steps"] == 2
@@ -849,7 +849,7 @@ def test_lost_action_reply_is_explicitly_uncertain(monkeypatch):
     from renforge.util.frames import FRAME_TIMEOUT
 
     class Client:
-        def act(self, **kwargs):
+        def send_act(self, payload, **kwargs):
             raise BridgeProtocolError("timed out waiting for a frame", code=FRAME_TIMEOUT)
 
     monkeypatch.setattr(live, "_client", lambda path: Client())
@@ -863,7 +863,7 @@ def test_stale_action_returns_classified_fresh_observation(monkeypatch):
     from renforge.tools import live
 
     class Client:
-        def act(self, **kwargs):
+        def send_act(self, payload, **kwargs):
             return {"ok": False, "error": "stale", "observation": _raw(interaction=5)}
 
     monkeypatch.setattr(live, "_client", lambda path: Client())
@@ -879,7 +879,7 @@ def test_an_unstable_refusal_reports_its_current_observation_as_ready(monkeypatc
     from renforge.tools import live
 
     class Client:
-        def act(self, **kwargs):
+        def send_act(self, payload, **kwargs):
             return {"ok": False, "error": "unstable",
                     "observation": _raw(stable=False, unstable_reason="pause", dialogue=None)}
 
