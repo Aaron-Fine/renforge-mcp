@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from types import SimpleNamespace
 
 import pytest
 
@@ -52,6 +53,34 @@ def _raw(**overrides):
 
 def _ids(snapshot, bucket="controls"):
     return [item["id"] for item in snapshot[bucket]]
+
+
+class _FakeBridge:
+    """A bridge client for host-side play tests, without a game.
+
+    ``observe`` returns what *observe* gives (or raises what it raises); the
+    default is to fail the test, for flows that never observe. ``poll_events``
+    returns no events unless *poll* answers for a cursor.
+    """
+
+    def __init__(self, token, *, observe=None, poll=None):
+        self._config = SimpleNamespace(host="127.0.0.1", port=1, token=token)
+        self._observe = observe
+        self._poll = poll
+
+    def observe(self, **_kwargs):
+        if self._observe is None:
+            raise AssertionError("this flow must not observe")
+        return self._observe()
+
+    def poll_events(self, cursor, **_kwargs):
+        if self._poll is not None:
+            return self._poll(cursor)
+        return {"ok": True, "events": [], "cursor": cursor}
+
+
+def _raise(error):
+    raise error
 
 
 def test_dialogue_what_drops_text_tags():
@@ -601,24 +630,18 @@ def test_screen_or_label_names_do_not_establish_ending():
 
 @pytest.mark.parametrize("ready,keep_frame", [(True, True), (False, False), (False, True)])
 def test_progression_requires_settled_current_frame_to_report_end(monkeypatch, ready, keep_frame):
-    from types import SimpleNamespace
     from renforge.tools import live
 
     ending = {"id": 1, "reason": "script_return", "statement": {"file": "game/story.rpy", "line": 42}}
     final = classify(_raw(lifecycle={"phase": "ended", "ending": ending}))
-
-    class Client:
-        _config = SimpleNamespace(host="127.0.0.1", port=1, token="ending-test")
-
-        def poll_events(self, cursor, **kwargs):
-            return {"ok": True, "events": [], "cursor": cursor}
 
     monkeypatch.setattr(live, "run_native_skip", lambda *args, **kwargs: {
         "ok": True, "stop": "end", "observation": final, "steps": 1})
     monkeypatch.setattr(live, "settle", lambda *args, **kwargs:
                         (final, "ready", None) if ready else
                         (final if keep_frame else None, "timeout", "no frame"))
-    result = live._advance_with_client("/tmp/ending-frame", Client(), max_steps=10, timeout=2, screenshot=False)
+    result = live._advance_with_client("/tmp/ending-frame", _FakeBridge("ending-test"), max_steps=10, timeout=2,
+                                       screenshot=False)
     assert result["stop"] == ("end" if ready else "timeout")
     assert result["ending"] == (ending if ready else None)
     if not ready and not keep_frame:
@@ -629,22 +652,16 @@ def test_progression_requires_settled_current_frame_to_report_end(monkeypatch, r
 @pytest.mark.parametrize('initial_stop,unclassified,expected', [
     ('none', False, 'choose'), ('none', True, 'unsupported'), ('max_steps', False, 'max_steps')])
 def test_progression_reports_settled_boundary_without_replacing_budget_stop(monkeypatch, initial_stop, unclassified, expected):
-    from types import SimpleNamespace
     from renforge.tools import live
 
     final = classify(_raw(interaction=2, elements=[_element(screen='branch_picker', text='Next')],
                           omitted={'unclassified': unclassified}))
 
-    class Client:
-        _config = SimpleNamespace(host='127.0.0.1', port=1, token='settled-boundary')
-
-        def poll_events(self, cursor, **kwargs):
-            return {'ok': True, 'events': [], 'cursor': cursor}
-
     monkeypatch.setattr(live, 'run_native_skip', lambda *args, **kwargs: {
         'ok': True, 'stop': initial_stop, 'observation': classify(_raw()), 'steps': 0})
     monkeypatch.setattr(live, 'settle', lambda *args, **kwargs: (final, 'ready', None))
-    result = live._advance_with_client('/tmp/settled-boundary', Client(), max_steps=10, timeout=2, screenshot=False)
+    result = live._advance_with_client('/tmp/settled-boundary', _FakeBridge('settled-boundary'), max_steps=10,
+                                       timeout=2, screenshot=False)
     assert result['stop'] == expected
     assert result['observation'] == final
     assert result['steps'] == 0
@@ -1146,21 +1163,13 @@ def test_dismiss_progression_stops_before_unclassified_input():
 
 @pytest.mark.parametrize('exit_code,expected', [(None, 'transport_error'), (0, 'exited'), (1, 'crash')])
 def test_process_failure_preserves_last_observation_without_confirming_an_end(monkeypatch, exit_code, expected):
-    from types import SimpleNamespace
     from renforge.tools import live
     from renforge.bridge.client import BridgeError
     from renforge.progression import failure_status
     last = classify(_raw(lifecycle={'phase': 'playing', 'ending': None}))
     process = SimpleNamespace(poll=lambda: exit_code)
 
-    class Client:
-        _config = SimpleNamespace(host='127.0.0.1', port=1, token='process-test')
-        def observe(self, **kwargs):
-            raise BridgeError('disconnected')
-        def poll_events(self, cursor, **kwargs):
-            return {'ok': True, 'events': [], 'cursor': cursor}
-
-    client = Client()
+    client = _FakeBridge('process-test', observe=lambda: _raise(BridgeError('disconnected')))
     monkeypatch.setitem(live._SESSIONS, live._key('/tmp/process-ending'), SimpleNamespace(client=client, process=process))
     monkeypatch.setattr(live, 'run_native_skip', lambda *args, **kwargs: {
         'ok': False, 'stop': 'transport_error', 'steps': 1, 'observation': last})
@@ -1176,22 +1185,17 @@ def test_process_failure_preserves_last_observation_without_confirming_an_end(mo
 
 def test_a_poll_that_fails_once_does_not_truncate_the_transcript(monkeypatch):
     """A busy main thread timed out one poll; the next resumed from the cursor."""
-    from types import SimpleNamespace
     from renforge.tools import live
     from renforge.bridge.client import BridgeError
     polls = []
 
-    class Client:
-        _config = SimpleNamespace(host='127.0.0.1', port=1, token='poll-test')
-        def observe(self, **kwargs):
-            return _raw(interaction=3, observation_id='same')
-        def poll_events(self, cursor, **kwargs):
-            polls.append(cursor)
-            if len(polls) == 1:
-                raise BridgeError('timed out waiting for a frame')
-            return {'ok': True, 'events': [], 'cursor': cursor + 1}
+    def poll(cursor):
+        polls.append(cursor)
+        if len(polls) == 1:
+            raise BridgeError('timed out waiting for a frame')
+        return {'ok': True, 'events': [], 'cursor': cursor + 1}
 
-    client = Client()
+    client = _FakeBridge('poll-test', observe=lambda: _raw(interaction=3, observation_id='same'), poll=poll)
     monkeypatch.setitem(live._SESSIONS, live._key('/tmp/poll-retry'), SimpleNamespace(client=client, process=None))
 
     def skip(_client, _fetch, *, between, **_kwargs):
