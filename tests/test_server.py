@@ -401,6 +401,9 @@ def test_session_saves_never_act_on_a_game_using_the_players_saves(tmp_path, mon
                    "save_locations": [str(state_saves)]}
     listed = json.loads(asyncio.run(_call(action="list")))
     assert listed["ok"] is True and listed["slots"] == [{"name": "player-slot"}]
+    if policy == "enforce":
+        # The slots shown are the session's; the hidden ones are the player's.
+        assert "session's own" in listed["player_slots_hidden"] and "player_slots" not in listed
     assert json.loads(asyncio.run(_call(action="save", slot="x")))["ok"] is True
     assert client.calls == ["list", "save"]
 

@@ -512,8 +512,8 @@ def build_wrappers(context):
                     result["player_slots"] = _player_slots(save_name)
                 else:
                     result["player_slots_hidden"] = (
-                        "the player's own slots are listed only with authorize=true "
-                        "under RENFORGE_POLICY=enforce")
+                        "slots are this session's own saves; the player's own slots are "
+                        "listed only with authorize=true under RENFORGE_POLICY=enforce")
             return result
 
         def _may_read_player_saves() -> bool:
