@@ -2476,29 +2476,34 @@ init python:
 
         return _renforge_with_focus_screen(focus, _run)
 
-    def _renforge_click_focus(focus, element=None):
-        """Click a focus center through shared synthetic input path."""
+    def _renforge_focus_point(focus, element=None):
+        """Where the pointer goes for a control, for a click or a hover.
+
+        The point the coverage probes or mask scan proved reaches it, else
+        the centre of its bounds, else of its focus rectangle, else Ren'Py's
+        test position for the focus.
+        """
+        if element is not None and element.get("click_point"):
+            return element["click_point"]["x"], element["click_point"]["y"]
+        if element is not None and element.get("bounds"):
+            bounds = element["bounds"]
+            return int(bounds["x"] + bounds["width"] // 2), int(bounds["y"] + bounds["height"] // 2)
         fx = getattr(focus, "x", None)
         fy = getattr(focus, "y", None)
         fw = getattr(focus, "w", None)
         fh = getattr(focus, "h", None)
-        if element is not None and element.get("bounds"):
-            bounds = element["bounds"]
-            x = int(bounds["x"] + bounds["width"] // 2)
-            y = int(bounds["y"] + bounds["height"] // 2)
-        elif fx is not None and fy is not None and fw and fh:
-            x = int(fx + fw // 2)
-            y = int(fy + fh // 2)
-        else:
-            find_position = getattr(getattr(renpy, "test", None), "testfocus", None)
-            find_position = getattr(find_position, "find_position", None)
-            if not callable(find_position):
-                raise RuntimeError("Ren'Py focus position API is unavailable")
-            px, py = find_position(focus, (None, None))
-            x, y = int(px), int(py)
+        if fx is not None and fy is not None and fw and fh:
+            return int(fx + fw // 2), int(fy + fh // 2)
+        find_position = getattr(getattr(renpy, "test", None), "testfocus", None)
+        find_position = getattr(find_position, "find_position", None)
+        if not callable(find_position):
+            raise RuntimeError("Ren'Py focus position API is unavailable")
+        px, py = find_position(focus, (None, None))
+        return int(px), int(py)
 
-        if element is not None and element.get("click_point"):
-            x, y = element["click_point"]["x"], element["click_point"]["y"]
+    def _renforge_click_focus(focus, element=None):
+        """Click a control at ``_renforge_focus_point`` through the shared pointer path."""
+        x, y = _renforge_focus_point(focus, element)
         try:
             _renforge_click_pointer(x, y)
         except Exception as exc:
@@ -2733,21 +2738,12 @@ init python:
             result["requested_coordinate_space"] = "screenshot"
         return result
 
-    def _renforge_move_mouse(focus):
-        fx = getattr(focus, "x", None)
-        fy = getattr(focus, "y", None)
-        fw = getattr(focus, "w", None)
-        fh = getattr(focus, "h", None)
-        if fx is not None and fy is not None and fw and fh:
-            x = int(fx + fw // 2)
-            y = int(fy + fh // 2)
-        else:
-            find_position = getattr(getattr(renpy, "test", None), "testfocus", None)
-            find_position = getattr(find_position, "find_position", None)
-            if not callable(find_position):
-                raise RuntimeError("Ren'Py focus position API is unavailable")
-            px, py = find_position(focus, (None, None))
-            x, y = int(px), int(py)
+    def _renforge_move_mouse(focus, element=None):
+        """Hover a control at the point a click would use (``_renforge_focus_point``).
+
+        Returns ``(x, y, method)``.
+        """
+        x, y = _renforge_focus_point(focus, element)
 
         interface = getattr(getattr(renpy, "display", None), "interface", None)
         if interface is not None:
@@ -2828,8 +2824,11 @@ init python:
                 }
         if not element.get("enabled", True):
             return {"ok": False, "error": "UI element is disabled", "element": element}
+        # As for a click: a covered control would hover whatever covers it.
+        if element.get("covered") or element.get("clickable") is False:
+            return {"ok": False, "error": "UI element has no eligible click", "element": element}
         try:
-            x, y, method = _renforge_move_mouse(focus)
+            x, y, method = _renforge_move_mouse(focus, element)
         except RuntimeError as exc:
             return {"ok": False, "error": str(exc), "element": element}
         result = {

@@ -242,3 +242,37 @@ def test_get_ui_element_bounds_builds_the_scene_inventory_once(running_bridge, m
     assert reply["painted_bounds_available"] is True, reply
     assert reply["painted_bounds"] == {"x": 204, "y": 106, "width": 80, "height": 14}
     assert len(calls) == 1
+
+
+# --- hover uses the click's point ------------------------------------------
+
+
+def test_hover_goes_to_the_point_a_click_would_use(running_bridge):
+    """Half the control is behind another one: hover the proven visible half."""
+    renpy = running_bridge.renpy
+    target = _FakeWidget("Partly visible")
+    upper = object()
+    renpy.display.focus.focus_list[:] = [_FakeFocus("", 10, 10, 100, 20, widget=target)]
+    renpy.display.render = types.SimpleNamespace(screen_render=types.SimpleNamespace(
+        focus_at_point=lambda x, y, _screen: (target if x < 45 else upper, None, None)))
+    element = running_bridge.client.list_ui_elements()[0]
+    clicked_x = element["click_point"]["x"]
+    assert clicked_x < 45
+    hovered = running_bridge.client.hover_element(id=element["id"])
+    assert hovered["ok"] is True, hovered
+    assert (hovered["x"], hovered["y"]) == (clicked_x, element["click_point"]["y"])
+
+
+def test_hover_refuses_a_control_with_no_reachable_point(running_bridge):
+    renpy = running_bridge.renpy
+    target = _FakeWidget("Hidden")
+    upper = object()
+    renpy.display.focus.focus_list[:] = [_FakeFocus("", 10, 10, 100, 20, widget=target)]
+    renpy.display.render = types.SimpleNamespace(screen_render=types.SimpleNamespace(
+        focus_at_point=lambda x, y, _screen: (upper, None, None)))
+    element = running_bridge.client.list_ui_elements()[0]
+    assert element["clickable"] is False
+    hovered = running_bridge.client.hover_element(id=element["id"])
+    assert hovered["ok"] is False
+    assert hovered["error"] == "UI element has no eligible click"
+    assert renpy._moves == []
