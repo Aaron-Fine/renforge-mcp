@@ -660,3 +660,20 @@ def test_list_directory_nofollow_reads_no_entry_metadata(
         "1-1-LT1.save",
         "2-1-LT1.save",
     ]
+
+
+def test_is_link_names_only_the_path_itself(tmp_path: Path) -> None:
+    from renforge.util.files import is_link
+
+    real = tmp_path / "real"
+    real.mkdir()
+    assert is_link(real) is False
+    assert is_link(tmp_path / "missing") is False
+    try:
+        (tmp_path / "linked").symlink_to(real, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+    assert is_link(tmp_path / "linked") is True
+    # A link above the path is not the path's own business.
+    (real / "child").mkdir()
+    assert is_link(tmp_path / "linked" / "child") is False

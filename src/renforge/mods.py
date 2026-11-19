@@ -19,8 +19,8 @@ from typing import Any, Callable
 from .lint import parse_lint_output
 from .util.files import (
     PrivatePathError,
-    _component_is_link,
     ensure_nofollow_directory,
+    is_link,
     read_text_nofollow,
     write_atomic,
 )
@@ -103,7 +103,7 @@ def _game_dir(project_root: str | Path) -> Path:
 def _is_link(path: Path) -> bool:
     """True for a symlink or, on Windows, a junction or other reparse point."""
     try:
-        return _component_is_link(path)
+        return is_link(path)
     except PrivatePathError:
         return True
 

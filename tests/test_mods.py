@@ -637,10 +637,8 @@ def test_remove_uses_the_reparse_aware_link_check(tmp_path, monkeypatch) -> None
     root = _project(tmp_path)
     mods.write_file(root, "demo", "sub/a.rpy", "label a:\n    return\n")
     junction = (root / "game" / "mods" / "demo" / "sub").resolve()
-    real_check = util_files._component_is_link
-    monkeypatch.setattr(
-        mods, "_component_is_link", lambda path: Path(path) == junction or real_check(path), raising=False
-    )
+    real_check = util_files.is_link
+    monkeypatch.setattr(mods, "is_link", lambda path: Path(path) == junction or real_check(path))
 
     result = mods.remove(root, "demo")
 
