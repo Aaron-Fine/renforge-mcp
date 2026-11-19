@@ -45,7 +45,7 @@ from .artifacts import (
 from .client import BridgeClient, BridgeConfig, BridgeProtocolError
 from .control import read_bridge_info, write_starting_bridge_info
 from ..editor import BridgeRuntimeProbe, EditorCoordinator, EditorEndpoint
-from ..util.files import PrivatePathError, ensure_private_directory
+from ..util.files import PrivatePathError, ensure_private_directory, is_link
 from ..session_registry import canonical_project_path
 from ..state import control_dir
 
@@ -514,15 +514,31 @@ def _editor_environment(
 
 
 def _existing_paths(root: Path) -> list[Path]:
-    """Every existing path under ``root``, so a partial delete can be reported."""
+    """Every existing path under ``root``, so a partial delete can be reported.
+
+    A linked folder is listed but never walked: rmtree removes the link, not
+    what it points to. That includes a Windows junction, which os.walk would
+    otherwise descend into (a whole user profile, say) on every stop.
+    """
     if not root.exists():
         return []
     paths: list[Path] = []
-    for current, _directories, filenames in os.walk(root):
+    for current, directories, filenames in os.walk(root):
         base = Path(current)
         paths.append(base)
         paths.extend(base / name for name in filenames)
+        linked = [name for name in directories if _is_link_or_unreadable(base / name)]
+        paths.extend(base / name for name in linked)
+        directories[:] = [name for name in directories if name not in linked]
     return paths
+
+
+def _is_link_or_unreadable(path: Path) -> bool:
+    """A link or junction, or a path whose attributes cannot be read: not walked."""
+    try:
+        return is_link(path)
+    except PrivatePathError:
+        return True
 
 
 def _deletion_receipt(project_root: Path, path: Path) -> str:

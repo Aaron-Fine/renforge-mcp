@@ -605,6 +605,29 @@ def test_partial_savedir_cleanup_still_reports_the_paths_it_removed(
     assert surviving_file.exists()
 
 
+def test_cleanup_listing_never_walks_into_a_junction_in_the_session(monkeypatch, tmp_path: Path) -> None:
+    """rmtree removes a junction without following it, so the listing for a partial-delete receipt must not walk it.
+
+    Windows os.walk does not treat a junction as a link; it stands in here
+    for one, as util.files.is_link reports it.
+    """
+    from renforge.bridge import launcher as launcher_module
+
+    session_root = tmp_path / "renforge-session-x"
+    junction = session_root / "home" / "profile-link"
+    (junction / "Documents").mkdir(parents=True)
+    (junction / "Documents" / "private.txt").write_text("not the session's", encoding="utf-8")
+    (session_root / "saves").mkdir()
+    (session_root / "saves" / "1-1-LT1.save").write_text("save", encoding="utf-8")
+    monkeypatch.setattr(launcher_module, "is_link", lambda path: Path(path) == junction, raising=False)
+
+    listed = set(launcher_module._existing_paths(session_root))
+
+    assert junction in listed
+    assert session_root / "saves" / "1-1-LT1.save" in listed
+    assert not any(path.is_relative_to(junction) and path != junction for path in listed)
+
+
 def test_close_waits_for_a_writer_holding_the_session_open(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
