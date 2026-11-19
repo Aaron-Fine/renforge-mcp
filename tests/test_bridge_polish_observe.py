@@ -1,4 +1,4 @@
-"""Observe-side fixes in bridge.rpy, run against the fake runtime of test_bridge_runtime.
+"""Observe-side fixes in bridge.rpy, run against the fake runtime of bridge_harness.
 
 Each test pins one behaviour: who a line belongs to, when the last line still
 counts as the current dialogue, and how controls are classified.
@@ -9,8 +9,7 @@ from __future__ import annotations
 import sys
 import types
 
-from test_bridge_runtime import _arm_stable_interaction, _completed_render
-from test_bridge_runtime import running_bridge  # noqa: F401 - shared bridge fixture
+from bridge_harness import _arm_stable_interaction, _completed_render
 
 
 class _Character:

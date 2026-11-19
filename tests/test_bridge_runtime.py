@@ -18,34 +18,21 @@ import types
 from pathlib import Path
 
 import pytest
+from bridge_harness import (
+    _arm_stable_interaction,
+    _completed_render,
+    _exec_bridge_with_env,
+    _fake_renpy,
+    _FakeFocus,
+    _FakeInput,
+    _FakeWidget,
+    _load_bridge_body,
+    _native_skip_setup,
+    _seed_starting_bridge,
+)
 
 from renforge.bridge.client import BridgeClient, BridgeConfig, BridgeProtocolError
 from renforge.state import control_dir, project_state_dir
-
-
-def _load_bridge_body():
-    from renforge.bridge.launcher import bridge_payload
-
-    lines = bridge_payload().decode("utf-8").splitlines()
-    assert lines[0].strip() == "init python:"
-    return "\n".join(line[4:] if line.startswith("    ") else line for line in lines[1:])
-
-
-class _GameCharacter:
-    """A game's ``define id = Character("Id")``; calling it would say a line."""
-
-    def __init__(self, name):
-        self.name = name
-
-    def __call__(self, what, *args, **kwargs):
-        raise AssertionError("the bridge called the game's %r Character" % self.name)
-
-
-def _game_store_names():
-    """Store variables real games define over builtins and the bridge's imports."""
-    names = {name: _GameCharacter(name) for name in ("id", "max", "min", "len", "type", "map", "next", "all")}
-    names.update(types=["sword", "shield"], json={"save": 1})
-    return names
 
 
 def _load_editor_body():
@@ -60,46 +47,6 @@ def _load_editor_body():
             break
         body.append(line[4:] if line.startswith("    ") else line)
     return "\n".join(body)
-
-
-class _FakeWidget:
-    def __init__(self, text):
-        self._text = text
-
-    def _tts_all(self, raw=False):
-        return self._text
-
-
-class _FakeRect:
-    def __init__(self, left, top, width, height):
-        self.left = left
-        self.top = top
-        self.width = width
-        self.height = height
-
-
-class _FakeSurface:
-    def __init__(self, rect):
-        self._rect = rect
-
-    def get_bounding_rect(self, min_alpha=1):
-        return self._rect
-
-
-class _FakeImageButtonWidget:
-    state_children = True
-
-    def __init__(self, text, alpha_rect=(4, 6, 80, 14)):
-        self._text = text
-        self._alpha_rect = _FakeRect(*alpha_rect)
-        self._child = object()
-        self.style = types.SimpleNamespace(prefix="idle_")
-
-    def _tts_all(self, raw=False):
-        return self._text
-
-    def get_child(self):
-        return self._child
 
 
 class _FakeTextDisplayable:
@@ -147,290 +94,6 @@ class _FakeChildrenButtonDisplayable:
         self.style = types.SimpleNamespace(**style)
 
 
-class _FakeFocus:
-    def __init__(self, text, x, y, w, h, widget=None):
-        if widget is not None:
-            self.widget = widget
-        else:
-            self.widget = _FakeWidget(text) if text is not None else None
-        self.x, self.y, self.w, self.h = x, y, w, h
-
-
-class _FakeInput:
-    pass
-
-
-def _fake_renpy(store):
-    config = types.SimpleNamespace(
-        basedir="",
-        label_callbacks=[],
-        periodic_callbacks=[],
-        all_character_callbacks=[],
-        statement_callbacks=[],
-        exception_handler=None,
-    )
-    renpy = types.ModuleType("renpy")
-    renpy.store = store
-    renpy.config = config
-    renpy.screenshot_to_bytes = lambda size: b"\x89PNG\r\n_fake_frame_"
-    renpy.get_showing_tags = lambda: ["bg", "eileen"]
-    renpy._queued_events = []
-    renpy._pygame_events = []
-    renpy._ran_actions = []
-    renpy._invoked = []
-    renpy.exports = types.SimpleNamespace(
-        queue_event=lambda name, **kw: renpy._queued_events.append(name)
-    )
-    renpy.run = lambda action, *a, **k: renpy._ran_actions.append(action) or action
-    renpy.invoke_in_main_thread = lambda fn, *a, **k: renpy._invoked.append((fn, a, k)) or fn(*a, **k)
-    renpy.reload_script = lambda: renpy._invoked.append(("reload_script",))
-    renpy.restart_interaction = lambda: renpy._invoked.append(("restart_interaction",))
-    renpy.quit = lambda: renpy._invoked.append(("quit",))
-
-    # Minimal focus + input system mirroring Ren'Py's runtime shape.
-    load_button = _FakeImageButtonWidget("Load icon")
-    focus_list = [
-        _FakeFocus(None, None, None, None, None),  # the "default" whole-screen focus
-        _FakeFocus("Alpha choice", 10, 10, 100, 20),
-        _FakeFocus("Beta choice", 10, 40, 100, 20),
-        _FakeFocus("Load icon", 200, 100, 100, 30, widget=load_button),
-    ]
-    renpy._focused_widget = None
-    renpy.display = types.SimpleNamespace(
-        focus=types.SimpleNamespace(
-            focus_list=focus_list,
-            get_focused=lambda: renpy._focused_widget,
-        ),
-        behavior=types.SimpleNamespace(Input=_FakeInput),
-        interface=types.SimpleNamespace(mouse_focused=False, ignore_touch=False),
-    )
-    renpy._clicks = []
-    renpy._moves = []
-
-    def _move_mouse(x, y):
-        renpy._moves.append((x, y))
-        renpy.test.testmouse.mouse_pos = (x, y)
-
-    def _click_mouse(button, x, y):
-        renpy._clicks.append((button, x, y))
-
-    def _find_focus(pattern, raw=False):
-        for focus in focus_list:
-            if focus.widget is None:
-                continue
-            if pattern.lower() in focus.widget._tts_all(raw).lower():
-                return focus
-        return None
-
-    def _find_position(focus, _position):
-        return (focus.x + focus.w // 2, focus.y + focus.h // 2)
-
-    renpy.test = types.SimpleNamespace(
-        testfocus=types.SimpleNamespace(find_focus=_find_focus, find_position=_find_position),
-        testmouse=types.SimpleNamespace(
-            click_mouse=_click_mouse,
-            move_mouse=_move_mouse,
-            mouse_pos=None,
-            mouse_buttons=[False, False, False],
-        ),
-    )
-
-    # Displayable bounds + live repositioning. `_shown` maps a tag to its
-    # rendered [x, y, w, h]; show() mutates it from the Transform's placement so
-    # a reposition round-trips through get_image_bounds like the real engine.
-    renpy._shown = {"eileen": [400, 300, 200, 400]}
-    renpy.config.screen_width = 1920
-    renpy.config.screen_height = 1080
-
-    def _get_image_bounds(tag, layer=None):
-        box = renpy._shown.get(tag)
-        return tuple(box) if box else None
-
-    renpy.get_image_bounds = _get_image_bounds
-
-    class _FakeTransform:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    renpy.store.Transform = _FakeTransform
-
-    def _show(name, at_list=None, layer=None, **kwargs):
-        tag = str(name).split()[0]
-        box = renpy._shown.setdefault(tag, [0, 0, 100, 100])
-        for transform in at_list or []:
-            placement = getattr(transform, "kwargs", {})
-            if "xpos" in placement:
-                box[0] = int(placement["xpos"])
-            if "ypos" in placement:
-                box[1] = int(placement["ypos"])
-
-    renpy.show = _show
-
-    def _render_to_surface(child, width=None, height=None, resize=True):
-        for focus in focus_list:
-            widget = getattr(focus, "widget", None)
-            if widget is None or not callable(getattr(widget, "get_child", None)):
-                continue
-            if (widget.get_child() is child or widget in getattr(child, "render_of", ())) and hasattr(widget, "_alpha_rect"):
-                return _FakeSurface(widget._alpha_rect)
-        return _FakeSurface(_FakeRect(0, 0, 0, 0))
-
-    renpy.render_to_surface = _render_to_surface
-    return renpy
-
-
-@pytest.fixture
-def running_bridge(tmp_path, monkeypatch):
-    import stat
-
-    from renforge.bridge.control import read_bridge_info, write_starting_bridge_info
-
-    project_root = tmp_path.resolve(strict=True)
-    session_id = "a" * 32
-    token = "b" * 64
-
-    write_starting_bridge_info(project_root, session_id=session_id, token=token)
-
-    monkeypatch.setenv("RENFORGE_BRIDGE_TOKEN", token)
-    monkeypatch.setenv("RENFORGE_BRIDGE_SESSION_ID", session_id)
-    monkeypatch.setenv("RENFORGE_BRIDGE_PROJECT_ROOT", str(project_root))
-    monkeypatch.setenv("RENFORGE_BRIDGE_PORT", "0")
-    monkeypatch.setenv("RENFORGE_BRIDGE_CONTROL_DIR", str(control_dir(project_root)))
-
-    store = types.SimpleNamespace(score=7, player_name="Rin", _hidden="x")
-
-    class _QuickSave:
-        def __call__(self):
-            return ("QuickSave",)
-
-    class _QuickLoad:
-        def __call__(self, confirm=True):
-            return ("QuickLoad", confirm)
-
-    store.QuickSave = _QuickSave()
-    store.QuickLoad = _QuickLoad()
-
-    renpy = _fake_renpy(store)
-    renpy.config.basedir = str(project_root)
-
-    class _FakeEvent:
-        def __init__(self, event_type, attributes=None):
-            self.type = event_type
-            for name, value in (attributes or {}).items():
-                setattr(self, name, value)
-
-    pygame = types.ModuleType("pygame_sdl2")
-    pygame.TEXTINPUT = 1
-    pygame.KEYDOWN = 2
-    pygame.KEYUP = 3
-    pygame.MOUSEMOTION = 6
-    pygame.MOUSEBUTTONDOWN = 4
-    pygame.MOUSEBUTTONUP = 5
-    pygame.K_F1 = 101
-    pygame.K_F2 = 102
-    pygame.K_F3 = 103
-    pygame.K_F4 = 104
-    pygame.K_F5 = 105
-    pygame.K_F6 = 106
-    pygame.K_F7 = 107
-    pygame.K_F8 = 108
-    pygame.K_F9 = 109
-    pygame.K_F10 = 110
-    pygame.K_F11 = 111
-    pygame.K_F12 = 112
-    pygame.KMOD_NONE = 0
-    pygame.event = types.SimpleNamespace(
-        Event=_FakeEvent,
-        post=lambda event: renpy._pygame_events.append(event),
-    )
-    monkeypatch.setitem(__import__("sys").modules, "pygame_sdl2", pygame)
-
-    # Bridge keeps runtime state on a sys.modules entry so saves stay picklable.
-    import sys
-
-    sys.modules.pop("_renforge_runtime", None)
-
-    class RevertableObject(object):
-        """Ren'Py's store `object`: its changes are logged for rollback and saved."""
-
-    globs = {"__name__": "bridge_rpy", "renpy": renpy, "object": RevertableObject, **_game_store_names()}
-    exec(compile(_load_bridge_body(), "bridge.rpy", "exec"), globs)
-    # Runtime state is never a revertable object, so saves never pickle it.
-    assert not isinstance(sys.modules["_renforge_runtime"].bridge, RevertableObject)
-    # The bridge never replaces a game's own store variables.
-    assert globs["types"] == ["sword", "shield"] and globs["json"] == {"save": 1}
-
-    runtime = sys.modules.get("_renforge_runtime")
-    bridge = getattr(runtime, "bridge", None)
-    assert bridge is not None, "bridge did not start"
-
-    # Stand in for Ren'Py's main thread: keep draining the request queue.
-    stop = threading.Event()
-
-    def pump():
-        while not stop.is_set():
-            globs["renforge_drain_bridge"]()
-            time.sleep(0.005)
-
-    pump_thread = threading.Thread(target=pump, daemon=True)
-    pump_thread.start()
-
-    # Wait for the listener to publish ready metadata under the private control path.
-    info_path = control_dir(project_root) / "bridge.json"
-    ready_info = None
-    for _ in range(300):
-        try:
-            ready_info = read_bridge_info(
-                project_root,
-                require_ready=True,
-                expected_session_id=session_id,
-            )
-            break
-        except Exception:
-            pass
-        time.sleep(0.01)
-    assert ready_info is not None, "bridge did not publish valid ready metadata"
-    assert ready_info.session_id == session_id
-    assert ready_info.token == token
-    assert ready_info.project_root == str(project_root)
-    assert ready_info.host == "127.0.0.1"
-    assert 1 <= ready_info.port <= 65535
-    # POSIX private mode is 0600. Windows st_mode is not a real Unix mode
-    # (often 0o666); ownership is enforced via the protected DACL instead.
-    import os
-
-    if os.name != "nt":
-        mode = stat.S_IMODE(info_path.lstat().st_mode)
-        assert mode == 0o600
-    else:
-        from renforge.util.files import _win_validate_protected_dacl
-
-        _win_validate_protected_dacl(info_path)
-    assert not info_path.is_symlink()
-    assert not (project_state_dir(project_root) / "bridge.json").exists()
-
-    client = BridgeClient(
-        BridgeConfig(
-            host=ready_info.host,
-            port=ready_info.port,
-            token=ready_info.token,
-        )
-    )
-    env = types.SimpleNamespace(
-        client=client,
-        store=store,
-        renpy=renpy,
-        globs=globs,
-        project_root=project_root,
-        session_id=session_id,
-        token=token,
-    )
-    yield env
-
-    stop.set()
-    bridge.stop.set()
-
-
 def test_listener_listens_before_publishing_ready_metadata() -> None:
     """Clients must never observe a ready record before accept() can succeed."""
     body = _load_bridge_body()
@@ -441,50 +104,6 @@ def test_listener_listens_before_publishing_ready_metadata() -> None:
     assert listener.index("server.listen(5)") < listener.index(
         "if not _renforge_publish_ready"
     )
-
-
-def _seed_starting_bridge(project_root: Path, *, session_id: str, token: str) -> None:
-    from renforge.bridge.control import write_starting_bridge_info
-
-    write_starting_bridge_info(project_root, session_id=session_id, token=token)
-
-
-def _exec_bridge_with_env(tmp_path, monkeypatch, *, env: dict[str, str], seed_starting=True):
-    import io
-    import sys
-
-    project_root = tmp_path.resolve(strict=True)
-    session_id = env.get("RENFORGE_BRIDGE_SESSION_ID", "a" * 32)
-    token = env.get("RENFORGE_BRIDGE_TOKEN", "b" * 64)
-    if seed_starting:
-        _seed_starting_bridge(project_root, session_id=session_id if len(session_id) == 32 else "a" * 32, token=token if len(token) == 64 else "b" * 64)
-
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    if "RENFORGE_BRIDGE_PROJECT_ROOT" not in env:
-        monkeypatch.setenv("RENFORGE_BRIDGE_PROJECT_ROOT", str(project_root))
-    if "RENFORGE_BRIDGE_PORT" not in env:
-        monkeypatch.setenv("RENFORGE_BRIDGE_PORT", "0")
-    if "RENFORGE_BRIDGE_CONTROL_DIR" not in env:
-        monkeypatch.setenv("RENFORGE_BRIDGE_CONTROL_DIR", str(control_dir(project_root)))
-
-    store = types.SimpleNamespace()
-    renpy = _fake_renpy(store)
-    renpy.config.basedir = str(project_root)
-
-    pygame = types.ModuleType("pygame_sdl2")
-    pygame.event = types.SimpleNamespace(Event=object, post=lambda *_a, **_k: None)
-    monkeypatch.setitem(sys.modules, "pygame_sdl2", pygame)
-    sys.modules.pop("_renforge_runtime", None)
-
-    stderr = io.StringIO()
-    monkeypatch.setattr(sys, "stderr", stderr)
-
-    globs = {"__name__": "bridge_rpy", "renpy": renpy}
-    exec(compile(_load_bridge_body(), "bridge.rpy", "exec"), globs)
-    runtime = sys.modules.get("_renforge_runtime")
-    bridge = getattr(runtime, "bridge", None)
-    return project_root, bridge, stderr
 
 
 def test_bridge_publishes_ready_under_private_control_path(running_bridge):
@@ -1772,23 +1391,6 @@ def test_say_tags_are_removed_before_the_snapshot(running_bridge):
     _showing(renpy, ScreenDisplayable({"who": "JACKIE", "what": "{i}Hello{/i}{w=2.0}{nw}"}))
     snapshot = classify(running_bridge.client.observe(screenshot=False))
     assert snapshot["dialogue"] == {"who": "JACKIE", "what": "Hello"}
-
-
-def _arm_stable_interaction(running_bridge, generation=1):
-    import sys
-
-    renpy = running_bridge.renpy
-    renpy.game = types.SimpleNamespace(
-        context=lambda: types.SimpleNamespace(
-            interacting=True,
-            scene_lists=types.SimpleNamespace(layers={}),
-        )
-    )
-    renpy.display.interface.ongoing_transition = {}
-    renpy.display.focus.focus_list[:] = []
-    bridge = sys.modules["_renforge_runtime"].bridge
-    bridge.observe_generation = generation
-    return bridge
 
 
 def test_act_runs_the_button_action_and_image_only_splits_siblings(running_bridge):
@@ -6209,24 +5811,6 @@ def test_native_skip_stops_at_lifecycle_boundaries(running_bridge, monkeypatch, 
     assert renpy.store._preferences.skip_unseen is False
 
 
-def _native_skip_setup(running_bridge, monkeypatch):
-    import sys
-    bridge = sys.modules["_renforge_runtime"].bridge
-    renpy = running_bridge.renpy
-    renpy.config.skipping = None
-    renpy.config.allow_skipping = True
-    renpy.store._skipping = True
-    renpy.store._preferences = types.SimpleNamespace(skip_unseen=False, skip_after_choices=True)
-    raw = {"ok": True, "interaction": bridge.observe_generation, "stable": True,
-           "session_id": bridge.session_id, "observation_id": "initial", "screens": [],
-           "elements": [], "say_dismiss": "dismiss", "dialogue": None}
-    monkeypatch.setitem(running_bridge.globs, "_renforge_observe_raw", lambda *a, **k: dict(raw))
-    reply = running_bridge.client.progression("start", "owner", interaction=raw["interaction"],
-        session_id=bridge.session_id, observation_id="initial", max_steps=2, timeout=10)
-    assert reply["ok"], reply
-    return bridge, renpy, raw
-
-
 @pytest.mark.parametrize("kind", ["choice", "input", "custom"])
 def test_bounded_native_skip_stops_at_decisions_and_restores_preferences(running_bridge, monkeypatch, kind):
     bridge, renpy, raw = _native_skip_setup(running_bridge, monkeypatch)
@@ -6452,13 +6036,6 @@ def test_delivered_frame_clicks_and_guards(running_bridge):
         refused = running_bridge.client.click_at(x, y, coordinate_space='screenshot', expected_frame_id=frame)
         assert refused['ok'] is False, refused
     assert len(running_bridge.renpy._clicks) == count
-
-
-def _completed_render(width, height, widgets=(), children=(), reverse=None, **extra):
-    # A leaf stands for an image or solid: it draws through its mesh.
-    extra.setdefault("mesh", not children)
-    return types.SimpleNamespace(width=width, height=height, render_of=list(widgets),
-        children=list(children), reverse=reverse, **extra)
 
 
 def test_completed_render_geometry_composes_clipping_rotation_and_repeated_placements(running_bridge):

@@ -12,9 +12,17 @@ import types
 
 import pytest
 from renforge.state import control_dir, project_state_dir
-from test_bridge_explain import _node, _screen, _script_node, _set_screens, _set_script
-from test_bridge_runtime import _arm_stable_interaction, _exec_bridge_with_env, _FakeFocus, _native_skip_setup
-from test_bridge_runtime import running_bridge  # noqa: F401 - shared bridge fixture
+from bridge_harness import (
+    _arm_stable_interaction,
+    _exec_bridge_with_env,
+    _FakeFocus,
+    _native_skip_setup,
+    _node,
+    _screen,
+    _script_node,
+    _set_screens,
+    _set_script,
+)
 
 
 # --- values: raw conditions, not the shortened entry text ------------------
