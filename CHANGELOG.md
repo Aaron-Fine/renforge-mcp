@@ -72,8 +72,9 @@ versioning.
 - `renforge_act` on an id the screen does not list adds a `message` and the
   current observation to `error="missing"`.
 - `renforge_info` lists the server's `toolsets` and, when `play` is listed,
-  the play loop's steps; it leaves out the Live Editor block when the `editor`
-  toolset is not listed. The server instructions likewise name only the
+  the play loop's steps; it leaves out the Live Editor block unless both the
+  `editor` and `live` toolsets are listed, since its workflow launches with
+  `renforge_launch`. The server instructions likewise name only the
   listed tools, and say what each `forward` value asks of the agent.
 - The `renforge_observe` description leads with `forward` and what to call
   next. It said the PNG's SHA-256 is `frame_id` (it is `frame_hash`) and that
@@ -86,6 +87,11 @@ versioning.
 - RenForge keeps its per-project state outside the game folder, under
   `RENFORGE_STATE_DIR` or `~/.local/state/renforge/projects/<name>-<hash>/`.
   Opening or launching a project no longer creates `<project>/.renforge`.
+  A Live Editor save, undo or rollback of a game on another filesystem than
+  the state folder (a second drive) stages its exchange files in
+  `<project>/.renforge/editor-exchange/` instead, because the atomic exchange
+  cannot cross filesystems, and removes them when it is done; a conflict
+  keeps them as evidence.
 - Launches in a Wayland session use `SDL_VIDEODRIVER=wayland,x11` so games
   start while the screen is locked. The startup deadline defaults to 180 s and
   reads `RENFORGE_STARTUP_TIMEOUT`.
@@ -470,6 +476,11 @@ versioning.
   that is not an integer or an empty choice `text`, an unknown control action,
   and a translation `language` that is not a name. `{"warp": ""}` on
   `/api/live/launch` no longer restarts the running game.
+- `renforge_generate_translations`, `renforge_translation_stats` and
+  `renforge_export_dialogue` refuse a `language` that is not a Ren'Py language
+  name with `LANGUAGE_INVALID` before running Ren'Py, which joins it into
+  `game/tl/<language>/` unchecked, so `../..` wrote translation files outside
+  the project. The dashboard's translation routes use the same check.
 
 ## [0.7.6] - 2026-11-18
 

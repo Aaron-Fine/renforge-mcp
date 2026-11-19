@@ -5,6 +5,7 @@ import base64
 import os
 from contextlib import asynccontextmanager
 import json
+import math
 import string
 import threading
 import webbrowser
@@ -22,20 +23,18 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from .. import session_registry
 from ..bridge.launcher import normalize_language
-from ..launch_env import LaunchError
-from ..tools import live
-from ..tools import project_ops
+from ..launch_env import AUDIO_STRATEGIES, LAUNCHABLE_DISPLAY_STRATEGIES, LaunchError
 from ..lint import run_lint
-from ..interaction import _real_number
-from ..launch_env import AUDIO_STRATEGIES, DISPLAY_STRATEGIES
 from ..policy import CONTROL_ACTIONS
 from ..save_isolation import STATE_MODE_TOKENS, launch_state_mode_error
+from ..state import project_state_dir
+from ..tools import live
+from ..tools import project_ops
 from .activity import read_recent_activity, tail_activity
 from .graph import build_story_map, resolve_game_file_path, resolve_warp_target
 from .errors import error_response
 from .poller import poll_bridge
 from .ws import WebSocketHub, build_ws_envelope
-from ..state import project_state_dir
 
 
 def _renforge_version() -> str:
@@ -547,46 +546,41 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             return _unauthorized(request)
         return JSONResponse(project_ops.languages(str(runtime.root)))
 
-    async def translation_stats(request: Request):
-        if not await _check_token(request):
-            return _unauthorized(request)
-        language = request.query_params.get("language")
+    def _translation_language(request: Request) -> tuple[str, JSONResponse | None]:
+        """Read the ``language`` query parameter, or a 400 when it is missing or not a name."""
+        from ..translation import invalid_language
+
+        language = request.query_params.get("language") or ""
         if not language:
-            return error_response(
+            return language, error_response(
                 code="translation_language_missing",
                 error="language is required",
                 status_code=400,
                 details={"parameter": "language"},
             )
-        if not language.isidentifier():
-            # It names a folder under game/tl; "/" or ".." would leave it.
-            return error_response(
+        if invalid_language(language):
+            return language, error_response(
                 code="translation_language_invalid",
                 error="language must be a Ren'Py language name",
                 status_code=400,
                 details={"language": language},
             )
+        return language, None
+
+    async def translation_stats(request: Request):
+        if not await _check_token(request):
+            return _unauthorized(request)
+        language, refused = _translation_language(request)
+        if refused is not None:
+            return refused
         return JSONResponse(project_ops.translation_stats(str(runtime.root), language))
 
     async def translation_strings(request: Request):
         if not await _check_token(request):
             return _unauthorized(request)
-        language = request.query_params.get("language")
-        if not language:
-            return error_response(
-                code="translation_language_missing",
-                error="language is required",
-                status_code=400,
-                details={"parameter": "language"},
-            )
-        if not language.isidentifier():
-            # It names a folder under game/tl; "/" or ".." would leave it.
-            return error_response(
-                code="translation_language_invalid",
-                error="language must be a Ren'Py language name",
-                status_code=400,
-                details={"language": language},
-            )
+        language, refused = _translation_language(request)
+        if refused is not None:
+            return refused
         from ..translation import list_translation_strings
         return JSONResponse({"ok": True, "strings": list_translation_strings(runtime.root, language)})
 
@@ -751,7 +745,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 status_code=400,
                 details={"version": version},
             )
-        for field, allowed in (("display", DISPLAY_STRATEGIES), ("audio", AUDIO_STRATEGIES)):
+        for field, allowed in (("display", LAUNCHABLE_DISPLAY_STRATEGIES), ("audio", AUDIO_STRATEGIES)):
             value = payload.get(field, "auto")
             if not isinstance(value, str) or value.strip().casefold() not in allowed:
                 return error_response(
@@ -769,7 +763,9 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 details={"cleanup_on_stop": cleanup_on_stop},
             )
         timeout = payload.get("timeout")
-        if timeout is not None and not _real_number(timeout):
+        if timeout is not None and (
+            isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout)
+        ):
             return error_response(
                 code="launch_timeout_invalid",
                 error="timeout must be a number",

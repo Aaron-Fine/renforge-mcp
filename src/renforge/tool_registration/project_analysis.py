@@ -64,7 +64,10 @@ def build_wrappers(context):
                 ],
                 "guide": "docs/MCP.md#look-then-act",
             }
-        if "editor" in toolsets:
+        # The workflow launches through renforge_launch (live) and edits
+        # through renforge_editor (editor); renforge_session launches
+        # without the editor. Only point at it when both are listed.
+        if "editor" in toolsets and "live" in toolsets:
             payload["live_editor"] = {
                 "enabled_by_default": True,
                 "launch_tool": "renforge_launch",

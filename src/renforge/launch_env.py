@@ -73,6 +73,8 @@ class EnvironmentCapabilities:
 
 
 DISPLAY_STRATEGIES = frozenset({"auto", "native", "xvfb", "external", "none"})
+# "none" is accepted as a name but every launch refuses it: Ren'Py needs a display.
+LAUNCHABLE_DISPLAY_STRATEGIES = DISPLAY_STRATEGIES - {"none"}
 AUDIO_STRATEGIES = frozenset({"auto", "native", "dummy", "none"})
 
 def _detect_environment_name(env: dict[str, str] | None = None) -> str:

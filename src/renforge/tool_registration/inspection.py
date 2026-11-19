@@ -6,6 +6,8 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from ..util.files import receipt_path
+
 TOOL_NAMES = (
     "renforge_diff_screenshots",
     "renforge_scene_tree",
@@ -161,6 +163,12 @@ def build_wrappers(context):
         statements, ``screen`` its displayable tree, and ``id`` (a control id
         from ``renforge_observe``) or ``source`` (a ``file:line`` from observe or
         an input candidate) the statement there with its enclosing conditions.
+        ``search`` finds case-insensitive text in every loaded statement
+        (dialogue, Python source, conditions, menu choices, jump targets).
+        ``variables`` reads named store variables or dotted fields as data
+        (the one selector that returns game state rather than code); nothing
+        is called or evaluated. ``limit`` (1-2000) bounds the statements,
+        nodes, or index entries returned.
         """
         return _log_tool_call(
             name="renforge_explain",
@@ -330,7 +338,13 @@ def build_wrappers(context):
         crosshair_y: int = -1,
         rulers: bool = False,
     ) -> dict:
-        """Persist a screenshot under the project's controlled capture directory."""
+        """Persist a screenshot in RenForge's capture folder (``<state>/captures/``).
+
+        ``path`` is the PNG's absolute path. ``relative_path`` and
+        ``files_touched`` follow the receipt rule: project-relative inside the
+        project, else absolute, so with the default state folder
+        ``relative_path`` equals ``path``.
+        """
         def _capture() -> dict:
             from io import BytesIO
             from PIL import Image
@@ -354,11 +368,9 @@ def build_wrappers(context):
             project_root, target = write_project_capture(project_path, name, png)
             with Image.open(BytesIO(png)) as image:
                 size = {"width": image.width, "height": image.height}
-            # Captures live in RenForge's state folder, normally outside the
-            # project; the receipt then names the absolute path (#116 rules).
-            from ..tools.live import _project_relative_path
-
-            relative_path = _project_relative_path(project_root, target)
+            # Receipts name a file outside the project by its absolute path,
+            # and the capture folder is normally outside it (the state folder).
+            relative_path = receipt_path(project_root, target)
             return {"ok": True, "name": name, "path": str(target),
                     "relative_path": relative_path,
                     "files_touched": [relative_path],

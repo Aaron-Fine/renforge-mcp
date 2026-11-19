@@ -88,3 +88,32 @@ def test_info_and_instructions_name_only_the_listed_tools(monkeypatch):
     assert "renforge_mod" not in play_only and "toolsets keep the earlier tools" not in play_only
     everything = _instructions(list(TOOLSETS))
     assert "renforge_mod" in everything and "Live Editor" in everything
+
+
+@pytest.mark.parametrize(
+    ("toolsets", "listed"),
+    [("play,editor", False), ("live,project", False), ("editor,live,project", True), ("all", True)],
+)
+def test_info_lists_the_live_editor_only_when_its_workflow_tools_are_listed(monkeypatch, toolsets, listed):
+    """The live_editor block names renforge_launch & co. (live) and renforge_editor (editor)."""
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    from fastmcp import Client
+
+    from renforge.server import create_app
+    from renforge.toolsets import allowed_tools
+
+    monkeypatch.setenv("RENFORGE_TOOLSETS", toolsets)
+    tool = "renforge_info" if "play" in toolsets or toolsets == "all" else "renforge_context"
+
+    async def info():
+        async with Client(create_app()) as client:
+            return (await client.call_tool(tool, {})).structured_content
+
+    payload = asyncio.run(info())
+    assert ("live_editor" in payload) is listed
+    if listed:
+        everything = {name for names in TOOLSETS.values() for name in names}
+        available = allowed_tools(everything)
+        block = payload["live_editor"]
+        assert block["launch_tool"] in available
+        assert set(block["agent_workflow"]) - {"renforge_info"} <= available

@@ -10,8 +10,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from renforge.state import project_state_dir
-from renforge.bridge.client import BridgeClient, BridgeError, BridgeProtocolError
+from renforge.bridge.client import BridgeClient, BridgeError
+from renforge.editor_live_common import clear_transactions, wait_for_transaction
 
 
 FIXTURE_SCREEN = "say"
@@ -33,31 +33,6 @@ def _text_bounds(client: BridgeClient, text: str) -> dict[str, int] | None:
                 "height": int(bounds["height"]),
             }
     return None
-
-
-def _wait_for_transaction(
-    client: BridgeClient,
-    source_path: Path,
-    expected_bytes: bytes,
-    *,
-    timeout: float = 60.0,
-) -> dict[str, Any] | None:
-    deadline = time.monotonic() + timeout
-    last_status = None
-    while time.monotonic() < deadline:
-        try:
-            status = client.request("editor_task0_status", {})
-            last_status = status
-            if (
-                status.get("status_code") == "reload_committed"
-                and status.get("save_in_progress") is False
-                and source_path.read_bytes() == expected_bytes
-            ):
-                return status
-        except (BridgeProtocolError, OSError):
-            pass
-        time.sleep(0.25)
-    return last_status
 
 
 def _within_one_pixel(bounds: dict[str, int] | None, expected: list[int]) -> bool:
@@ -93,14 +68,7 @@ def run_editor_say_what_style_position_live_scenario(
 
     # 1. Verify say screen is active (shown by harness before editor opened)
     # FIRST: Clean any stale transactions from previous runs
-    transaction_root = project_state_dir(fixture_path.parent.parent) / "editor-transactions"
-    if transaction_root.exists():
-        import shutil
-        try:
-            shutil.rmtree(transaction_root)
-            print(f"   Cleaned stale transactions from {transaction_root}")
-        except OSError:
-            pass
+    clear_transactions(fixture_path.parent.parent)
 
     say_active = client.inspect_screen("say")
     say_scope_before = {
@@ -205,11 +173,12 @@ def run_editor_say_what_style_position_live_scenario(
         b"gui.dialogue_ypos = gui.scale(50)",
         b"gui.dialogue_ypos = gui.scale(80)",
     )
-    last_status = _wait_for_transaction(client, gui_path, expected_committed)
+    last_status, bridge_failure = wait_for_transaction(client, gui_path, expected_committed)
     if not last_status or last_status.get("status_code") != "reload_committed":
         report["verdict"] = "fail"
         report["error"] = "commit timeout"
         report["last_status"] = last_status
+        report["bridge_failure"] = bridge_failure
         try:
             report["reload_slot"] = client.eval_expr(
                 'renpy.session.get("_reload_slot")'
@@ -285,8 +254,10 @@ def run_editor_say_what_style_position_live_scenario(
     # 7. Undo and require both the terminal handshake state and exact bytes.
     undo_click = client.click_element(id="rf_undo", screen="_renforge_editor_overlay")
     report["undo_click"] = undo_click
-    undo_status = _wait_for_transaction(client, gui_path, gui_source_initial)
+    undo_status, undo_bridge_failure = wait_for_transaction(client, gui_path, gui_source_initial)
     report["undo_status_code"] = undo_status.get("status_code") if undo_status else None
+    if undo_bridge_failure:
+        report["undo_bridge_failure"] = undo_bridge_failure
     gui_source_after_undo = gui_path.read_bytes()
     report["undo_byte_identical"] = gui_source_after_undo == gui_source_initial
     client.eval_expr('renpy.show_screen("say", who="Test", what="Undo line", _layer="screens")')
@@ -300,8 +271,10 @@ def run_editor_say_what_style_position_live_scenario(
     # both the exact patched bytes and the same runtime geometry.
     redo_click = client.click_element(id="rf_redo", screen="_renforge_editor_overlay")
     report["redo_click"] = redo_click
-    redo_status = _wait_for_transaction(client, gui_path, gui_source_after_commit)
+    redo_status, redo_bridge_failure = wait_for_transaction(client, gui_path, gui_source_after_commit)
     report["redo_status_code"] = redo_status.get("status_code") if redo_status else None
+    if redo_bridge_failure:
+        report["redo_bridge_failure"] = redo_bridge_failure
     report["redo_byte_identical"] = gui_path.read_bytes() == gui_source_after_commit
     client.eval_expr('renpy.show_screen("say", who="Test", what="Redo line", _layer="screens")')
     time.sleep(0.25)

@@ -119,8 +119,6 @@ def test_say_what_style_position_live_product_path_pass(clean_fixture_copy: Path
     assert report.get("preview_source_unchanged") is True, report
     assert report["preview_geometry_correct"] is True, report
     assert report["preview_preserved_dialogue"] is True, report
-    if report.get("error") is not None:
-        print(summarize_commit_report(report))
     assert report.get("error") is None, summarize_commit_report(report)
     assert report.get("gui_source_changed") is True, report
     assert report["delta_correct"] is True, "commit must apply logical-pixel delta, not absolute screen coords"

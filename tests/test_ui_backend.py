@@ -828,6 +828,8 @@ def test_api_live_launch_rejects_an_unknown_state_mode(tmp_path: Path, monkeypat
     [
         ("/api/live/launch", {"timeout": True}, "launch_timeout_invalid"),
         ("/api/live/launch", {"display": "natvie"}, "launch_display_invalid"),
+        # Every launch refuses display='none', so the dashboard does not offer it.
+        ("/api/live/launch", {"display": "none"}, "launch_display_invalid"),
         ("/api/live/launch", {"audio": 3}, "launch_audio_invalid"),
         ("/api/warp", {"target": "start", "timeout": "abc"}, "launch_timeout_invalid"),
         ("/api/warp", {"target": "start", "version": False}, "launch_version_invalid"),

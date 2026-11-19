@@ -91,15 +91,15 @@ def scan_project(project_path: str) -> Dict[str, Any]:
                 continue
 
             file_path = os.path.join(root, fname)
-            if os.path.islink(file_path):
-                # A linked .rpy could point anywhere; its lines would be returned.
-                continue
             rel_file = _relative_path(project_root, file_path)
 
             try:
+                # Refuses a link: a linked .rpy could point anywhere.
                 lines = io.StringIO(read_text_nofollow(Path(file_path), errors="replace")).readlines()
             except Exception:
-                result["files"].append({"file": rel_file, "line_count": 0})
+                # A linked file is left out; any other unreadable one is listed empty.
+                if not os.path.islink(file_path):
+                    result["files"].append({"file": rel_file, "line_count": 0})
                 continue
 
             result["files"].append({"file": rel_file, "line_count": len(lines)})

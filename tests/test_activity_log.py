@@ -480,3 +480,16 @@ def test_activity_log_prunes_sidecars_over_the_byte_budget(monkeypatch, tmp_path
     monkeypatch.setattr(logmod, "_MAX_ACTIVITY_SIDECAR_BYTES", 1)
     logmod._prune_files_sidecars(sidecar_dir)
     assert [path.name for path in sidecar_dir.iterdir()] == [f"3-{'b' * 16}.json"]
+
+
+def test_receipt_path_is_project_relative_inside_and_absolute_outside(tmp_path) -> None:
+    from renforge.util.files import receipt_path
+
+    project = tmp_path / "proj"
+    (project / "game").mkdir(parents=True)
+    (project / "game" / "a.rpy").write_text("", encoding="utf-8")
+    outside = tmp_path / "state" / "captures" / "idle.png"
+
+    assert receipt_path(project, "game/a.rpy") == "game/a.rpy"
+    assert receipt_path(project, project / "game" / "a.rpy") == "game/a.rpy"
+    assert receipt_path(str(project), outside) == outside.resolve().as_posix()
