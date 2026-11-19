@@ -6491,15 +6491,17 @@ init python:
         """A store value as data: plain values as they are, a game object as its
         simple public fields. Nothing is called, so no game code runs."""
         import enum as _enum
+        import itertools as _itertools
         if isinstance(value, _enum.Enum):
             return "%s.%s" % (type(value).__name__, value.name)
         if value is None or isinstance(value, (bool, builtins.int, builtins.float, builtins.str)):
             return value
         if isinstance(value, (builtins.list, builtins.tuple, builtins.set, builtins.frozenset)):
-            items = builtins.list(value)[:_RENFORGE_VALUE_FIELDS]
+            # Only the first entries are listed, so only they are taken.
+            items = builtins.list(_itertools.islice(value, _RENFORGE_VALUE_FIELDS))
             return [_renforge_explain_value(item, depth + 1) for item in items] if depth < 2 else _renforge_jsonable(items)
         if isinstance(value, builtins.dict):
-            items = builtins.list(value.items())[:_RENFORGE_VALUE_FIELDS]
+            items = builtins.list(_itertools.islice(value.items(), _RENFORGE_VALUE_FIELDS))
             return {str(k): (_renforge_explain_value(v, depth + 1) if depth < 2 else _renforge_jsonable(v)) for k, v in items}
         fields = getattr(value, "__dict__", None)
         if isinstance(fields, builtins.dict) and depth < 1:
@@ -6532,12 +6534,12 @@ init python:
             else:
                 # A plain class attribute (a default the instance never set);
                 # properties and methods are never read, since that runs code.
-                found = None
+                missing = found = builtins.object()  # a class default can itself be None
                 for cls in getattr(type(value), "__mro__", ()):
                     if part in vars(cls):
                         found = vars(cls)[part]
                         break
-                if found is None or isinstance(found, (property, builtins.staticmethod, builtins.classmethod)) \
+                if found is missing or isinstance(found, (property, builtins.staticmethod, builtins.classmethod)) \
                         or callable(found) or hasattr(found, "__get__"):
                     return {"error": "no field %s" % part}
                 value = found

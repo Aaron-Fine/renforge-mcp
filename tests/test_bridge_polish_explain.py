@@ -140,3 +140,35 @@ def test_more_than_a_hundred_variables_says_it_was_cut(running_bridge):
     assert len(reply["variables"]) == 100 and reply["variables"]["score"] == {"value": 7}
     assert reply["truncated"] is True
     assert running_bridge.client.explain(variables=["score"])["truncated"] is False
+
+
+# --- explain(variables) reads ----------------------------------------------
+
+
+def test_a_class_default_of_none_is_a_value_not_a_missing_field(running_bridge):
+    class Hero:
+        partner = None
+
+    running_bridge.renpy.store.hero = Hero()
+
+    got = running_bridge.client.explain(variables=["hero.partner", "hero.rival"])["variables"]
+
+    assert got["hero.partner"] == {"value": None}
+    assert got["hero.rival"] == {"error": "no field rival"}
+
+
+def test_a_long_container_is_not_copied_in_full_to_list_its_first_entries(running_bridge):
+    taken = []
+
+    class Log(list):
+        def __iter__(self):
+            for item in list.__iter__(self):
+                taken.append(item)
+                yield item
+
+    running_bridge.renpy.store.log = Log(range(5000))
+
+    got = running_bridge.client.explain(variables=["log"])["variables"]["log"]
+
+    assert got["value"] == list(range(40)) and got["size"] == 5000 and got["truncated"] is True
+    assert len(taken) <= 41
