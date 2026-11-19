@@ -133,3 +133,42 @@ def test_input_length_zero_is_no_limit(running_bridge):
     assert running_bridge.globs["_renforge_input_filtered"](widget, "hello") == "hello"
     widget.length = 3
     assert running_bridge.globs["_renforge_input_filtered"](widget, "hello") == "hel"
+
+
+# --- self-voicing label fallback -------------------------------------------
+
+
+class _ImageOnlyButton:
+    """An image button with no Text child: its label comes from _tts_all."""
+
+    def __init__(self, label, prefix):
+        self._label = label
+        self.style = types.SimpleNamespace(prefix=prefix)
+
+    def _tts_all(self, raw=False):
+        return self._label
+
+
+def test_selected_is_kept_in_the_alt_of_a_button_that_is_not_selected(running_bridge):
+    focus_text = running_bridge.globs["_renforge_focus_text"]
+    assert focus_text(_ImageOnlyButton("Delete selected", "idle_")) == "Delete selected"
+    # Ren'Py appends " selected" only to a selected button's label.
+    assert focus_text(_ImageOnlyButton("Delete selected", "selected_idle_")) == "Delete"
+
+
+def test_selected_follows_is_selected_on_engines_without_a_style_prefix(running_bridge):
+    focus_text = running_bridge.globs["_renforge_focus_text"]
+
+    class OlderButton:
+        def __init__(self, selected):
+            self._selected = selected
+            self.style = types.SimpleNamespace()
+
+        def is_selected(self):
+            return self._selected
+
+        def _tts_all(self):
+            return "Save selected"
+
+    assert focus_text(OlderButton(False)) == "Save selected"
+    assert focus_text(OlderButton(True)) == "Save"

@@ -1584,6 +1584,32 @@ init python:
             stack.extend(reversed([child for child in children or () if child is not None]))
         return " ".join(parts)
 
+    def _renforge_tts_marks_selected(widget):
+        """Whether ``Button._tts_all`` added " selected" to this widget's label.
+
+        Ren'Py 8.5+ adds it when the style prefix is ``selected_``; older
+        engines when ``is_selected()``. From 8.2 only when the alt is the
+        default hover alt. Any other " selected" belongs to the alt text.
+        """
+        style = getattr(widget, "style", None)
+        hover_alt = getattr(style, "_hover_alt", None)
+        if callable(hover_alt):
+            try:
+                if getattr(style, "alt", None) != hover_alt():
+                    return False
+            except Exception:
+                pass
+        prefix = getattr(style, "prefix", None)
+        if isinstance(prefix, builtins.str):
+            return prefix.startswith("selected_")
+        is_selected = getattr(widget, "is_selected", None)
+        if callable(is_selected):
+            try:
+                return bool(is_selected())
+            except Exception:
+                return False
+        return False
+
     def _renforge_focus_text(widget):
         """Best-effort label for a Ren'Py focus widget.
 
@@ -1631,7 +1657,7 @@ init python:
                     if word and text.endswith(word):
                         text = text[:-len(word)]
                         break
-            else:
+            elif _renforge_tts_marks_selected(widget):
                 for word in suffixes("selected"):
                     if word and text.endswith(" " + word):
                         text = text[:-len(word) - 1]
