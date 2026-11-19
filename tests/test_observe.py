@@ -824,7 +824,7 @@ def test_advance_until_returns_lines_queued_before_its_first_look(monkeypatch):
 
     client = Client()
     monkeypatch.setattr(live, "_client", lambda _path: client)
-    live._crossed_after[live._key("/tmp/renforge-crossed")] = (("127.0.0.1", 9, "tok"), 2)
+    monkeypatch.setitem(live._crossed_after, live._key("/tmp/renforge-crossed"), (("127.0.0.1", 9, "tok"), 2))
 
     result = live.advance_until("/tmp/renforge-crossed", max_steps=5, timeout=2, mode="dismiss")
 
@@ -896,25 +896,31 @@ def test_identity_guards_include_session_and_rebuilt_controls():
 
 
 def test_act_returns_next_observation_without_advancing_or_consuming_transcript(monkeypatch):
+    from types import SimpleNamespace
+
     from renforge.tools import live
 
     calls = []
 
     class Client:
+        _config = SimpleNamespace(host="127.0.0.1", port=1, token="tok")
+
         def act(self, **kwargs):
             calls.append(kwargs)
             return {"ok": True, "operation": "click"}
 
         def observe(self, **kwargs):
-            return _raw(interaction=5, session_id="a", observation_id="new")
+            # event_seq is what an observe would record as the transcript cursor.
+            return _raw(interaction=5, session_id="a", observation_id="new", event_seq=9)
 
     client = Client()
     monkeypatch.setattr(live, "_client", lambda path: client)
+    monkeypatch.setattr(live, "_crossed_after", {})
     result = live.act("/tmp/action-flow", 4, "say/go", screenshot=False, session_id="a", observation_id="old")
     assert result["ok"] and result["observation_status"] == "ready"
     assert result["observation"]["interaction"] == 5
     assert calls[0]["session_id"] == "a" and calls[0]["observation_id"] == "old"
-    assert "/tmp/action-flow" not in live._crossed_after
+    assert live._key("/tmp/action-flow") not in live._crossed_after
 
 
 def test_act_reports_followup_failure_without_retrying_successful_input(monkeypatch):
@@ -1078,7 +1084,7 @@ def test_settle_accepts_a_screen_that_keeps_changing_within_one_interaction():
 
 
 def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch):
-    """A {w=1.0}{nw} line stayed a "pause" until act ran out of time."""
+    """A {w=1.0}{nw} line still pausing after a short pause is clicked past, not waited out."""
     import time
     from renforge import progression
     monkeypatch.setattr(progression, "STUCK_PAUSE_SECONDS", 0.05)
@@ -1094,8 +1100,10 @@ def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch)
                                 nudge=nudges.append)
     assert nudges == [7]
     # Without a way to click (no nudge), it only waits.
-    progression.run_native_skip(Client(), lambda shot: stuck, max_steps=5,
-                                deadline=time.monotonic() + 0.1, total_deadline=time.monotonic() + 0.2)
+    waited = progression.run_native_skip(Client(), lambda shot: stuck, max_steps=5,
+                                         deadline=time.monotonic() + 0.1, total_deadline=time.monotonic() + 0.2)
+    assert waited["ok"] is True and waited["stop"] == "timeout"
+    assert nudges == [7]
 
 
 def test_dismiss_progression_stops_before_unclassified_input():
@@ -1362,7 +1370,7 @@ def test_a_reply_that_times_out_while_the_game_is_busy_is_asked_again():
     replies = iter([busy, menu])
     progress = run_native_skip(None, lambda shot: next(replies), max_steps=5,
                                deadline=time.monotonic() + 2, total_deadline=time.monotonic() + 2)
-    assert progress["ok"] is True and progress["stop"] != "timeout"
+    assert progress["ok"] is True and progress["stop"] == "choose"
 
     # Out of budget, a timeout is still reported.
     stuck = iter([busy] * 100)
