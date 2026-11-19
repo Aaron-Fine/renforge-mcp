@@ -5155,7 +5155,7 @@ init python:
 
 
     def _renforge_observe_focus_pairs(inventory=None):
-        """Collect current controls once; legacy listings are views of these pairs.
+        """Collect current controls once; observe and the UI-element tools both read these pairs.
 
         Returns ``(pairs, truncated)``: ``(focus, record)`` for the focus list,
         inputs, bars/viewports/drags, unfocused Buttons, a game's own action
@@ -5347,7 +5347,6 @@ init python:
                                available=root is not None, truncated=False)
         if root is None:
             return result
-        math = _renforge_runtime.interaction.math
 
         def point(matrix, x, y):
             a, b, c, d, tx, ty = matrix
@@ -5421,7 +5420,7 @@ init python:
             try:
                 w, h = float(render.width), float(render.height)
                 corners = rectangle(matrix, w, h)
-                if not all(math.isfinite(v) for p in corners for v in p):
+                if not all(_renforge_math.isfinite(v) for p in corners for v in p):
                     raise ValueError("non-finite geometry")
                 polygon = corners
                 for index, edge in enumerate(clip):
@@ -5429,10 +5428,10 @@ init python:
                 if not clip or getattr(render, "alpha", 1) <= 0 or w <= 0 or h <= 0:
                     polygon = ()
                 if polygon and not reason:
-                    x = math.floor(min(p[0] for p in polygon))
-                    y = math.floor(min(p[1] for p in polygon))
-                    right = math.ceil(max(p[0] for p in polygon))
-                    bottom = math.ceil(max(p[1] for p in polygon))
+                    x = _renforge_math.floor(min(p[0] for p in polygon))
+                    y = _renforge_math.floor(min(p[1] for p in polygon))
+                    right = _renforge_math.ceil(max(p[0] for p in polygon))
+                    bottom = _renforge_math.ceil(max(p[1] for p in polygon))
                     bounds = builtins.dict(x=x, y=y, width=right-x, height=bottom-y)
                     visible = bounds["width"] > 0 and bounds["height"] > 0
                 else:
