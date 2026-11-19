@@ -455,6 +455,11 @@ versioning.
   that is not an integer or an empty choice `text`, an unknown control action,
   and a translation `language` that is not a name. `{"warp": ""}` on
   `/api/live/launch` no longer restarts the running game.
+- `renforge_generate_translations`, `renforge_translation_stats` and
+  `renforge_export_dialogue` refuse a `language` that is not a Ren'Py language
+  name with `LANGUAGE_INVALID` before running Ren'Py, which joins it into
+  `game/tl/<language>/` unchecked, so `../..` wrote translation files outside
+  the project. The dashboard's translation routes use the same check.
 
 ## [0.7.6] - 2026-11-18
 

@@ -61,8 +61,28 @@ def list_languages(project_path: str | Path) -> list[str]:
     )
 
 
+def invalid_language(language: Any) -> dict[str, Any] | None:
+    """Return an ``ok: false`` payload if ``language`` is not a Ren'Py language name, else None.
+
+    A language name is a Python identifier (``french``; ``None`` means the
+    untranslated game). Ren'Py joins it into ``game/tl/<language>/`` unchecked
+    and writes there, so a ``/`` or ``..`` would leave the folder.
+    """
+    if isinstance(language, str) and language.isidentifier():
+        return None
+    return {
+        "ok": False,
+        "code": "LANGUAGE_INVALID",
+        "language": language,
+        "error": "language must be a Ren'Py language name (an identifier such as french)",
+    }
+
+
 def generate_translations(sdk: RenpySdk, project: RenpyProject, language: str, *, timeout: int = 180) -> dict[str, Any]:
     """Generate/update translation files for ``language`` (writes game/tl/<language>/)."""
+    refused = invalid_language(language)
+    if refused:
+        return refused
     command = project.renpy_command(sdk, ("translate", language))
     with renpy_tool_environment() as env:
         result = run_command(command, timeout=timeout, env=env)
@@ -81,6 +101,9 @@ def generate_translations(sdk: RenpySdk, project: RenpyProject, language: str, *
 
 def translation_stats(sdk: RenpySdk, project: RenpyProject, language: str, *, timeout: int = 180) -> dict[str, Any]:
     """Report missing dialogue/string counts for ``language`` (no files written)."""
+    refused = invalid_language(language)
+    if refused:
+        return refused
     command = project.renpy_command(sdk, ("translate", language, "--count"))
     with renpy_tool_environment() as env:
         result = run_command(command, timeout=timeout, env=env)
@@ -101,6 +124,9 @@ def translation_stats(sdk: RenpySdk, project: RenpyProject, language: str, *, ti
 
 def export_dialogue(sdk: RenpySdk, project: RenpyProject, language: str = "None", *, timeout: int = 180) -> dict[str, Any]:
     """Export the game's dialogue as plain text."""
+    refused = invalid_language(language)
+    if refused:
+        return refused
     command = project.renpy_command(sdk, ("dialogue", language, "--text"))
     with renpy_tool_environment() as env:
         result = run_command(command, timeout=timeout, env=env)
@@ -120,6 +146,8 @@ def export_dialogue(sdk: RenpySdk, project: RenpyProject, language: str = "None"
 
 def list_translation_strings(project_path: str | Path, language: str) -> list[dict[str, Any]]:
     """Parse real translation blocks (dialogue & strings) from game/tl/<language>/*.rpy."""
+    if invalid_language(language):
+        return []
     root = Path(project_path).expanduser().resolve()
     tl_dir = root / "game" / "tl" / language
     if not tl_dir.is_dir() or not resolves_inside(tl_dir, root):
@@ -218,4 +246,4 @@ def list_translation_strings(project_path: str | Path, language: str) -> list[di
     return strings
 
 
-__all__ = ["list_languages", "generate_translations", "translation_stats", "export_dialogue", "list_translation_strings"]
+__all__ = ["invalid_language", "list_languages", "generate_translations", "translation_stats", "export_dialogue", "list_translation_strings"]

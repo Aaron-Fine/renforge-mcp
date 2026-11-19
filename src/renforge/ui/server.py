@@ -547,46 +547,41 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             return _unauthorized(request)
         return JSONResponse(project_ops.languages(str(runtime.root)))
 
-    async def translation_stats(request: Request):
-        if not await _check_token(request):
-            return _unauthorized(request)
-        language = request.query_params.get("language")
+    def _translation_language(request: Request) -> tuple[str, JSONResponse | None]:
+        """Read the ``language`` query parameter, or a 400 when it is missing or not a name."""
+        from ..translation import invalid_language
+
+        language = request.query_params.get("language") or ""
         if not language:
-            return error_response(
+            return language, error_response(
                 code="translation_language_missing",
                 error="language is required",
                 status_code=400,
                 details={"parameter": "language"},
             )
-        if not language.isidentifier():
-            # It names a folder under game/tl; "/" or ".." would leave it.
-            return error_response(
+        if invalid_language(language):
+            return language, error_response(
                 code="translation_language_invalid",
                 error="language must be a Ren'Py language name",
                 status_code=400,
                 details={"language": language},
             )
+        return language, None
+
+    async def translation_stats(request: Request):
+        if not await _check_token(request):
+            return _unauthorized(request)
+        language, refused = _translation_language(request)
+        if refused is not None:
+            return refused
         return JSONResponse(project_ops.translation_stats(str(runtime.root), language))
 
     async def translation_strings(request: Request):
         if not await _check_token(request):
             return _unauthorized(request)
-        language = request.query_params.get("language")
-        if not language:
-            return error_response(
-                code="translation_language_missing",
-                error="language is required",
-                status_code=400,
-                details={"parameter": "language"},
-            )
-        if not language.isidentifier():
-            # It names a folder under game/tl; "/" or ".." would leave it.
-            return error_response(
-                code="translation_language_invalid",
-                error="language must be a Ren'Py language name",
-                status_code=400,
-                details={"language": language},
-            )
+        language, refused = _translation_language(request)
+        if refused is not None:
+            return refused
         from ..translation import list_translation_strings
         return JSONResponse({"ok": True, "strings": list_translation_strings(runtime.root, language)})
 
