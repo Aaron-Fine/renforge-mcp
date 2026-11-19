@@ -69,7 +69,7 @@ class BridgeInfo:
 def ensure_control_dir(project_root: Path) -> Path:
     """Create or validate ``<project state>/control`` as a private directory."""
     root = _canonical_project_root(project_root)
-    control = _control_dir(root)
+    control = control_dir(root)
     try:
         return ensure_private_directory(control)
     except PrivatePathError as exc:
@@ -79,7 +79,7 @@ def ensure_control_dir(project_root: Path) -> Path:
 def validate_control_dir(project_root: Path) -> Path:
     """Validate an existing private control directory without creating it."""
     root = _canonical_project_root(project_root)
-    control = _control_dir(root)
+    control = control_dir(root)
     try:
         try:
             control.lstat()
@@ -176,12 +176,8 @@ def _canonical_project_root(project_root: Path) -> Path:
     return canonical
 
 
-def _control_dir(project_root: Path) -> Path:
-    return control_dir(project_root)
-
-
 def _bridge_info_path(project_root: Path) -> Path:
-    return _control_dir(project_root) / _BRIDGE_INFO_NAME
+    return control_dir(project_root) / _BRIDGE_INFO_NAME
 
 
 def _is_session_id(value: object) -> bool:

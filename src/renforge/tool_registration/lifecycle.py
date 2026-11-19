@@ -484,14 +484,15 @@ def build_wrappers(context):
                 return {"ok": False, "error": "label must be a label name"}
             if action == "launch":
                 # Saves stay apart from the player's own but survive relaunches.
-                from ..state import project_state_dir
-                saves = project_state_dir(project_path) / "saves"
+                saves = live.session_saves_dir(project_path)
                 # HOME is always the session's own, even when the server's
                 # RENFORGE_ISOLATION=existing would default it to the player's:
                 # the policy classifies this launch as isolated.
                 result = _start_launch(project_path, editor=False, savedir=str(saves), home="temporary",
                                        start_label=label.strip() if label else None)
-                if label and isinstance(result, dict):
+                # Only a game this call starts goes to the label: a reused one
+                # stays where it is, and a refused launch starts nothing.
+                if label and isinstance(result, dict) and result.get("ok") and not result.get("already_running"):
                     result["start_label"] = label.strip()
                 return result
             if action == "status":
@@ -540,19 +541,31 @@ def build_wrappers(context):
                     for item in listed.get("slots") or []]
 
         def _import(name: str) -> dict:
-            """Copy one of the player's slots into the session's saves; the player's file is only read."""
-            import re
+            """Copy one of the player's slots into the saves a load will read; the player's file is only read.
 
+            That is the running game's save folder when it reports one, else
+            the session's saves folder, which the next launch uses.
+            """
             from ..save_isolation import import_host_slots
-            from ..state import project_state_dir
+            from ..util.files import ensure_nofollow_directory
 
-            saves = project_state_dir(project_path) / "saves"
-            # The import creates only the saves folder itself; the state folder
-            # is RenForge's own (and already resolved), so make it here.
-            saves.parent.mkdir(parents=True, exist_ok=True)
-            pattern = re.compile(r"%s-[A-Za-z]{2}\d+\.save" % re.escape(name))
-            replaced = saves.is_dir() and any(pattern.fullmatch(entry.name) for entry in saves.iterdir())
-            result = import_host_slots(project_path, saves, slot=name, save_name=_save_name())
+            saves = live.session_saves_dir(project_path)
+            running = live.running_game_savedir(project_path)
+            elsewhere = running is not None and not _same_folder(Path(running), saves)
+            if elsewhere and not live.owns_session(project_path):
+                return _saves_elsewhere(running)
+            save_name = _save_name()
+            if elsewhere:
+                replaced = _has_slot(Path(running), name)
+                result = live.import_into_owned_session(project_path, slot=name, save_name=save_name)
+                if result.get("code") == "SAVE_IMPORT_NOT_ISOLATED":
+                    return _saves_elsewhere(running)
+            else:
+                replaced = _has_slot(saves, name)
+                # The import creates only the saves folder itself; the state
+                # folder is RenForge's own (and already resolved), so make it here.
+                ensure_nofollow_directory(saves.parent)
+                result = import_host_slots(project_path, saves, slot=name, save_name=save_name)
             touched = list(result.get("files_touched") or [])
             if not result.get("ok"):
                 if result.get("code") in (None, "NO_MATCHING_SAVE_SLOTS"):
@@ -563,6 +576,30 @@ def build_wrappers(context):
                     "next": ("load this slot to play from it. Ren'Py asks whether to trust a save made on "
                              "another device: choose Yes for the save, then No for the device, which loads "
                              "this save without trusting others.")}
+
+        def _saves_elsewhere(savedir: str) -> dict:
+            message = (f"the running game keeps its saves in {savedir}, which this server did not create, so a "
+                       "load could not read an imported slot; stop the game and launch with "
+                       "renforge_session(action=\"launch\"), then import")
+            return {"ok": False, "code": "SESSION_SAVES_ELSEWHERE", "files_touched": [],
+                    "message": message, "error": message}
+
+        def _has_slot(folder: Path, name: str) -> bool:
+            """Whether *folder* already holds a save file of slot *name*."""
+            from ..save_isolation import SLOT_FILE_RE
+
+            try:
+                entries = list(folder.iterdir())
+            except OSError:
+                return False
+            return any((match := SLOT_FILE_RE.match(entry.name)) is not None
+                       and match["slot"] == name and not match["json"] for entry in entries)
+
+        def _same_folder(first: Path, second: Path) -> bool:
+            try:
+                return first.resolve() == second.resolve()
+            except OSError:
+                return first == second
 
         def _after_load(result: dict) -> dict:
             """Return the restored game's observation, so the next act can use it.

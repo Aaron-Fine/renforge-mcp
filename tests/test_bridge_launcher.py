@@ -919,7 +919,7 @@ def test_game_error_report_during_startup_fails_before_timeout(monkeypatch, tmp_
     project, sdk, project_root = _make_project(tmp_path)
     report = (
         "\ufeffI'm sorry, but an uncaught exception occurred.\n\nWhile running game code:\n"
-        '  File "game/tl/chinese/ProfileMenu.rpy", line 6, in script\n'
+        '  File "game/tl/example/screens.rpy", line 6, in script\n'
         "Exception: A translation for \"Character\" already exists.\n\n"
         "-- Full Traceback ------\nmore\n"
     )
@@ -986,6 +986,31 @@ def test_a_launch_that_compiled_scripts_and_stopped_on_an_error_is_retried_once(
     assert excinfo.value.code == "GAME_STARTUP_ERROR" and launches["count"] == 1
 
 
+def test_renforges_own_compiled_scripts_do_not_count_as_changed_game_scripts(monkeypatch, tmp_path: Path) -> None:
+    """Ren'Py compiles the injected per-session scripts on every launch."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    (project_root / "game").mkdir(exist_ok=True)
+    launches = {"count": 0}
+
+    def failing_popen(*_args, **kwargs):
+        launches["count"] += 1
+        session_id = kwargs["env"]["RENFORGE_BRIDGE_SESSION_ID"]
+        for prefix in ("00renforge_session_", "zzrenforge_bridge_"):
+            (project_root / "game" / f"{prefix}{session_id}.rpyc").write_bytes(b"compiled")
+        (project_root / "traceback.txt").write_text("Exception: boom %d\n" % launches["count"], encoding="utf-8")
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", failing_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("renforge.bridge.launcher._GAME_ERROR_GRACE_S", 0.0)
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert excinfo.value.code == "GAME_STARTUP_ERROR"
+    assert launches["count"] == 1
+    assert excinfo.value.details["scripts_compiled"] is False
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the Wayland driver default is Linux-only")
 def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkeypatch, tmp_path: Path) -> None:
     """A transparent presplash needs a shaped window."""
@@ -1029,9 +1054,10 @@ def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkey
 
     # Ren'Py 8.4's pygame_sdl2 says "Invalid window".
     from renforge.bridge.launcher import _shaped_presplash_failed
-    older = LaunchError("DISPLAY_START_FAILED", "exited", phase="starting_renpy", details={"stderr": (
-        '  File "renpy/display/presplash.py", line 131, in start\n'
-        "    window = pygame_sdl2.display.Window(\npygame_sdl2.error.error: Invalid window\n")})
+    older = LaunchError("DISPLAY_START_FAILED", "exited", phase="starting_renpy", details={
+        "video_driver": "wayland,x11", "stderr": (
+            '  File "renpy/display/presplash.py", line 131, in start\n'
+            "    window = pygame_sdl2.display.Window(\npygame_sdl2.error.error: Invalid window\n")})
     assert _shaped_presplash_failed(older, None) is True
 
     # A driver the user chose is theirs: no retry.
@@ -1039,6 +1065,71 @@ def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkey
     with pytest.raises(LaunchError):
         launch_with_bridge(sdk, project, startup_timeout=30.0, extra_env={"SDL_VIDEODRIVER": "wayland,x11"})
     assert drivers == ["wayland,x11"]
+
+
+def _presplash_failure_process() -> "_FakeProcess":
+    class _Stream:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def read(self, _size=-1):
+            payload, self._payload = self._payload, b""
+            return payload
+
+    process = _FakeProcess()
+    process.returncode = 1
+    process.stdout = _Stream(b"")
+    process.stderr = _Stream(
+        b'  File "renpy/display/presplash.py", line 131, in start\n'
+        b"    window = pygame_sdl2.display.Window(\npygame_sdl2.error.error: Invalid window\n")
+    return process
+
+
+def test_a_presplash_failure_without_the_wayland_driver_is_not_relaunched(monkeypatch, tmp_path: Path) -> None:
+    """Only a launch that used SDL's Wayland driver can be helped by X11."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("SDL_VIDEODRIVER", raising=False)
+    project, sdk, _project_root = _make_project(tmp_path)
+    drivers = []
+
+    def fake_popen(*_args, **kwargs):
+        drivers.append(kwargs["env"].get("SDL_VIDEODRIVER"))
+        return _presplash_failure_process()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert drivers == [None]
+    assert "presplash" in excinfo.value.details["stderr"]
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the Wayland driver default is Linux-only")
+def test_a_failed_relaunch_keeps_the_first_launchs_error(monkeypatch, tmp_path: Path) -> None:
+    """The first error names the real cause; the relaunch's may not."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.delenv("SDL_VIDEODRIVER", raising=False)
+    project, sdk, _project_root = _make_project(tmp_path)
+    drivers = []
+
+    def fake_popen(*_args, **kwargs):
+        drivers.append(kwargs["env"].get("SDL_VIDEODRIVER"))
+        if len(drivers) == 1:
+            return _presplash_failure_process()
+        process = _FakeProcess()
+        process.returncode = 1
+        return process
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert drivers == ["wayland,x11", "x11"]
+    first = excinfo.value.details["first_attempt"]
+    assert first["code"] in {"DISPLAY_START_FAILED", "RENPY_PROCESS_EXITED"}
+    assert "presplash" in first["details"]["stderr"]
 
 
 def test_a_launch_whose_scripts_do_not_parse_fails_even_with_the_bridge_up(monkeypatch, tmp_path: Path) -> None:

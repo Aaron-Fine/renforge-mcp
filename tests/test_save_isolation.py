@@ -8,12 +8,14 @@ import os
 import shutil
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import pytest
 
 from renforge.save_isolation import (
     TOOL_SAVES_ADAPTER_FILENAME,
+    TOOL_SAVES_ADAPTER_SOURCE,
     agent_session_id,
     apply_launch_isolation_defaults,
     classify_savedir,
@@ -1858,9 +1860,24 @@ def test_renpy_tool_environment_keeps_one_shot_commands_out_of_player_saves(monk
         assert Path(env["RENFORGE_SAVEDIR"]).is_dir()
         adapter_dir, existing = env["RENPY_SEARCHPATH"].split("::", 1)
         assert existing == "/already/there"
-        adapter = (Path(adapter_dir) / TOOL_SAVES_ADAPTER_FILENAME).read_text(encoding="utf-8")
+        with zipfile.ZipFile(Path(adapter_dir) / TOOL_SAVES_ADAPTER_FILENAME) as extension:
+            adapter = extension.read("autorun.py").decode("utf-8")
         assert "renpy.savelocation.init = " in adapter
     assert not home.exists()
+
+
+def test_the_tool_saves_adapter_loads_on_every_supported_engine() -> None:
+    """Ren'Py 8.0-8.2 load only .rpe zip extensions (their autorun.py); .rpe.py came in 8.3."""
+    with renpy_tool_environment() as env:
+        adapter_dir = Path(env["RENPY_SEARCHPATH"].split("::", 1)[0])
+        autoruns = []
+        for name in sorted(os.listdir(adapter_dir)):
+            if name.lower().endswith(".rpe"):  # the only extension 8.0-8.2 load
+                with zipfile.ZipFile(adapter_dir / name) as extension:
+                    autoruns.append(extension.read("autorun.py").decode("utf-8"))
+        assert autoruns == [TOOL_SAVES_ADAPTER_SOURCE]
+        # 8.3 and later also load .rpe.py; the adapter must not run twice there.
+        assert not [name for name in os.listdir(adapter_dir) if name.lower().endswith(".rpe.py")]
 
 
 def test_import_finds_the_save_folder_the_running_game_names(tmp_path: Path, host_save_root: Path) -> None:

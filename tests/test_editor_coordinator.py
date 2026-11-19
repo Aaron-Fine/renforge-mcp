@@ -5261,7 +5261,7 @@ def test_editor_save_receipt_refuses_a_path_it_cannot_place(source: str) -> None
 
 
 def test_project_relative_receipt_anchors_relative_paths_to_the_project(tmp_path) -> None:
-    from renforge.tools.live import _project_relative_path
+    from renforge.util.files import receipt_path
 
     project = tmp_path / "proj"
     (project / ".renforge" / "scenes").mkdir(parents=True)
@@ -5269,11 +5269,11 @@ def test_project_relative_receipt_anchors_relative_paths_to_the_project(tmp_path
     outside = tmp_path / "elsewhere.json"
     outside.write_text("{}", encoding="utf-8")
 
-    assert _project_relative_path(project, ".renforge/scenes/a.json") == ".renforge/scenes/a.json"
-    assert _project_relative_path(project, project / ".renforge" / "scenes" / "a.json") == (
+    assert receipt_path(project, ".renforge/scenes/a.json") == ".renforge/scenes/a.json"
+    assert receipt_path(project, project / ".renforge" / "scenes" / "a.json") == (
         ".renforge/scenes/a.json"
     )
-    assert _project_relative_path(project, outside) == outside.resolve().as_posix()
+    assert receipt_path(project, outside) == outside.resolve().as_posix()
 
 
 def _fake_state_on_other_device(monkeypatch: pytest.MonkeyPatch) -> Path:

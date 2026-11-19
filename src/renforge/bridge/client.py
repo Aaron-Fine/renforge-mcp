@@ -189,7 +189,7 @@ class BridgeClient:
         return response
 
     def _checked(self, command: str, payload: dict[str, Any] | None = None, *, deadline: float | None = None) -> dict:
-        reply = self.request(command, payload) if deadline is None else self.request(command, payload, deadline=deadline)
+        reply = self.request(command, payload, deadline=deadline)
         if reply.get("error") is not None:
             raise BridgeError(f"bridge error on '{command}': {reply['error']}")
         return reply
@@ -293,7 +293,7 @@ class BridgeClient:
             payload["limit"] = limit
         if variables:
             payload["variables"] = list(variables)
-        return self.request("explain", payload)
+        return self._normalize_error_reply(self.request("explain", payload))
 
     def eval_expr(self, expr: str) -> Any:
         return self._checked("eval", {"expr": expr})["value"]
@@ -502,7 +502,12 @@ class BridgeClient:
     def select_choice(self, text: str | None = None, index: int | None = None,
                       *, interaction: int | None = None, session_id: str | None = None,
                       observation_id: str | None = None) -> dict:
-        """Select a current choice, optionally guarded by an observation identity."""
+        """Select a current choice, optionally guarded by an observation identity.
+
+        A refusal (no match, an ambiguous caption, a disabled or covered
+        choice, a stale guard) is returned as ``{"ok": False, "error": ...}``
+        rather than raised, so callers must check ``ok``.
+        """
         payload = {"text": text, "index": index}
         payload.update({key: value for key, value in dict(interaction=interaction,
             session_id=session_id, observation_id=observation_id).items() if value is not None})

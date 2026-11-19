@@ -71,7 +71,7 @@ from ..scene_diff import diff_scenes
 from ..scene_measure import measure_geometry
 from ..scene_wireframe import render_wireframe
 from ..util import write_json_atomic
-from ..util.files import PrivatePathError, ensure_nofollow_directory
+from ..util.files import PrivatePathError, ensure_nofollow_directory, receipt_path
 
 _SESSIONS: dict[str, BridgeSession] = {}
 _LAUNCH_RESPONSE_WAIT_SECONDS = 20.0
@@ -589,25 +589,6 @@ def _isolation_result(session: Any) -> dict[str, Any]:
     return result
 
 
-def _project_relative_path(project_path: str | Path, path: str | Path) -> str:
-    """Return a project-relative POSIX path, or an absolute POSIX path outside."""
-    project_root = Path(project_path).expanduser().resolve()
-    candidate = Path(path).expanduser()
-    if not candidate.is_absolute():
-        # Receipts name files inside the project, so a relative path is
-        # relative to the project root, never to the server's working
-        # directory.
-        candidate = project_root / candidate
-    try:
-        resolved = candidate.resolve()
-    except OSError:
-        resolved = candidate.absolute()
-    try:
-        return resolved.relative_to(project_root).as_posix()
-    except ValueError:
-        return resolved.as_posix()
-
-
 def _client(project_path: str | Path) -> BridgeClient:
     project = RenpyProject(Path(project_path))
     return BridgeClient.from_project(project.root)
@@ -652,22 +633,6 @@ def _session_mode_mismatch(
     return result
 
 
-def _external_session_isolation(client: Any) -> dict[str, Any]:
-    """Where a game this process did not start keeps its saves and HOME.
-
-    ``exposes_user_saves`` is false only when HOME and every active save
-    location sit in RenForge's own folders (the state folder, where
-    ``renforge_session`` keeps its saves, or a session root) and none of them
-    reaches the player's storage anyway. Ren'Py also reads
-    ``game/saves`` and ``config.extra_savedirs`` unless an isolated launch
-    removed them, and either may hold the player's saves wherever it points,
-    so anything else, including a path that cannot be resolved or a bridge
-    that cannot list its locations (an older one), counts as exposing: an
-    isolated launch must never be handed a game it cannot vouch for.
-    """
-    return _external_session_facts(client)["isolation"]
-
-
 def _external_isolation_report(info: Mapping[str, Any]) -> dict[str, Any]:
     savedir, home = info.get("savedir"), info.get("home")
     locations = info.get("save_locations")
@@ -685,8 +650,14 @@ def _external_exposed_components(report: dict[str, Any]) -> frozenset[str]:
 
     HOME is isolated only when the bridge reports one in RenForge's own
     folders; saves only when it lists save locations and every one is there
-    (:func:`storage_is_renforge_owned`). Anything unreported or unresolvable
-    counts as the player's.
+    (:func:`storage_is_renforge_owned`): the state folder, where
+    ``renforge_session`` keeps its saves, or a session root, and none of them
+    reaching the player's storage anyway. Ren'Py also reads ``game/saves``
+    and ``config.extra_savedirs`` unless an isolated launch removed them, and
+    either may hold the player's saves wherever it points, so anything
+    unreported or unresolvable, including a bridge that cannot list its
+    locations (an older one), counts as the player's: an isolated launch must
+    never be handed a game it cannot vouch for.
     """
     exposed: set[str] = set()
     if not storage_is_renforge_owned(report.get("home"), home=True):
@@ -851,7 +822,8 @@ def _owned_session_facts(session: Any) -> dict[str, Any]:
 def _external_session_facts(client: BridgeClient) -> dict[str, Any]:
     """What a bridge this process did not start says about itself; an older one is assumed the worst.
 
-    ``isolation`` is :func:`_external_session_isolation`'s report. ``isolated``
+    ``isolation`` reports where the game keeps its saves and HOME, and whether
+    that exposes the player's (:func:`_external_exposed_components`). ``isolated``
     needs HOME and every reported save location (at least one) in RenForge's
     own folders, which is exactly when no component is exposed.
     """
@@ -970,6 +942,9 @@ def launch_game(
                                  preferences=preferences, bridge_eval=bridge_eval)
     eval_on = wanted["eval"]
 
+    # A warp and a start label reach the game only when it starts, so a
+    # running game is never handed back for them.
+    fresh_only = warp is not None or start_label is not None
     key = _key(project.root)
     existing = _SESSIONS.get(key)
     if existing is not None:
@@ -990,10 +965,11 @@ def launch_game(
                 requested_language=language,
                 active_language=active_language,
             )
-        # Reuse a live session only when no warp is requested and it still
-        # answers; otherwise tear it down (a warp needs a fresh --warp launch,
-        # and a dead process must be reaped so it does not linger as a zombie).
-        if warp is None and existing.process.poll() is None:
+        # Reuse a live session only when no warp or start label is requested
+        # and it still answers; otherwise tear it down (a warp needs a fresh
+        # --warp launch, and a dead process must be reaped so it does not
+        # linger as a zombie).
+        if not fresh_only and existing.process.poll() is None:
             # A launch must not be handed a game that uses the player's saves
             # or HOME where the launch isolates them, checked per component:
             # isolated saves with the host HOME still need isolated saves.
@@ -1056,7 +1032,7 @@ def launch_game(
         if _SESSIONS.get(key) is existing:
             _SESSIONS.pop(key, None)
 
-    if warp is None:
+    if not fresh_only:
         try:
             external = _client(project.root)
             state = external.get_state()
@@ -1111,7 +1087,7 @@ def launch_game(
         else:
             message = (
                 "Another RenForge bridge session is active for this project. "
-                "Stop it from the owning RenForge session before launching with warp."
+                "Stop it from the owning RenForge session before launching with warp or a start label."
             )
             active_language = state.get("language")
             result = {
@@ -1622,6 +1598,43 @@ def _mark_crossed(project_path: str, client: BridgeClient, seq: Any) -> None:
     _crossed_after[_key(project_path)] = (_bridge_session(client), seq)
 
 
+# A screenshot that does not decode; PIL raises OSError for a corrupt image.
+_INVALID_SCREENSHOT = (ValueError, TypeError, OSError)
+
+
+def _fetch_observation(client: BridgeClient, process: Any, *, screenshot: bool, deadline: float,
+                       png_box: dict[str, bytes]) -> dict:
+    """One observe for a settle or progression loop.
+
+    Returns the raw snapshot with ``ok`` true, or a failure with ``ok`` false,
+    a ``status`` and an ``error``. A screenshot it carries is kept in
+    ``png_box["png"]`` (see :func:`_attach_png`).
+    """
+    try:
+        reply = client.observe(screenshot=screenshot, deadline=deadline)
+    except BridgeError as exc:
+        return {"ok": False, "status": failure_status(exc, process), "error": str(exc)}
+    if not isinstance(reply, dict):
+        return {"ok": False, "status": "transport_error", "error": "observe reply must be an object"}
+    if reply.get("ok") is False or reply.get("error"):
+        return {"status": "transport_error", **reply, "ok": False}
+    try:
+        raw, png = apply_screenshot(reply)
+    except _INVALID_SCREENSHOT as exc:
+        return {"ok": False, "status": "transport_error", "error": f"invalid screenshot: {exc}"}
+    if isinstance(png, bytes):
+        png_box["png"] = png
+    raw["ok"] = True
+    return raw
+
+
+def _attach_png(result: dict, png_box: Mapping[str, bytes], snapshot: Mapping[str, Any] | None) -> None:
+    """Return the kept screenshot with *result* only when it shows *snapshot*'s frame."""
+    png = png_box.get("png")
+    if png is not None and snapshot is not None and hashlib.sha256(png).hexdigest() == snapshot.get("frame_hash"):
+        result["_png"] = png
+
+
 def _observation_from_reply(reply: dict) -> dict:
     if not isinstance(reply, dict):
         return {"ok": False, "error": "observe reply must be an object"}
@@ -1631,7 +1644,7 @@ def _observation_from_reply(reply: dict) -> dict:
         return result
     try:
         raw, png = apply_screenshot(reply)
-    except (ValueError, TypeError) as exc:
+    except _INVALID_SCREENSHOT as exc:
         return {"ok": False, "error": f"invalid screenshot: {exc}"}
     snapshot = classify(raw)
     snapshot["ok"] = True
@@ -1747,25 +1760,14 @@ def act(
             result["progress"] = progress
             result["observation_status"] = progress.get("observation_status", "timeout")
             return result
-        png_box = {}
+        png_box: dict[str, bytes] = {}
+
         def fetch(want_image):
-            try:
-                raw = client.observe(screenshot=want_image, deadline=deadline)
-                if raw.get("ok") is False:
-                    return raw
-                raw, png = apply_screenshot(raw)
-                if png is not None:
-                    png_box["png"] = png
-                return raw
-            except BridgeError as exc:
-                return {"ok": False, "status": failure_status(exc, process), "error": str(exc)}
-            except (ValueError, TypeError, OSError) as exc:
-                return {"ok": False, "status": "transport_error", "error": f"invalid screenshot: {exc}"}
+            return _fetch_observation(client, process, screenshot=want_image, deadline=deadline, png_box=png_box)
+
         snapshot, status, error = settle(fetch, deadline, screenshot=screenshot)
         result.update(observation=snapshot, observation_status=status)
-        png = png_box.get("png")
-        if png is not None and snapshot is not None and hashlib.sha256(png).hexdigest() == snapshot.get("frame_hash"):
-            result["_png"] = png
+        _attach_png(result, png_box, snapshot)
 
         if error:
             result["observation_error"] = error
@@ -1806,6 +1808,7 @@ def play(
     if control_id is None:
         if value is not None:
             return {"ok": False, "error": "value needs a control id"}
+        deadline = time.monotonic() + timeout
         current = observe(project_path, screenshot=False)
         if current.get("ok") is False:
             return current
@@ -1830,7 +1833,13 @@ def play(
                     if now.get("ok") is False or now.get("interaction") != current["interaction"]:
                         break
                     time.sleep(0.02)
-        progress = advance_until(project_path, max_steps=200, timeout=timeout, screenshot=screenshot)
+        # Progression gets what the observe and the dismiss left of the budget.
+        remaining = deadline - time.monotonic()
+        if remaining < 0.1:
+            progress = {"ok": True, "stop": "timeout", "steps": 0, "observation": None,
+                        "observation_status": "timeout"}
+        else:
+            progress = advance_until(project_path, max_steps=200, timeout=remaining, screenshot=screenshot)
         result = {"ok": progress.get("ok", True), "action_outcome": "none",
                   **({"continued_from_newer_state": True} if stale else {}),
                   **({"clicked_past_line": bool(clicked_past.get("ok"))} if clicked_past else {}),
@@ -1941,24 +1950,13 @@ def _advance_with_client(project_path: str, client: BridgeClient, *, max_steps: 
             cursor = next_cursor
 
     def fetch(want_image):
-        try:
-            request_end = min(wall_end, time.monotonic() + 5.0)
-            if time.monotonic() < progress_end:
-                request_end = min(request_end, progress_end)
-            reply = client.observe(screenshot=want_image and screenshot, deadline=request_end)
-        except BridgeError as exc:
-            return {"ok": False, "status": failure_status(exc, process), "error": str(exc)}
-        if not isinstance(reply, dict):
-            return {"ok": False, "status": "transport_error", "error": "observe reply must be an object"}
-        if reply.get("ok") is False or reply.get("error"):
-            return {**reply, "ok": False, "status": "transport_error"}
-        try:
-            raw, png = apply_screenshot(reply)
-        except (ValueError, TypeError) as exc:
-            return {"ok": False, "status": "transport_error", "error": f"invalid screenshot: {exc}"}
-        if isinstance(png, bytes):
-            png_box["png"] = png
-        raw["ok"] = True
+        request_end = min(wall_end, time.monotonic() + 5.0)
+        if time.monotonic() < progress_end:
+            request_end = min(request_end, progress_end)
+        raw = _fetch_observation(client, process, screenshot=want_image and screenshot,
+                                 deadline=request_end, png_box=png_box)
+        if raw.get("ok") is False:
+            return raw
         guard.update({name: raw.get(name) for name in ("session_id", "observation_id") if raw.get(name) is not None})
         seq = raw.get("event_seq")
         already = isinstance(seq, int) and not isinstance(seq, bool) and seq <= since
@@ -2009,9 +2007,7 @@ def _advance_with_client(project_path: str, client: BridgeClient, *, max_steps: 
         result["last_observation"] = prior
     if error:
         result["observation_error"] = error
-    png = png_box.get("png")
-    if png is not None and final is not None and hashlib.sha256(png).hexdigest() == final.get("frame_hash"):
-        result["_png"] = png
+    _attach_png(result, png_box, final)
     collect()
     result["crossed"] = crossed_transcript(events, frames)
     result["crossed_truncated"] = truncated or poll_failed
@@ -2316,8 +2312,7 @@ def saves(
         )
 
     try:
-        # list_user only reads, so it must not create the project's .renforge.
-        project = RenpyProject(Path(project_path), create_cache=action != "list_user")
+        project = RenpyProject(Path(project_path))
     except Exception as exc:
         failure = {
             "ok": False,
@@ -2337,12 +2332,47 @@ def saves(
     return result
 
 
+def session_saves_dir(project_path: str | Path) -> Path:
+    """The folder ``renforge_session`` keeps its saves in (not created): the
+    project's state folder, so they survive relaunches."""
+    return project_state_dir(project_path) / "saves"
+
+
+def running_game_savedir(project_path: str | Path) -> str | None:
+    """The save folder the project's running game reports, or ``None``.
+
+    ``None`` when no game answers or its bridge cannot say (it predates
+    ``session_info``, or is busy).
+    """
+    try:
+        info = _client(project_path).session_info()
+    except Exception:
+        return None
+    savedir = info.get("savedir") if isinstance(info, dict) else None
+    return savedir if isinstance(savedir, str) and savedir else None
+
+
+def import_into_owned_session(project_path: str | Path, *, slot: str, save_name: str | None = None) -> dict:
+    """Copy one of the player's slots into the save folder of the game this process runs.
+
+    Only a game launched with ``savedir='temporary'`` takes it
+    (``SAVE_IMPORT_NOT_ISOLATED`` otherwise; ``NO_ISOLATED_SESSION`` when this
+    process runs no game). ``save_name`` is the game's ``config.save_directory``
+    when its scripts cannot be read.
+    """
+    project = RenpyProject(Path(project_path))
+    result = _import_into_owned_session(project.root, slot=slot, slots=None, pattern=None, save_name=save_name)
+    result.setdefault("files_touched", [])
+    return result
+
+
 def _import_into_owned_session(
     project_root: Path,
     *,
     slot: str | None,
     slots: list[str] | None,
     pattern: str | None,
+    save_name: str | None = None,
 ) -> dict:
     session = _owned_session(project_root)
     destination = getattr(session, "temporary_savedir", None) if session is not None else None
@@ -2373,7 +2403,7 @@ def _import_into_owned_session(
     destination = root.parent.resolve() / root.name / SAVES_DIRNAME
     # Listing reads the game's own folders, which may be slow or hostile, so
     # it runs before the session is held open: only the copy delays a stop.
-    selection = select_host_slots(project_root, slot=slot, slots=slots, pattern=pattern)
+    selection = select_host_slots(project_root, slot=slot, slots=slots, pattern=pattern, save_name=save_name)
     if not selection.get("ok"):
         return selection
     # A stop waits for the copy, and a copy never starts after a stop.
@@ -2388,6 +2418,11 @@ def _import_into_owned_session(
 
 
 def list_choices(project_path: str) -> dict:
+    """List the choices of the menu the game is showing now.
+
+    They are the visible controls backed by the active Ren'Py menu's
+    ``items``, whatever the menu screen is called (custom and NVL included).
+    """
     return _with_client(project_path, lambda client: {
         "ok": True, "choices": client.list_menu_choices()})
 
@@ -2395,6 +2430,13 @@ def list_choices(project_path: str) -> dict:
 def select_choice(project_path: str, text: str | None = None, index: int | None = None,
                   *, interaction: int | None = None, session_id: str | None = None,
                   observation_id: str | None = None) -> dict:
+    """Select one choice of the current menu by its ``text`` or listed ``index``.
+
+    ``interaction``, ``session_id`` and ``observation_id`` (from an
+    observation) make the selection refuse with ``stale`` when the game has
+    moved on since. A caption that more than one control shares needs its
+    ``index``. A refusal comes back as ``ok`` false with the bridge's reason.
+    """
     guards = {key: value for key, value in dict(interaction=interaction, session_id=session_id,
               observation_id=observation_id).items() if value is not None}
     return _with_client(project_path, lambda c: c.select_choice(text=text, index=index, **guards))
@@ -3561,7 +3603,7 @@ def run_scenario(
         "failed": failed,
         "duration_ms": duration_ms,
         "files_touched": [
-            _project_relative_path(project_path, path) for path in capture_paths
+            receipt_path(project_path, path) for path in capture_paths
         ],
         "steps": results,
     }
@@ -3777,7 +3819,7 @@ def scene_tree(
         if save_as:
             saved_path = _save_scene_snapshot(project_path, save_as, reply)
             reply["saved_as"] = saved_path
-            reply["files_touched"] = [_project_relative_path(project_path, saved_path)]
+            reply["files_touched"] = [receipt_path(project_path, saved_path)]
         if diff_against:
             before = _load_scene_snapshot(project_path, diff_against, max_nodes=max_nodes)
             if before is None:

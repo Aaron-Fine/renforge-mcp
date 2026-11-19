@@ -146,12 +146,18 @@ download, bridge injection, or process launch. If either is below 8.0, launch
 returns `code="UNSUPPORTED_RENPY_VERSION"`,
 `phase="checking_runtime_compatibility"`, and details containing the detected
 version, selected version, minimum version, and incompatibility source. The agent
-should stop for that game. Selecting a newer SDK does not bypass a legacy game's
+should stop for that game. A `version` that is neither `stable` nor a
+semantic version such as `8.3.7` returns `code="INVALID_RENPY_VERSION"` in the
+same phase. Selecting a newer SDK does not bypass a legacy game's
 engine requirement. A 7.5/8.0 build that lists both engines counts as 8.x
 only when it ships a Python 3 runtime (`lib/py3-*`); with only `lib/py2-*` its
 own launcher runs the Python 2 engine its scripts are written for, so it is
-refused. Projects without bundled engine metadata use the normal
-configured stable SDK, which must also be 8.0 or newer. The same restriction
+refused. With `version="stable"` (the default) the SDK follows the game's own
+engine: a `renpy_version` pin in the project's `renforge.json`
+(`{"renpy_version": "8.3.7"}`, a file Ren'Py never reads, for source
+projects), else the shipped engine's version, else the
+`game/script_version.txt` that Ren'Py writes into builds. Projects with none
+of these use the normal configured stable SDK, which must also be 8.0 or newer. The same restriction
 applies to autopilot and the low-level bridge launcher.
 
 ## Save isolation
@@ -701,7 +707,10 @@ gives the game its own HOME, and leaves the Live Editor out. Calling
 `renforge_observe` or `renforge_act` before the game is running returns
 `code="NO_RUNNING_GAME"`, or `GAME_STARTING` while it starts. For testing and modding, `label="..."` starts
 the story at that label instead: the game leaves its splash screen or main
-menu for it, which works for games shipped only as archives. Nothing the
+menu for it, which works for games shipped only as archives. The label is
+applied only at startup, so a game this server is running is stopped and
+started again for it, and one started elsewhere is refused with
+`BRIDGE_PROJECT_LOCKED`. Nothing the
 story did before the label has happened (variables keep their defaults, and a
 label normally reached with `call` ends the run when it returns), so every
 observation carries `started_at_label`; an unknown label is reported as
@@ -709,6 +718,10 @@ observation carries `started_at_label`; an unknown label is reported as
 start from the player's real progress, `action="list"` shows their slots as
 `player_slots`, and `action="import", slot="..."` copies one into the
 session's saves (the player's file is only read); then `action="load"` it.
+The import goes where the running game keeps its saves (a game this server
+launched with `savedir='temporary'` takes it in its own folder); a game whose
+saves are elsewhere and that this server cannot write into is refused with
+`code="SESSION_SAVES_ELSEWHERE"`.
 Under `RENFORGE_POLICY=enforce` both need `authorize=true`, since they read
 the player's own saves; without it, `list` returns only the session's slots
 and says the player's are hidden. `save`, `load`, and `list` answer
@@ -1236,7 +1249,7 @@ RenForge for the launched game; do not set them yourself.
 | The MCP client cannot open a display | Start `renforge ui --project …`; launch requests are delegated to the display-owning process. |
 | An MCP tool is missing | Update RenForge, then restart the MCP session to reload its catalogue. |
 | Launch fails with `GAME_STARTUP_ERROR` | The game stopped on Ren'Py's error screen before the bridge started; `details.report` holds its `traceback.txt`. Players see the same error. A launch that failed while recompiling changed scripts is already retried once. |
-| A ready launch carries `startup_warning` | The first attempt failed and a second one started: a recompile error that did not recur, or a shaped presplash that SDL's Wayland driver cannot open (the game then runs under X11, which needs an unlocked screen). |
+| A ready launch carries `startup_warning` | The first attempt failed and a second one started: a recompile error that did not recur, or a shaped presplash that SDL's Wayland driver cannot open (the game then runs under X11, which needs an unlocked screen). When the second attempt fails too, its error keeps the first one in `details.first_attempt`. |
 | Launch fails with `BRIDGE_CONNECTION_TIMEOUT` | `details.log_tail` shows where startup stopped. If it ends during window or GL setup (`Windowed mode.`, `Maximum texture size`), the window never opened: X11 windows do not open while the screen is locked, so unlock it or launch with `display='xvfb'`. |
 
 ## Quick verification

@@ -194,7 +194,7 @@ def test_bridge_client_save_slot_helper():
 
 @pytest.mark.parametrize(
     "method,args",
-    [("save_slot", ("branch-a",)), ("load_slot", ("branch-a",)), ("list_slots", ())],
+    [("save_slot", ("branch-a",)), ("load_slot", ("branch-a",)), ("list_slots", ()), ("explain", ())],
 )
 def test_bridge_client_save_helpers_normalize_bridge_errors(method, args):
     token = "save-error-token"

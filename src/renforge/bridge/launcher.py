@@ -37,7 +37,10 @@ from ..sdk import RenpySdk, require_supported_runtime
 from .artifacts import (
     ArtifactOwnershipError,
     allocate_and_materialize,
+    bridge_basename,
+    editor_basename,
     remove_owned_artifacts,
+    session_init_basename,
 )
 from .client import BridgeClient, BridgeConfig, BridgeProtocolError
 from .control import read_bridge_info, write_starting_bridge_info
@@ -64,6 +67,14 @@ VSYNC_ENV: str = "RENFORGE_VSYNC"
 # well over a minute building caches.
 DEFAULT_STARTUP_TIMEOUT: float = 180.0
 
+_BRIDGE_STARTUP_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "BRIDGE_MANIFEST_PUBLICATION_FAILED",
+        "BRIDGE_INFO_CONFLICT",
+        "BRIDGE_MANIFEST_IDENTITY_MISMATCH",
+    }
+)
+
 
 def default_startup_timeout() -> float:
     """Server-wide startup deadline: ``RENFORGE_STARTUP_TIMEOUT`` seconds, or 180."""
@@ -73,13 +84,6 @@ def default_startup_timeout() -> float:
     except ValueError:
         return DEFAULT_STARTUP_TIMEOUT
     return value if math.isfinite(value) and value > 0 else DEFAULT_STARTUP_TIMEOUT
-_BRIDGE_STARTUP_ERROR_CODES: frozenset[str] = frozenset(
-    {
-        "BRIDGE_MANIFEST_PUBLICATION_FAILED",
-        "BRIDGE_INFO_CONFLICT",
-        "BRIDGE_MANIFEST_IDENTITY_MISMATCH",
-    }
-)
 
 
 class _LockPathUnsafe(Exception):
@@ -926,11 +930,16 @@ def _log_tail(project_root: Path, since_ns: int, lines: int = 8) -> list[str]:
     return [line.rstrip() for line in text.splitlines() if line.strip()][-lines:]
 
 
-def _scripts_compiled_since(project_root: Path, since_ns: int) -> bool:
-    """Whether Ren'Py wrote any .rpyc under game/ since ``since_ns``."""
+def _scripts_compiled_since(project_root: Path, since_ns: int, session_id: str) -> bool:
+    """Whether Ren'Py wrote any of the game's own .rpyc under game/ since ``since_ns``.
+
+    The scripts RenForge injects for ``session_id`` are new on every launch, so
+    Ren'Py always compiles them; they do not count.
+    """
+    own = {basename(session_id) + "c" for basename in (session_init_basename, bridge_basename, editor_basename)}
     for directory, _dirs, files in os.walk(project_root / "game"):
         for name in files:
-            if name.endswith(".rpyc"):
+            if name.endswith(".rpyc") and name not in own:
                 try:
                     if os.stat(os.path.join(directory, name)).st_mtime_ns >= since_ns:
                         return True
@@ -1023,10 +1032,10 @@ def _launch_after_project_lock(
     project: RenpyProject,
     *,
     project_lock: ProjectBridgeLock,
+    startup_timeout: float,
     token: str | None = None,
     port: int = 0,
     warp: str | None = None,
-    startup_timeout: float | None = None,
     cancel_event: threading.Event | None = None,
     extra_env: dict[str, str] | None = None,
     display: str = "auto",
@@ -1188,8 +1197,9 @@ def _launch_after_project_lock(
         if own_preferences and env.get(TRANSITIONS_ENV, "").strip().lower() != "on":
             env["RENFORGE_BRIDGE_TRANSITIONS"] = "off"
         # Vsync makes every frame wait for the display. A hidden or locked-screen
-        # window is throttled (about 70 ms a frame here), and skipping draws at
-        # least one frame per line, so it capped skipping at ~7 lines a second.
+        # window can be throttled to tens of milliseconds a frame, and skipping
+        # draws at least one frame per line, so vsync caps skipping at a few
+        # lines a second.
         # Idle CPU is the same without it. RENPY_GL_VSYNC, if set, is respected.
         if "RENPY_GL_VSYNC" not in env and env.get(VSYNC_ENV, "").strip().lower() != "on":
             env["RENPY_GL_VSYNC"] = "0"
@@ -1270,8 +1280,6 @@ def _launch_after_project_lock(
             startup_event=startup_event,
             startup_code=startup_code,
         )
-        if startup_timeout is None:
-            startup_timeout = default_startup_timeout()
         deadline = time.time() + startup_timeout
         _phase("waiting_for_bridge", port=port or None)
 
@@ -1285,7 +1293,7 @@ def _launch_after_project_lock(
                 game_error = _new_game_error(project.root, error_stamps)
                 game_error_seen = time.monotonic()
                 if game_error is not None:
-                    game_error["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns)
+                    game_error["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns, session_id)
             elif time.monotonic() - game_error_seen >= _GAME_ERROR_GRACE_S:
                 _raise_game_error(game_error)
             if process.poll() is not None:
@@ -1311,7 +1319,8 @@ def _launch_after_project_lock(
                     phase="starting_renpy",
                     suggested_fix=suggested,
                     details={"stdout": out[-4000:], "stderr": err[-4000:], "returncode": process.returncode,
-                             "log_tail": _log_tail(project.root, spawned_ns)},
+                             "log_tail": _log_tail(project.root, spawned_ns),
+                             **({"video_driver": env["SDL_VIDEODRIVER"]} if env.get("SDL_VIDEODRIVER") else {})},
                 )
             try:
                 info = read_bridge_info(
@@ -1337,7 +1346,7 @@ def _launch_after_project_lock(
                 # parse-error screen; the game cannot be played.
                 parse_report = _new_game_error(project.root, error_stamps)
                 if parse_report is not None and parse_report["file"] == "errors.txt":
-                    parse_report["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns)
+                    parse_report["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns, session_id)
                     _raise_game_error(parse_report)
                 startup_ms = int((time.monotonic() - started) * 1000)
                 phases.append(
@@ -1431,6 +1440,9 @@ def launch_with_bridge(sdk: RenpySdk, project: RenpyProject, **options: Any) -> 
     - A presplash with transparent corners opens a shaped window, which SDL's
       Wayland driver cannot create, so the game exits at once. X11 (XWayland)
       can.
+
+    When the second launch fails too, its error carries the first one in
+    ``details.first_attempt``.
     """
     try:
         return _launch_with_bridge_once(sdk, project, **options)
@@ -1444,16 +1456,23 @@ def launch_with_bridge(sdk: RenpySdk, project: RenpyProject, **options: Any) -> 
         else:
             raise
         first = exc
-    session = _launch_with_bridge_once(sdk, project, **options)
+    try:
+        session = _launch_with_bridge_once(sdk, project, **options)
+    except LaunchError as second:
+        second.details = {**second.details, "first_attempt": first.to_dict()}
+        raise
     session.startup_warning = f"{reason}: {first.message}"
     return session
 
 
 def _shaped_presplash_failed(exc: LaunchError, extra_env: dict[str, str] | None) -> bool:
+    """Whether a launch that used SDL's Wayland driver could not open its presplash window."""
     if exc.code not in ("DISPLAY_START_FAILED", "RENPY_PROCESS_EXITED"):
         return False
     if (extra_env or {}).get("SDL_VIDEODRIVER") or os.environ.get("SDL_VIDEODRIVER"):
         return False  # the user chose the driver
+    if not str((exc.details or {}).get("video_driver") or "").startswith("wayland"):
+        return False  # X11 is what the launch already used, or does not exist here
     stderr = str((exc.details or {}).get("stderr") or "")
     # Ren'Py 8.5 bundles its own pygame, whose error carries no message.
     return "presplash" in stderr and "Window" in stderr and (

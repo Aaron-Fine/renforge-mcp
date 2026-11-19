@@ -269,12 +269,18 @@ def bundled_engine_version(project_root: Path) -> str | None:
     return f"{triple[0]}.{triple[1]}.{triple[2]}"
 
 
+def _follows_game_engine(version: str) -> bool:
+    """Whether a version selector means the game's own engine when it names one:
+    ``stable``, or no selector."""
+    return not version or version == "stable"
+
+
 def require_supported_runtime(version: str = "stable", *, project_root: Path) -> None:
     """Reject legacy game/SDK engines before runtime launch has side effects."""
     from .launch_env import LaunchError
 
     bundled = bundled_engine_version(project_root)
-    requested = bundled if bundled and (not version or version == "stable") else version
+    requested = bundled if bundled and _follows_game_engine(version) else version
     selected = _validate_version_identifier(_resolve_version(requested))
     for source, candidate in (("bundled_engine", bundled), ("selected_sdk", selected)):
         if candidate is not None and int(candidate.split(".", 1)[0]) < 8:
@@ -534,10 +540,8 @@ def get_or_install_sdk(
     subprocess instead of patching ``renpy/dump.py``.
     """
     requested = version
-    if (not version or version == "stable") and project_root is not None:
-        bundled = bundled_engine_version(project_root)
-        if bundled is not None:
-            requested = bundled
+    if project_root is not None and _follows_game_engine(version):
+        requested = bundled_engine_version(project_root) or version
     resolved_version = _validate_version_identifier(_resolve_version(requested))
     if project_root is not None:
         local_root = _first_valid_sdk(
