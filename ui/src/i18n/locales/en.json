@@ -116,6 +116,7 @@
     "screenshot_failed": "Screenshot failed",
     "screenshot_size_invalid": "Screenshot size must be a non-negative integer",
     "select_choice_invalid": "Choice needs a text or an index",
+    "session_not_isolated": "The running game is not an isolated RenForge session, so its saves were not touched",
     "set_var_name_invalid": "Variable name must be a Python identifier",
     "story_map_failed": "Story map failed",
     "story_map_root_missing": "Story map root missing",

@@ -128,6 +128,8 @@ export function translateDashboardApiError(payload: DashboardApiError, messageKe
       return i18next.t("errors.screenshot_size_invalid");
     case "select_choice_invalid":
       return i18next.t("errors.select_choice_invalid");
+    case "session_not_isolated":
+      return i18next.t("errors.session_not_isolated");
     case "set_var_name_invalid":
       return i18next.t("errors.set_var_name_invalid");
     case "story_map_failed":

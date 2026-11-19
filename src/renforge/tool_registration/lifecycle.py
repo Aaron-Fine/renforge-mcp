@@ -463,7 +463,9 @@ def build_wrappers(context):
         The canonical lifecycle for agents. ``launch`` uses agent-mode
         defaults: saves and preferences in the project's RenForge state
         folder (never the player's, and kept across launches), an isolated
-        HOME, no Live Editor. Poll ``status`` until ready.
+        HOME, no Live Editor. Poll ``status`` until ready. ``save``, ``load``
+        and ``list`` refuse a game whose saves or HOME are outside RenForge's
+        own folders (``SESSION_NOT_ISOLATED``).
         """
 
         def _session() -> dict:
@@ -493,7 +495,8 @@ def build_wrappers(context):
                 return {"ok": False, "error": f"{action} needs a slot name"}
             if action == "import":
                 return _import(slot.strip())
-            result = live.saves(project_path, action, slot=slot)
+            # Only the session's own saves: never a game on the player's saves.
+            result = live.saves(project_path, action, slot=slot, renforge_owned_only=True)
             if action == "load" and isinstance(result, dict) and result.get("ok"):
                 result = _after_load(result)
             if action == "list" and isinstance(result, dict):

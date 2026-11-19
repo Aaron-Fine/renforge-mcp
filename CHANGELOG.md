@@ -37,6 +37,12 @@ versioning.
   HOME and every save location it reports are. Launches through the dashboard
   pass the calling server's `bridge_eval`, so a play-only server's game
   refuses eval even when the dashboard's own toolsets allow it.
+- `renforge_session` `save`, `load`, and `list` act only on a game whose
+  saves and HOME are in RenForge's own folders (the state folder or a
+  session root, by what its bridge reports). Any other running game, such as
+  one `renforge_launch` started on the player's saves, is refused with
+  `SESSION_NOT_ISOLATED` before a slot is written, loaded, or listed, so
+  these actions keep their promise of never touching the player's saves.
 - `renforge_validate` (0.7.5) is in the `project` toolset.
 - Write receipts (0.7.4) for files in the state folder (captures, scene
   snapshots, the activity log's `files_touched_file` sidecar) are absolute

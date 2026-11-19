@@ -2120,6 +2120,31 @@ def _known_savedir(project_path: str | Path) -> str | None:
     return str(savedir) if savedir is not None else None
 
 
+SESSION_NOT_ISOLATED_MESSAGE = (
+    "The running game keeps its saves or HOME outside RenForge's own folders (it may be using the "
+    "player's saves), so renforge_session will not save, load, or list there. Stop it and start the "
+    "session with renforge_session(action=\"launch\"), or use renforge_saves for this game."
+)
+
+
+def _owned_only(
+    required: bool, act: Callable[[BridgeClient], dict], **refusal: Any
+) -> Callable[[BridgeClient], dict]:
+    """Run *act* on the bridge only when the game behind it keeps its storage in RenForge's folders."""
+    if not required:
+        return act
+
+    def guarded(client: BridgeClient) -> dict:
+        # Asked of the same bridge the action then uses, so a game started
+        # elsewhere (another server, the dashboard) is judged by what it reports.
+        if not _external_session_facts(client)["isolated"]:
+            return {"ok": False, "code": "SESSION_NOT_ISOLATED",
+                    "message": SESSION_NOT_ISOLATED_MESSAGE, "error": SESSION_NOT_ISOLATED_MESSAGE, **refusal}
+        return act(client)
+
+    return guarded
+
+
 def _save_slot_with_receipt(
     project_path: str,
     slot: str,
@@ -2219,12 +2244,18 @@ def saves(
     regexp: str | None = None,
     slots: list[str] | None = None,
     pattern: str | None = None,
+    renforge_owned_only: bool = False,
 ) -> dict:
     """Save, load, or list named save slots, or copy selected host slots in.
 
     ``list`` filters with ``regexp``, which Ren'Py's own ``list_slots``
     applies in the game. ``list_user`` and ``import`` read host folders in
     this process, so they filter with a glob ``pattern`` instead.
+
+    ``renforge_owned_only`` (``renforge_session``): ``save``, ``load`` and
+    ``list`` act only on a game whose saves and HOME are in RenForge's own
+    folders, by what its bridge reports; any other game is refused with
+    ``SESSION_NOT_ISOLATED`` before the slot is touched.
     """
     error = saves_argument_error(
         action,
@@ -2247,21 +2278,23 @@ def saves(
             return {"ok": False, "error": "extra_info must be a string"}
         return _with_client(
             project_path,
-            lambda client: _save_slot_with_receipt(
+            _owned_only(renforge_owned_only, lambda client: _save_slot_with_receipt(
                 project_path, slot, extra_info or "", client
-            ),
+            ), files_touched=[]),
         )
 
     if action == "load":
         if regexp is not None:
             return {"ok": False, "error": "regexp is only valid for action 'list'"}
-        return _with_client(project_path, lambda client: client.load_slot(slot))
+        return _with_client(project_path, _owned_only(renforge_owned_only, lambda client: client.load_slot(slot)))
 
     if regexp is not None and not isinstance(regexp, str):
         return {"ok": False, "error": "regexp must be a string"}
 
     if action == "list":
-        return _with_client(project_path, lambda client: client.list_slots(regexp=regexp))
+        return _with_client(
+            project_path, _owned_only(renforge_owned_only, lambda client: client.list_slots(regexp=regexp))
+        )
 
     try:
         # list_user only reads, so it must not create the project's .renforge.

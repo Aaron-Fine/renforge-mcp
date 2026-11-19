@@ -332,6 +332,79 @@ def test_session_lists_and_imports_the_players_slots(tmp_path, monkeypatch) -> N
     assert asyncio.run(_call(action="import", slot="1-1", authorize=True))["ok"] is True
 
 
+class _SessionSavesClient:
+    """A running game's bridge: where it keeps its saves, and one slot in them."""
+
+    def __init__(self, info: dict) -> None:
+        self.info = info
+        self.calls: list[str] = []
+
+    def session_info(self) -> dict:
+        return dict(self.info)
+
+    def list_slots(self, regexp=None) -> dict:
+        self.calls.append("list")
+        return {"ok": True, "slots": [{"name": "player-slot"}], "save_directory": "a-game"}
+
+    def save_slot(self, slot, extra_info="") -> dict:
+        self.calls.append("save")
+        return {"ok": True, "slot": slot}
+
+    def load_slot(self, slot) -> dict:
+        self.calls.append("load")
+        return {"ok": True, "slot": slot}
+
+
+@pytest.mark.parametrize("policy", ["off", "enforce"])
+def test_session_saves_never_act_on_a_game_using_the_players_saves(tmp_path, monkeypatch, policy) -> None:
+    """renforge_session promises the state folder, never the player's saves (review 1b)."""
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    from fastmcp import Client
+
+    from renforge.save_isolation import host_renpy_root
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("RENFORGE_POLICY", policy)
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    player_saves = host_renpy_root(home=home) / "a-game"
+    player_saves.mkdir(parents=True)
+    client = _SessionSavesClient({"eval_enabled": True, "savedir": str(player_saves), "home": str(home),
+                                  "save_locations": [str(player_saves)]})
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: client))
+
+    async def _call(**args):
+        async with Client(create_app()) as mcp:
+            result = await mcp.call_tool("renforge_session", {"project_path": str(project), **args})
+        return next(block.text for block in result.content if block.type == "text")
+
+    for args in ({"action": "save", "slot": "x"}, {"action": "load", "slot": "x", "authorize": True},
+                 {"action": "list"}):
+        text = asyncio.run(_call(**args))
+        assert json.loads(text)["code"] == "SESSION_NOT_ISOLATED", args
+        assert "player-slot" not in text
+    assert client.calls == []
+
+    # The same game with its saves in the state folder and a session HOME is the session's own.
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    state_saves = project_state_dir(project) / "saves"
+    session_home = tmp_path / "renforge-session-x" / "home"
+    for path in (state_saves, session_home):
+        path.mkdir(parents=True)
+    client.info = {"eval_enabled": True, "savedir": str(state_saves), "home": str(session_home),
+                   "save_locations": [str(state_saves)]}
+    listed = json.loads(asyncio.run(_call(action="list")))
+    assert listed["ok"] is True and listed["slots"] == [{"name": "player-slot"}]
+    assert json.loads(asyncio.run(_call(action="save", slot="x")))["ok"] is True
+    assert client.calls == ["list", "save"]
+
+
 def test_live_tools_error_cleanly_without_a_running_game(tmp_path) -> None:
     from renforge.tools import live
 

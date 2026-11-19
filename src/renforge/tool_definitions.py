@@ -455,7 +455,10 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "play from saves instead when the earlier state matters. An "
             "unknown label is reported as start_label_error. Server environment "
             "variables cover the rare launch settings (RENFORGE_STARTUP_TIMEOUT, RENFORGE_TRANSITIONS, RENFORGE_VSYNC); "
-            "saves and HOME are always isolated, whatever RENFORGE_ISOLATION says. "
+            "saves and HOME are always isolated, whatever RENFORGE_ISOLATION says. save, load, and list act "
+            "only on a game whose saves and HOME are in RenForge's own folders (as launch starts it); a game "
+            "on the player's saves, or in a folder outside RenForge's, is refused with "
+            "code=SESSION_NOT_ISOLATED, so these actions never touch the player's saves. "
             "load and import require authorize=true when RENFORGE_POLICY=enforce, and list shows player_slots "
             "only with it."
         ),
