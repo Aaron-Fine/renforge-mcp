@@ -919,7 +919,7 @@ def test_game_error_report_during_startup_fails_before_timeout(monkeypatch, tmp_
     project, sdk, project_root = _make_project(tmp_path)
     report = (
         "\ufeffI'm sorry, but an uncaught exception occurred.\n\nWhile running game code:\n"
-        '  File "game/tl/chinese/ProfileMenu.rpy", line 6, in script\n'
+        '  File "game/tl/example/screens.rpy", line 6, in script\n'
         "Exception: A translation for \"Character\" already exists.\n\n"
         "-- Full Traceback ------\nmore\n"
     )

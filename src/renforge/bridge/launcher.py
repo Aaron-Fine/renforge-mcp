@@ -67,6 +67,14 @@ VSYNC_ENV: str = "RENFORGE_VSYNC"
 # well over a minute building caches.
 DEFAULT_STARTUP_TIMEOUT: float = 180.0
 
+_BRIDGE_STARTUP_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "BRIDGE_MANIFEST_PUBLICATION_FAILED",
+        "BRIDGE_INFO_CONFLICT",
+        "BRIDGE_MANIFEST_IDENTITY_MISMATCH",
+    }
+)
+
 
 def default_startup_timeout() -> float:
     """Server-wide startup deadline: ``RENFORGE_STARTUP_TIMEOUT`` seconds, or 180."""
@@ -76,13 +84,6 @@ def default_startup_timeout() -> float:
     except ValueError:
         return DEFAULT_STARTUP_TIMEOUT
     return value if math.isfinite(value) and value > 0 else DEFAULT_STARTUP_TIMEOUT
-_BRIDGE_STARTUP_ERROR_CODES: frozenset[str] = frozenset(
-    {
-        "BRIDGE_MANIFEST_PUBLICATION_FAILED",
-        "BRIDGE_INFO_CONFLICT",
-        "BRIDGE_MANIFEST_IDENTITY_MISMATCH",
-    }
-)
 
 
 class _LockPathUnsafe(Exception):
@@ -1031,10 +1032,10 @@ def _launch_after_project_lock(
     project: RenpyProject,
     *,
     project_lock: ProjectBridgeLock,
+    startup_timeout: float,
     token: str | None = None,
     port: int = 0,
     warp: str | None = None,
-    startup_timeout: float | None = None,
     cancel_event: threading.Event | None = None,
     extra_env: dict[str, str] | None = None,
     display: str = "auto",
@@ -1196,8 +1197,9 @@ def _launch_after_project_lock(
         if own_preferences and env.get(TRANSITIONS_ENV, "").strip().lower() != "on":
             env["RENFORGE_BRIDGE_TRANSITIONS"] = "off"
         # Vsync makes every frame wait for the display. A hidden or locked-screen
-        # window is throttled (about 70 ms a frame here), and skipping draws at
-        # least one frame per line, so it capped skipping at ~7 lines a second.
+        # window can be throttled to tens of milliseconds a frame, and skipping
+        # draws at least one frame per line, so vsync caps skipping at a few
+        # lines a second.
         # Idle CPU is the same without it. RENPY_GL_VSYNC, if set, is respected.
         if "RENPY_GL_VSYNC" not in env and env.get(VSYNC_ENV, "").strip().lower() != "on":
             env["RENPY_GL_VSYNC"] = "0"
@@ -1278,8 +1280,6 @@ def _launch_after_project_lock(
             startup_event=startup_event,
             startup_code=startup_code,
         )
-        if startup_timeout is None:
-            startup_timeout = default_startup_timeout()
         deadline = time.time() + startup_timeout
         _phase("waiting_for_bridge", port=port or None)
 

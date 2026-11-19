@@ -189,7 +189,7 @@ class BridgeClient:
         return response
 
     def _checked(self, command: str, payload: dict[str, Any] | None = None, *, deadline: float | None = None) -> dict:
-        reply = self.request(command, payload) if deadline is None else self.request(command, payload, deadline=deadline)
+        reply = self.request(command, payload, deadline=deadline)
         if reply.get("error") is not None:
             raise BridgeError(f"bridge error on '{command}': {reply['error']}")
         return reply
