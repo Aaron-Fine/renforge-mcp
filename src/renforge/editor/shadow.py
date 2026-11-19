@@ -15,7 +15,7 @@ from ..save_isolation import renpy_tool_environment
 from ..sdk import RenpySdk
 from ..util.files import copy_regular_file_nofollow, fsync_directory, write_exclusive_bytes
 from ..util.subprocess import run_command
-from .constants import MAX_DIAGNOSTICS_BYTES
+from .constants import MAX_DIAGNOSTICS_BYTES, RENFORGE_DIRNAME
 from .exceptions import EditorError
 
 
@@ -34,7 +34,7 @@ _EXCLUDED_DIRS = {
     ".git",
     ".mypy_cache",
     ".pytest_cache",
-    ".renforge",
+    RENFORGE_DIRNAME,  # also holds cross-filesystem exchange files mid-save
     ".ruff_cache",
     ".venv",
     "__pycache__",
