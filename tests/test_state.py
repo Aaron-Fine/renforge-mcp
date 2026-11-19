@@ -43,7 +43,7 @@ def test_case_sensitive_siblings_keep_separate_folders(tmp_path: Path) -> None:
     upper = tmp_path / "Game"
     lower = tmp_path / "game"
     upper.mkdir()
-    lower.mkdir()
-    if os.path.samefile(upper, lower):
+    if lower.exists():
         pytest.skip("this volume ignores case")
+    lower.mkdir()
     assert state.project_state_dir(upper) != state.project_state_dir(lower)
