@@ -3144,6 +3144,15 @@ init python:
         return result
 
     def _renforge_h_select_choice(payload):
+        """Choose one listed control with text, by ``text`` or by ``index``.
+
+        Text matches exactly (ignoring case) first, then as a substring; an
+        index counts the controls that have text. More than one match is
+        refused as ambiguous, and a disabled or covered control is refused.
+        When the caller sends interaction/session/observation ids, a stale
+        observation is refused. A semantic control (a menu item, a known
+        action) runs its action; anything else is clicked at its center.
+        """
         payload = payload or {}
         raw, pairs = _renforge_observe_raw(False, with_pairs=True, include_readout=False)
         contract = _renforge_runtime.interaction
@@ -5389,6 +5398,12 @@ init python:
 
 
     def _renforge_scene_inventory():
+        """Walk every layer's displayables once for one observe or scene_tree.
+
+        Returns ``nodes`` as (node, layer, screen name, screen node, parent
+        ids), ``named`` screen widget ids, ``truncated`` and the completed
+        render ``geometry``. Screens that are hiding are skipped.
+        """
         # Plain builtins: store literals are rollback-tracked and slow here.
         nodes = builtins.list()
         seen = builtins.set()
@@ -5857,12 +5872,17 @@ init python:
 
 
     def _renforge_observe_raw(screenshot, with_pairs=False, include_readout=True):
+        """The bridge's observation of the current interaction, before classification.
+
+        Reads stability, statement, label, lifecycle, dialogue, screens,
+        controls, readout, input candidates and key bindings; changes no game
+        state. ``with_pairs`` also returns the (focus, record) pairs that act
+        and select_choice use.
+        """
         bridge = _renforge_runtime.bridge
         interaction = 0
-        label = None
         if bridge is not None:
             interaction = int(getattr(bridge, "observe_generation", 0) or 0)
-            label = bridge.current_label if isinstance(bridge.current_label, str) else None
         stable, reason = _renforge_observe_stability()
         inventory = _renforge_scene_inventory()
         screens, say_dismiss, walk_truncated, screen_nodes = _renforge_collect_interaction(inventory)
