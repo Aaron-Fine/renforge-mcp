@@ -11,8 +11,7 @@ import sys
 import types
 
 import pytest
-from test_bridge_runtime import _arm_stable_interaction, _completed_render
-from test_bridge_runtime import running_bridge  # noqa: F401 - shared bridge fixture
+from bridge_harness import _arm_stable_interaction, _completed_render
 
 
 def _bridge():
