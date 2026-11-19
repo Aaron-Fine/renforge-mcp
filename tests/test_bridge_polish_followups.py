@@ -11,6 +11,7 @@ import sys
 import types
 
 import pytest
+from test_bridge_runtime import _arm_stable_interaction, _completed_render
 from test_bridge_runtime import running_bridge  # noqa: F401 - shared bridge fixture
 
 
@@ -70,9 +71,7 @@ def test_dismiss_if_pause_opt_in_keeps_every_other_check(running_bridge, monkeyp
 
 
 def _custom_widget_scene(running_bridge, widgets):
-    """Draw ``widgets`` side by side on one screen, with ``renpy.ui.Action`` defined."""
-    from test_bridge_runtime import _arm_stable_interaction, _completed_render
-
+    """Draw ``widgets`` side by side on one settled screen."""
     renpy = running_bridge.renpy
 
     class ScreenDisplayable:
