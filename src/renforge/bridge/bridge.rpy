@@ -6565,6 +6565,7 @@ init python:
         # The start of a dotted path (persistent in persistent.x) is not read
         # on its own; only the whole path is.
         inner = builtins.set(id(node.value) for node in _ast.walk(tree) if isinstance(node, _ast.Attribute))
+        local = _renforge_condition_locals(tree)
         names = []
         for node in _ast.walk(tree):
             if id(node) in called or id(node) in inner or not isinstance(node, (_ast.Name, _ast.Attribute)):
@@ -6573,9 +6574,41 @@ init python:
             while isinstance(current, _ast.Attribute):
                 parts.append(current.attr)
                 current = current.value
-            if isinstance(current, _ast.Name):
+            if isinstance(current, _ast.Name) and id(current) not in local:
                 names.append(".".join([current.id] + parts[::-1]))
         return names
+
+    def _renforge_condition_locals(tree):
+        """ids of the Name nodes a comprehension or lambda inside ``tree`` binds.
+
+        ``q`` in ``any(q.done for q in quests)`` is the comprehension's own,
+        not a store variable. A comprehension's first iterable is read in
+        the enclosing scope, so a name there stays a store variable."""
+        import ast as _ast
+        local = builtins.set()
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Lambda):
+                args = node.args
+                params = (builtins.list(getattr(args, "posonlyargs", None) or ()) + builtins.list(args.args)
+                          + builtins.list(args.kwonlyargs) + [args.vararg, args.kwarg])
+                bound = builtins.set(param.arg for param in params if param is not None)
+                scope = [node.body]
+            elif isinstance(node, (_ast.ListComp, _ast.SetComp, _ast.GeneratorExp, _ast.DictComp)):
+                bound = builtins.set(name.id for generator in node.generators
+                                     for name in _ast.walk(generator.target) if isinstance(name, _ast.Name))
+                scope = [getattr(node, field) for field in ("elt", "key", "value") if hasattr(node, field)]
+                for index, generator in enumerate(node.generators):
+                    scope.append(generator.target)
+                    scope.extend(generator.ifs)
+                    if index:
+                        scope.append(generator.iter)
+            else:
+                continue
+            for part in scope:
+                for name in _ast.walk(part):
+                    if isinstance(name, _ast.Name) and name.id in bound:
+                        local.add(id(name))
+        return local
 
     def _renforge_loop_targets(target):
         """Names a ``for`` target binds: ``i``, ``(key, value)``, ``a, (b, c)``."""

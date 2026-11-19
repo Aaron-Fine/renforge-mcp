@@ -92,3 +92,27 @@ def test_menu_choice_conditions_report_their_values(running_bridge):
 
     assert ("choice", "Pay if gold >= 10") in [(row["kind"], row["text"]) for row in reply["statements"]]
     assert reply["values"] == {"gold": 12}
+
+
+# --- names bound inside a condition ----------------------------------------
+
+
+def test_names_a_comprehension_or_lambda_binds_are_not_condition_variables(running_bridge):
+    names = running_bridge.globs["_renforge_condition_names"]
+
+    assert set(names("any(q.done for q in quests)")) == {"quests"}
+    assert set(names("filter(lambda x: x.ok, items)")) == {"items"}
+    assert set(names("[k for k in table if k] and {v: w for v, w in pairs}")) == {"table", "pairs"}
+    # Only the comprehension's own x is bound; the outer x is a store variable.
+    assert set(names("x > 0 and any(x for x in xs)")) == {"x", "xs"}
+    # The first iterable is read in the enclosing scope.
+    assert set(names("[row for row in row]")) == {"row"}
+
+
+def test_a_stale_store_name_is_not_reported_for_a_comprehension_variable(running_bridge):
+    store = running_bridge.renpy.store
+    store.q, store.quests = types.SimpleNamespace(done=True), []
+    values = running_bridge.globs["_renforge_explain_condition_values"](
+        {"_conditions": ["any(q.done for q in quests)"]})
+
+    assert values == {"quests": []}
