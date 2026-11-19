@@ -1398,7 +1398,7 @@ label start:
 
         progressed = act(str(game_project), current["interaction"], inputs[0]["id"], text="Alex",
                          session_id=current["session_id"], observation_id=current["observation_id"],
-                         advance=True, timeout=20)
+                         timeout=20)
         assert progressed["ok"] and progressed["observation_status"] == "ready", progressed
         assert progressed["progress"]["stop"] == "choose", progressed
         assert session.client.get_var("rf_name") == "Alex"
@@ -1410,8 +1410,7 @@ label start:
 
 
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display")
-@pytest.mark.parametrize("mode", ["skip", "dismiss"])
-def test_live_bounded_progression_restores_preferences_and_stops_at_custom_hub(sdk, tmp_path, mode):
+def test_live_bounded_progression_restores_preferences_and_stops_at_custom_hub(sdk, tmp_path):
     from renforge.bridge.launcher import launch_with_bridge
     from renforge.project import RenpyProject
     from renforge.tools.live import advance_until
@@ -1446,9 +1445,9 @@ label start:
     return
 ''', encoding="utf-8")
     with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
-        result = advance_until(str(project), mode=mode, max_steps=20, timeout=20, screenshot=False)
+        result = advance_until(str(project), max_steps=20, timeout=20, screenshot=False)
         assert result["stop"] == "choose", result
-        assert result["mode"] == mode
+        assert result["mode"] == "skip"
         assert result["observation_status"] == "ready", result
         assert result["observation"]["dialogue"]["what"] == "Pick a destination."
         assert any(item["screen"] == "navigation_hub" for item in result["observation"]["controls"])
@@ -1508,9 +1507,8 @@ label start:
 
 
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display")
-@pytest.mark.parametrize("mode", ["skip", "dismiss"])
 @pytest.mark.parametrize("terminal", ["return", "$ renpy.full_restart()"])
-def test_live_ending_detection_distinguishes_script_end_from_menu_restart(sdk, tmp_path, mode, terminal):
+def test_live_ending_detection_distinguishes_script_end_from_menu_restart(sdk, tmp_path, terminal):
     from renforge.bridge.launcher import launch_with_bridge
     from renforge.project import RenpyProject
     from renforge.tools.live import act, advance_until, observe
@@ -1535,13 +1533,13 @@ label helper:
     return
 ''' % terminal, encoding="utf-8")
     with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
-        initial = advance_until(str(project), max_steps=10, timeout=15, screenshot=False, mode=mode)
+        initial = advance_until(str(project), max_steps=10, timeout=15, screenshot=False)
         assert initial["stop"] == "main_menu", initial
         assert initial["ending"] is None
         assert initial["observation"]["lifecycle"]["phase"] == "main_menu"
         start = next(control for control in initial["observation"]["controls"] if control["text"] == "Begin")
         result = act(str(project), control_id=start["id"], interaction=initial["observation"]["interaction"],
-                     advance=True, mode=mode, max_steps=10, timeout=15, screenshot=False)
+                     max_steps=10, timeout=15, screenshot=False)
         assert result["action_outcome"] == "succeeded", result
         progress = result["progress"]
         expected = "end" if terminal == "return" else "main_menu"
@@ -1555,14 +1553,18 @@ label helper:
             assert progress["ending"]["statement"]["line"] == 14
             # A subsequent observation/call must retain the end evidence.
             assert observe(str(project), screenshot=False)["lifecycle"]["ending"] == progress["ending"]
-            assert advance_until(str(project), timeout=10, screenshot=False, mode=mode)["stop"] == "end"
+            assert advance_until(str(project), timeout=10, screenshot=False)["stop"] == "end"
         else:
             assert progress["ending"] is None, result
         # Beginning another run clears the previous ending before progressing.
         menu = observe(str(project), screenshot=False)
         start = next(control for control in menu["controls"] if control["text"] == "Begin")
-        restarted = act(str(project), control_id=start["id"], interaction=menu["interaction"], screenshot=False)
-        assert restarted["observation"]["lifecycle"] == {"phase": "playing", "ending": None}
+        restarted = act(str(project), control_id=start["id"], interaction=menu["interaction"],
+                        max_steps=10, timeout=15, screenshot=False)
+        assert restarted["action_outcome"] == "succeeded", restarted
+        # A stale ending would stop at once; the new run plays the chapter again.
+        assert any(line.get("what") == "Final line." for line in restarted["progress"]["crossed"]), restarted
+        assert restarted["progress"]["stop"] == expected, restarted
 
 
 @pytest.mark.skipif(not os.environ.get('DISPLAY'), reason='live bridge needs a display')
@@ -1728,7 +1730,7 @@ label chapter:
         initial = live.advance_until(str(project), timeout=10, screenshot=False)
         start = next(control for control in initial['observation']['controls'] if control['text'] == 'Begin')
         result = live.act(str(project), control_id=start['id'], interaction=initial['observation']['interaction'],
-            advance=True, timeout=10, screenshot=False)
+            timeout=10, screenshot=False)
         progress = result['progress']
         assert progress['stop'] != 'end', result
         assert progress['ending'] is None, result

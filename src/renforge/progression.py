@@ -1,4 +1,4 @@
-"""Host progression, settling, and failure handling for both gameplay modes."""
+"""Host progression (bounded native skip), settling, and failure handling."""
 from __future__ import annotations
 
 import time
@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .bridge.client import BridgeError, BridgeProtocolError
-from .interaction import _real_number, classify, progression_boundary
+from .interaction import classify, progression_boundary
 from .util.frames import FRAME_TIMEOUT
 
 POLL_SECONDS = 0.05
@@ -216,154 +216,3 @@ def run_native_skip(client: Any, fetch: Fetch, *, max_steps: int, deadline: floa
                 # its connection. Never change another caller's operation.
                 result["cleanup"] = "lease_expiry_pending"
     return result
-
-
-def _finished(stop: str, steps: int, observation: dict[str, Any] | None) -> dict[str, Any]:
-    return {
-        "ok": True,
-        "stop": stop,
-        "steps": steps,
-        "observation": observation,
-    }
-
-
-def run_advance_until(
-    fetch: Fetch,
-    dismiss: Callable[[int], Mapping[str, Any]],
-    *,
-    max_steps: int,
-    timeout: float,
-    sleep: Callable[[float], None] = time.sleep,
-    now: Callable[[], float] = time.monotonic,
-) -> dict[str, Any]:
-    """Post ``dismiss`` until the snapshot says the player must choose.
-
-    ``fetch(screenshot)`` returns raw bridge records. ``dismiss(interaction)``
-    re-checks on the main thread and posts the event only when it still listens
-    for ``dismiss``. This loop never clicks and never enables skip.
-    """
-    if isinstance(max_steps, bool) or not isinstance(max_steps, int) or not 1 <= max_steps <= 200:
-        return {
-            "ok": False,
-            "stop": "invalid_arguments",
-            "steps": 0,
-            "observation": None,
-            "error": "max_steps must be an integer from 1 to 200",
-        }
-    if not _real_number(timeout) or not 0.1 <= timeout <= 120:
-        return {
-            "ok": False,
-            "stop": "invalid_arguments",
-            "steps": 0,
-            "observation": None,
-            "error": "timeout must be a number from 0.1 to 120 seconds",
-        }
-
-    deadline = now() + float(timeout)
-    steps = 0
-    last: dict[str, Any] | None = None
-
-    def look(screenshot: bool) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        nonlocal last
-        raw = fetch(screenshot)
-        if not isinstance(raw, Mapping) or raw.get("ok") is False:
-            error = raw.get("error") if isinstance(raw, Mapping) else "observe failed"
-            return None, {
-                "ok": False,
-                "stop": raw.get("status", "transport_error") if isinstance(raw, Mapping) else "transport_error",
-                "steps": steps,
-                "observation": last,
-                "error": error if isinstance(error, str) else "observe failed",
-            }
-        snapshot = classify(raw)
-        last = snapshot
-        return snapshot, None
-
-    def shot(fallback: dict[str, Any] | None) -> dict[str, Any] | None:
-        snapshot, failure = look(True)
-        if failure is not None or snapshot is None or not snapshot["stable"]:
-            return fallback
-        return snapshot
-
-    while True:
-        if now() >= deadline:
-            return _finished("timeout", steps, shot(last))
-        snapshot, failure = look(False)
-        if failure is not None:
-            return failure
-        assert snapshot is not None
-        if not snapshot["stable"]:
-            sleep(POLL_SECONDS)
-            continue
-        forward = snapshot["forward"]
-        boundary = progression_boundary(snapshot)
-        if boundary in ("end", "main_menu", "unsupported"):
-            return _finished(boundary, steps, shot(snapshot))
-        if forward == "wait":
-            seen = snapshot["interaction"]
-            changed = False
-            while now() < deadline:
-                sleep(POLL_SECONDS)
-                nxt, failure = look(False)
-                if failure is not None:
-                    return failure
-                assert nxt is not None
-                if nxt["interaction"] != seen or (nxt["stable"] and nxt["forward"] != "wait"):
-                    changed = True
-                    break
-            if not changed:
-                return _finished("wait", steps, shot(snapshot))
-            continue
-        if forward != "dismiss":
-            framed, failure = look(True)
-            if failure is not None:
-                return failure
-            assert framed is not None
-            if not framed["stable"]:
-                sleep(POLL_SECONDS)
-                continue
-            if framed["forward"] == "dismiss":
-                snapshot = framed
-            else:
-                stop = framed["forward"]
-                if stop not in {"choose", "wait", "none"}:
-                    stop = "none"
-                return _finished(stop, steps, framed)
-        if snapshot["forward"] != "dismiss" or not snapshot["stable"]:
-            continue
-        if steps >= max_steps:
-            return _finished("max_steps", steps, shot(snapshot))
-        interaction = snapshot["interaction"]
-        if not isinstance(interaction, int):
-            return _finished("none", steps, shot(snapshot))
-        reply = dismiss(interaction)
-        if not isinstance(reply, Mapping) or reply.get("ok") is False:
-            error = reply.get("error") if isinstance(reply, Mapping) else None
-            if error in {"unstable", "stale", "not_dismiss"}:
-                sleep(POLL_SECONDS)
-                continue
-            return {
-                "ok": False,
-                "stop": reply.get("status", "transport_error") if isinstance(reply, Mapping) else "transport_error",
-                "steps": steps,
-                "observation": snapshot,
-                "error": error if isinstance(error, str) else "dismiss failed",
-            }
-        steps += 1
-        advanced = False
-        while now() < deadline:
-            sleep(POLL_SECONDS)
-            nxt, failure = look(False)
-            if failure is not None:
-                return failure
-            assert nxt is not None
-            if nxt["interaction"] != interaction:
-                advanced = True
-                break
-            if snapshot.get("text_revealing") is True and nxt.get("text_revealing") is False and nxt["stable"]:
-                # The first dismiss reveals slow text in the same interaction.
-                # Re-check the inventory before posting the next guarded dismiss.
-                advanced = True
-                break
-        if not advanced:
-            return _finished("stalled", steps, shot(snapshot))
