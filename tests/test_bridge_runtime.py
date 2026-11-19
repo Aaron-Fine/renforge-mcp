@@ -7476,10 +7476,9 @@ def test_explain_reads_state_as_data_without_running_game_code(running_bridge):
         SUNDAY = 7
 
     store.camper, store.day = Calendar(), Day.SUNDAY
-    loop = running_bridge.globs["_renforge_explain_condition_values"]({"nodes": [
-        {"kind": "for", "text": "camper in screamingGophers"},
-        {"kind": "if", "text": "camper.currentStatus == 1"},
-        {"kind": "if", "text": "day == Day.SUNDAY"}]})
+    loop = running_bridge.globs["_renforge_explain_condition_values"]({
+        "_bound": ["camper"],
+        "_conditions": ["camper.currentStatus == 1", "day == Day.SUNDAY"]})
     assert loop == {"day": "Day.SUNDAY"}
 
 

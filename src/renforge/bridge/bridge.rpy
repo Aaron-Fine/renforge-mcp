@@ -5886,14 +5886,17 @@ init python:
                 text = _renforge_explain_str(caption)
                 if condition not in (None, "True"):
                     text = "%s if %s" % (text, _renforge_explain_str(condition))
+                    _renforge_explain_note(state, condition=condition)
                 emit(state, depth, "choice", loc, text)
                 _renforge_explain_label_walk(block, depth + 1, state)
         elif kind == "If":
             for index, entry in enumerate(getattr(node, "entries", None) or ()):
                 branch, cond_text = _renforge_explain_branch(index, entry[0], "if")
+                _renforge_explain_note(state, condition=cond_text)
                 emit(state, depth, branch, loc, cond_text)
                 _renforge_explain_label_walk(entry[1], depth + 1, state)
         elif kind == "While":
+            _renforge_explain_note(state, condition=getattr(node, "condition", None))
             emit(state, depth, "while", loc, getattr(node, "condition", None))
             _renforge_explain_label_walk(getattr(node, "block", None), depth + 1, state)
         elif kind in ("Jump", "Call"):
@@ -6043,6 +6046,7 @@ init python:
             "statements": state["entries"],
             "truncated": state["truncated"],
             **({"falls_into": fell_into} if fell_into else {}),
+            **_renforge_explain_noted(state),
         }
 
 
@@ -6081,6 +6085,7 @@ init python:
             first = "showif" if kind == "SLShowIf" else "if"
             for index, entry in enumerate(getattr(node, "entries", None) or ()):
                 branch, cond_text = _renforge_explain_branch(index, entry[0], first)
+                _renforge_explain_note(state, condition=cond_text)
                 # A branch can set its parent's properties, such as a button's action.
                 keywords = _renforge_explain_sl_text(types.SimpleNamespace(
                     keyword=getattr(entry[1], "keyword", None)))
@@ -6089,6 +6094,7 @@ init python:
         elif kind == "SLFor":
             text = "%s in %s" % (_renforge_explain_str(getattr(node, "variable", None)),
                                  _renforge_explain_str(getattr(node, "expression", None)))
+            _renforge_explain_note(state, binds=getattr(node, "variable", None))
             emit(state, depth, "for", loc, text)
             _renforge_explain_screen_walk(children, depth + 1, state)
         elif kind == "SLUse":
@@ -6132,6 +6138,7 @@ init python:
         state = {"entries": [], "limit": limit, "truncated": False, "file": where.get("file")}
         _renforge_explain_screen_walk(getattr(ast, "children", None), 0, state)
         head.update({"nodes": state["entries"], "truncated": state["truncated"]})
+        head.update(_renforge_explain_noted(state))
         return head
 
 
@@ -6244,6 +6251,7 @@ init python:
         """The script statements at ``(file, line)``, with their full text."""
         script = getattr(getattr(renpy, "game", None), "script", None)
         found = []
+        noted = {"_conditions": [], "_bound": []}
         for node in getattr(script, "all_stmts", None) or ():
             where = _renforge_explain_loc(node)
             if where is None or (where["file"], where["line"]) != wanted:
@@ -6256,12 +6264,14 @@ init python:
                 state = {"entries": [], "limit": 300, "truncated": False, "file": where["file"]}
                 _renforge_explain_label_walk([node], 0, state)
                 entry["statements"] = state["entries"]
+                for key, items in _renforge_explain_noted(state).items():
+                    noted[key].extend(items)
             found.append(entry)
             if len(found) >= 8:
                 break
         if not found:
             return None
-        return {"statement": None, "script": found}
+        return {"statement": None, "script": found, **noted}
 
 
     def _renforge_explain_node_texts(node):
@@ -6567,23 +6577,44 @@ init python:
                 names.append(".".join([current.id] + parts[::-1]))
         return names
 
+    def _renforge_loop_targets(target):
+        """Names a ``for`` target binds: ``i``, ``(key, value)``, ``a, (b, c)``."""
+        import re as _re
+        return builtins.set(_re.findall(r"[A-Za-z_][A-Za-z0-9_]*", _renforge_explain_str(target)))
+
+    def _renforge_explain_note(state, condition=None, binds=None):
+        """Record a walked condition, or a loop target, for explain's ``values``.
+
+        Entry text is for reading: it is shortened and can carry the
+        properties a branch sets after its condition, so ``values`` reads
+        the raw condition recorded here instead."""
+        if condition:
+            state.setdefault("conditions", []).append(_renforge_explain_str(condition))
+        if binds:
+            state.setdefault("bound", builtins.set()).update(_renforge_loop_targets(binds))
+
+    def _renforge_explain_noted(state):
+        """What a walk recorded with ``_renforge_explain_note``, under the
+        private result keys ``_renforge_h_explain`` reads and then removes."""
+        return {"_conditions": builtins.list(state.get("conditions") or ()),
+                "_bound": builtins.sorted(state.get("bound") or ())}
+
     def _renforge_explain_condition_values(result):
-        """Current values of the variables behind the conditions in a result."""
-        texts = builtins.list(result.get("conditions") or [])
+        """Current values of the variables behind the conditions in a result.
+
+        ``conditions`` are the conditions enclosing an explained control
+        (``"if x > 3"``, ``"for i in items"``); ``_conditions`` and ``_bound``
+        are the raw conditions and loop targets a label, screen or script
+        walk recorded."""
+        texts = []
         # Names a for loop binds are the loop's own, not store variables.
-        bound = builtins.set()
-        for entry in builtins.list(result.get("nodes") or []) + builtins.list(result.get("statements") or []):
-            if not isinstance(entry, builtins.dict):
-                continue
-            if entry.get("kind") in ("if", "elif", "while", "showif"):
-                texts.append(entry.get("text") or "")
-            elif entry.get("kind") == "for":
-                target = (entry.get("text") or "").split(" in ", 1)[0]
-                bound.update(part.strip() for part in target.replace("(", " ").replace(")", " ").split(","))
-        for text in result.get("conditions") or []:
+        bound = builtins.set(result.get("_bound") or ())
+        for text in result.get("conditions") or ():
             if text.startswith("for "):
-                target = text[4:].split(" in ", 1)[0]
-                bound.update(part.strip() for part in target.replace("(", " ").replace(")", " ").split(","))
+                bound.update(_renforge_loop_targets(text[4:].split(" in ", 1)[0]))
+            else:
+                texts.append(text)
+        texts.extend(result.get("_conditions") or ())
         values = {}
         for text in texts:
             for name in _renforge_condition_names(text):
@@ -6607,6 +6638,10 @@ init python:
             if values:
                 # What the conditions above read right now.
                 result["values"] = values
+        if isinstance(result, builtins.dict):
+            # Walk notes feed values only; they are not part of the reply.
+            result.pop("_conditions", None)
+            result.pop("_bound", None)
         return result
 
     def _renforge_h_explain_selected(payload):
