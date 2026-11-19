@@ -7309,11 +7309,11 @@ init python:
         max_steps, timeout = payload.get("max_steps"), payload.get("timeout")
         if type(max_steps) is not builtins.int or not 1 <= max_steps <= 200:
             return {"ok": False, "error": "invalid_budget"}
-        if not _renforge_runtime.interaction._real_number(timeout) or not 0.05 <= timeout <= 120:
+        if not _renforge_runtime.interaction.is_real_number(timeout) or not 0.05 <= timeout <= 120:
             return {"ok": False, "error": "invalid_budget"}
         expires_at = payload.get("expires_at")
         if expires_at is not None:
-            if not _renforge_runtime.interaction._real_number(expires_at):
+            if not _renforge_runtime.interaction.is_real_number(expires_at):
                 return {"ok": False, "error": "invalid_budget"}
             timeout = min(timeout, expires_at - _renforge_time.time())
             if timeout <= 0:
@@ -7514,7 +7514,7 @@ init python:
         ``unsupported`` (the adjustment cannot change)."""
         widget = getattr(focus, "widget", None)
         refuse = lambda error: _renforge_act_refusal(error, result["interaction"], result["id"])
-        real_number = _renforge_runtime.interaction._real_number
+        real_number = _renforge_runtime.interaction.is_real_number
         if control.get("role") == "viewport":
             axes = [(axis, field) for axis, field in (("x", "xadjustment"), ("y", "yadjustment")) if axis in payload]
             if not axes:
@@ -7670,7 +7670,7 @@ init python:
             return payload, None  # the normal lookup reports the missing control
         operations = record.get("operations") or ()
         role = _renforge_observe_normalize_role(record.get("role"))
-        number = _renforge_runtime.interaction._real_number(value)
+        number = _renforge_runtime.interaction.is_real_number(value)
         if "text" in operations and isinstance(value, builtins.str):
             payload["text"] = value
         elif "drop" in operations and isinstance(value, builtins.str):

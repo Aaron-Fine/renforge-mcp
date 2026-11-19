@@ -5,7 +5,6 @@ import base64
 import os
 from contextlib import asynccontextmanager
 import json
-import math
 import string
 import threading
 import webbrowser
@@ -24,6 +23,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from .. import session_registry
 from ..bridge.launcher import normalize_language
 from ..launch_env import AUDIO_STRATEGIES, LAUNCHABLE_DISPLAY_STRATEGIES, LaunchError
+from ..interaction import is_real_number
 from ..lint import run_lint
 from ..policy import CONTROL_ACTIONS
 from ..save_isolation import STATE_MODE_TOKENS, launch_state_mode_error
@@ -763,9 +763,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 details={"cleanup_on_stop": cleanup_on_stop},
             )
         timeout = payload.get("timeout")
-        if timeout is not None and (
-            isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout)
-        ):
+        if timeout is not None and not _usable_timeout(timeout):
             return error_response(
                 code="launch_timeout_invalid",
                 error="timeout must be a number",
@@ -773,6 +771,17 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 details={"timeout": timeout},
             )
         return _isolation_option_error(payload)
+
+    def _usable_timeout(timeout: Any) -> bool:
+        # The act/time-budget number rule, and small enough to become the
+        # float deadline _launch_timeout makes (JSON integers have no limit).
+        if not is_real_number(timeout):
+            return False
+        try:
+            float(timeout)
+        except OverflowError:
+            return False
+        return True
 
     def _launch_timeout(timeout: Any) -> float | None:
         # As for renforge_launch: zero or less means the default deadline.

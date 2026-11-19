@@ -827,6 +827,9 @@ def test_api_live_launch_rejects_an_unknown_state_mode(tmp_path: Path, monkeypat
     ("route", "body", "code"),
     [
         ("/api/live/launch", {"timeout": True}, "launch_timeout_invalid"),
+        # A JSON integer too large for a float deadline is refused, not a 500.
+        ("/api/live/launch", {"timeout": 10**400}, "launch_timeout_invalid"),
+        ("/api/warp", {"target": "start", "timeout": -(10**400)}, "launch_timeout_invalid"),
         ("/api/live/launch", {"display": "natvie"}, "launch_display_invalid"),
         # Every launch refuses display='none', so the dashboard does not offer it.
         ("/api/live/launch", {"display": "none"}, "launch_display_invalid"),
