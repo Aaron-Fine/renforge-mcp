@@ -32,7 +32,6 @@ already strings. The pinned default SDK is 8.5.3; compatible 8.4.1+ and
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -106,37 +105,35 @@ def run_native_dump(sdk: RenpySdk, project: RenpyProject, *, timeout: int = 180)
     The dump subprocess receives an isolated ``.rpe.py`` adapter on
     ``RENPY_SEARCHPATH``. SDK files under ``sdk.root`` are never modified.
     """
-    with tempfile.TemporaryDirectory(prefix="renforge-dump-adapter-") as adapter_home:
-        adapter_dir = Path(adapter_home)
+    with tempfile.TemporaryDirectory(prefix="renforge-dump-") as work_home:
+        # The adapter folder goes on RENPY_SEARCHPATH; the output folder must
+        # not, so the two are siblings. Leaving the block removes both, along
+        # with the <out>.new partial Ren'Py leaves when it is cut off.
+        adapter_dir = Path(work_home) / "adapter"
+        out_dir = Path(work_home) / "out"
+        adapter_dir.mkdir()
+        out_dir.mkdir()
         (adapter_dir / JSON_DUMP_ADAPTER_FILENAME).write_text(
             JSON_DUMP_ADAPTER_SOURCE,
             encoding="utf-8",
         )
-        out_fd, out_name = tempfile.mkstemp(prefix="renforge-jsondump-", suffix=".json")
-        os.close(out_fd)
-        out_path = Path(out_name)
-        out_path.unlink(missing_ok=True)  # Ren'Py writes <file>.new then renames into place.
+        out_path = out_dir / "dump.json"
 
-        try:
-            command = project.renpy_command(sdk, ("compile", "--json-dump", str(out_path)))
-            with renpy_tool_environment() as env:
-                result = run_command(
-                    command,
-                    timeout=timeout,
-                    env=_json_dump_searchpath_env(adapter_dir, env),
-                )
+        command = project.renpy_command(sdk, ("compile", "--json-dump", str(out_path)))
+        with renpy_tool_environment() as env:
+            result = run_command(
+                command,
+                timeout=timeout,
+                env=_json_dump_searchpath_env(adapter_dir, env),
+            )
 
-            if not out_path.exists() or out_path.stat().st_size == 0:
-                raise RuntimeError(
-                    "Ren'Py produced no JSON dump "
-                    f"(returncode={result.returncode}, timed_out={result.timed_out}).\n"
-                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-                )
-            return json.loads(out_path.read_text(encoding="utf-8"))
-        finally:
-            out_path.unlink(missing_ok=True)
-            # Ren'Py writes <out>.new and renames it; a timeout leaves it behind.
-            out_path.with_name(out_path.name + ".new").unlink(missing_ok=True)
+        if not out_path.exists() or out_path.stat().st_size == 0:
+            raise RuntimeError(
+                "Ren'Py produced no JSON dump "
+                f"(returncode={result.returncode}, timed_out={result.timed_out}).\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        return json.loads(out_path.read_text(encoding="utf-8"))
 
 
 def normalize_definitions(raw_dump: dict[str, Any]) -> list[dict[str, Any]]:
