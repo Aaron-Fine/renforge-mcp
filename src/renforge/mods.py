@@ -22,6 +22,7 @@ from .util.files import (
     ensure_nofollow_directory,
     is_link,
     read_text_nofollow,
+    receipt_path,
     write_atomic,
 )
 from .state import ensure_project_state_dir
@@ -353,7 +354,9 @@ def package(project_root: str | Path, name: str) -> dict[str, Any]:
     """Zip a mod's listed files into ``<project state>/mods/<name>.zip``.
 
     A listed file that is gone or not a valid mod path is skipped and named
-    under ``missing``. ``files_touched`` holds the zip's absolute path.
+    under ``missing``. ``files_touched`` names the zip by the shared receipt
+    rule (``util.files.receipt_path``): its absolute POSIX path, since the
+    state folder normally sits outside the project.
     """
     _check_name(name)
     mod_dir = _mod_dir(project_root, name)
@@ -401,7 +404,7 @@ def package(project_root: str | Path, name: str) -> dict[str, Any]:
         "ok": True,
         "path": str(zip_path),
         "files": packed,
-        "files_touched": [str(zip_path)],
+        "files_touched": [receipt_path(project_root, zip_path)],
     }
     if missing:
         result["missing"] = missing

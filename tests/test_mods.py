@@ -782,6 +782,20 @@ def test_lint_of_an_unpinned_project_uses_the_stable_sdk(tmp_path, monkeypatch) 
     assert calls == [(("stable",), {})]
 
 
+def test_package_receipt_follows_the_shared_receipt_rule(tmp_path, monkeypatch) -> None:
+    # Every receipt names a file inside the project by its project-relative
+    # POSIX path, and one outside by its absolute POSIX path.
+    root = _project(tmp_path)
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(root / "state"))
+    mods.write_file(root, "demo", "a.rpy", "label a:\n    return\n")
+
+    result = mods.package(root, "demo")
+
+    zip_path = project_state_dir(root) / "mods" / "demo.zip"
+    assert result["files_touched"] == [zip_path.relative_to(root.resolve()).as_posix()]
+    assert result["files_touched"] == [util_files.receipt_path(root, zip_path)]
+
+
 def test_reload_returns_a_compact_observation_like_the_play_tools(tmp_path, monkeypatch) -> None:
     raw = {
         "ok": True,
