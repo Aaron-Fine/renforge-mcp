@@ -81,7 +81,7 @@ from .source import (
     textbutton_patch_kwargs,
     uses_runtime_delta_position,
 )
-from ..state import project_state_dir
+from ..state import ensure_project_state_dir
 from ..util.files import PrivatePathError, ensure_nofollow_directory
 from .scope import require_in_scope
 
@@ -301,9 +301,7 @@ class EditorCoordinator:
         self._lock = threading.RLock()
         self._request_lock = threading.Lock()
 
-        self._transaction_root = ensure_nofollow_directory(
-            project_state_dir(self._project.root) / TRANSACTION_DIRNAME
-        )
+        self._transaction_root = ensure_project_state_dir(self._project.root, TRANSACTION_DIRNAME)
         fsync_directory(self._transaction_root.parent)
         fsync_directory(self._transaction_root)
 

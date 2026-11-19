@@ -120,7 +120,7 @@ def test_json_dump_compatibility_strategy_is_documented() -> None:
 
     assert "compile --json-dump" in architecture
     assert "RENPY_SEARCHPATH" in architecture
-    assert ".rpe.py" in architecture
+    assert "`.rpe` adapter" in architecture
     assert "8.5.3" in architecture
     assert "8.4.1" in architecture
     assert "Node" in architecture

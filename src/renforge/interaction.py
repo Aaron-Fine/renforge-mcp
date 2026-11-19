@@ -203,6 +203,11 @@ def _bool(value: Any, default: bool) -> bool:
 
 
 def _real_number(value: Any) -> bool:
+    """True for a finite int or float that is not a bool.
+
+    The one number check for act payloads and time budgets: the host
+    (tools.live) and the injected bridge both call it by this name.
+    """
     return not isinstance(value, bool) and (isinstance(value, int) or isinstance(value, float) and math.isfinite(value))
 
 

@@ -19,12 +19,12 @@ from typing import Any, Callable
 from .lint import parse_lint_output
 from .util.files import (
     PrivatePathError,
-    _component_is_link,
     ensure_nofollow_directory,
+    is_link,
     read_text_nofollow,
     write_atomic,
 )
-from .state import project_state_dir
+from .state import ensure_project_state_dir
 
 MANIFEST_NAME = "renforge-mod.json"
 ALLOWED_SUFFIXES = (".rpy", ".txt", ".json", ".md")
@@ -103,7 +103,7 @@ def _game_dir(project_root: str | Path) -> Path:
 def _is_link(path: Path) -> bool:
     """True for a symlink or, on Windows, a junction or other reparse point."""
     try:
-        return _component_is_link(path)
+        return is_link(path)
     except PrivatePathError:
         return True
 
@@ -364,8 +364,10 @@ def package(project_root: str | Path, name: str) -> dict[str, Any]:
     candidates = sorted(
         rel for rel in manifest["files"] if not rel.endswith(".rpyc") and rel != MANIFEST_NAME
     )
-    out_dir = project_state_dir(project_root) / "mods"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        out_dir = ensure_project_state_dir(project_root, "mods")
+    except PrivatePathError as exc:
+        raise ValueError(f"refusing unsafe package folder: {exc}") from exc
     zip_path = out_dir / f"{name}.zip"
     fd, tmp = tempfile.mkstemp(dir=str(out_dir), prefix=f".{name}.", suffix=".zip.tmp")
     os.close(fd)

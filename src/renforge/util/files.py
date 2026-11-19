@@ -951,6 +951,15 @@ def _component_is_link(path: Path) -> bool:
     return _is_symlink(path)
 
 
+def is_link(path: Path) -> bool:
+    """True when *path* itself is a symlink or, on Windows, a junction or other reparse point.
+
+    A missing path is not a link. Raises :class:`PrivatePathError` when
+    Windows cannot read the path's attributes.
+    """
+    return _component_is_link(Path(path))
+
+
 def _reject_link_components(path: Path, *, code: str, include_leaf: bool) -> Path:
     """Fail closed when any existing component is a symlink/reparse point.
 

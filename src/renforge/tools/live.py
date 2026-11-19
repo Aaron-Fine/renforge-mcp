@@ -26,7 +26,7 @@ from typing import Any, Callable, Mapping
 from ..autopilot import autopilot as _autopilot
 from ..observe import apply_screenshot
 from ..interaction import classify, crossed_transcript, validate_act_payload, _real_number, progression_boundary
-from ..progression import failure_status, process_exit, run_advance_until, run_native_skip, settle
+from ..progression import failure_status, process_exit, run_native_skip, settle
 from ..toolsets import bridge_eval_allowed
 from ..bridge.client import BridgeClient, BridgeError, BridgeNotRunningError, poll_command
 from ..bridge.launcher import (
@@ -60,7 +60,7 @@ from ..save_isolation import (
     storage_is_renforge_owned,
 )
 from ..sdk import get_or_install_sdk, require_supported_runtime
-from ..state import project_state_dir
+from ..state import ensure_project_state_dir, project_state_dir
 from ..state_compact import (
     apply_serialization_limits,
     compact_state,
@@ -71,7 +71,7 @@ from ..scene_diff import diff_scenes
 from ..scene_measure import measure_geometry
 from ..scene_wireframe import render_wireframe
 from ..util import write_json_atomic
-from ..util.files import PrivatePathError, ensure_nofollow_directory, receipt_path
+from ..util.files import PrivatePathError, receipt_path
 
 _SESSIONS: dict[str, BridgeSession] = {}
 _LAUNCH_RESPONSE_WAIT_SECONDS = 20.0
@@ -1181,7 +1181,7 @@ def launch_game(
         "environment": session_obj.environment,
     }
     try:
-        result["bridge_port"] = session_obj.client._config.port
+        result["bridge_port"] = session_obj.client.config.port
     except Exception:
         pass
     if language is not None:
@@ -1569,7 +1569,7 @@ _crossed_after: dict[str, tuple[tuple[str, int, str], int]] = {}
 
 
 def _bridge_session(client: BridgeClient) -> tuple[str, int, str]:
-    config = client._config
+    config = client.config
     return (config.host, int(config.port), config.token)
 
 
@@ -1666,6 +1666,26 @@ def observe(project_path: str, *, screenshot: bool = True) -> dict:
     return _with_client(project_path, _handler)
 
 
+def wait_for_stable_observation(project_path: str, *, timeout: float = 15.0, interval: float = 0.25,
+                                require_id: bool = False) -> dict | None:
+    """Observe (without a screenshot) until the screen is stable, and return that observation.
+
+    With ``require_id`` a stable observation must also carry an
+    ``observation_id``. It looks at least once; when *timeout* runs out first
+    it returns the last observation as it was, which may be unstable or an
+    error reply.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        observation = observe(project_path, screenshot=False)
+        if (isinstance(observation, dict) and observation.get("stable") is True
+                and (not require_id or observation.get("observation_id"))):
+            return observation
+        if time.monotonic() >= deadline:
+            return observation
+        time.sleep(interval)
+
+
 def act(
     project_path: str,
     interaction: int | None = None,
@@ -1682,17 +1702,16 @@ def act(
     observation_id: str | None = None,
     input_value: Any = None,
     submit: bool = True,
-    observe: bool = True,
-    advance: bool = False,
     screenshot: bool = True,
     max_steps: int = 30,
     timeout: float = 5.0,
-    mode: str = "skip",
 ) -> dict:
-    """Act once, then observe or progress to the next decision within a budget.
+    """Act once, then progress to the next decision within a budget.
 
-    Input success stays distinct from follow-up failure: callers must never
-    retry a successful action simply because the next observation timed out.
+    A refused or uncertain input returns at once with the bridge's current
+    observation. Input success stays distinct from follow-up failure: callers
+    must never retry a successful action simply because the progression after
+    it timed out.
     """
     payload = {name: item for name, item in {
         "interaction": interaction, "id": control_id, "text": text, "key": key,
@@ -1705,26 +1724,18 @@ def act(
     refusal = validate_act_payload(payload)
     if refusal:
         return {"ok": False, "error": refusal}
-    if not all(isinstance(flag, bool) for flag in (submit, observe, advance, screenshot)):
+    if not all(isinstance(flag, bool) for flag in (submit, screenshot)):
         return {"ok": False, "error": "observation and input options must be booleans"}
     if not _real_number(timeout) or not 0.1 <= timeout <= 120:
         return {"ok": False, "error": "timeout must be a number from 0.1 to 120 seconds"}
     if isinstance(max_steps, bool) or not isinstance(max_steps, int) or not 1 <= max_steps <= 200:
         return {"ok": False, "error": "max_steps must be an integer from 1 to 200"}
 
-    if mode not in ("skip", "dismiss"):
-        return {"ok": False, "error": "mode must be skip or dismiss"}
-
     def _handler(client: BridgeClient) -> dict:
         process = _owned_process(project_path, client)
         deadline = time.monotonic() + timeout
         try:
-            result = client.act(
-                interaction=interaction, control_id=control_id, text=text, key=key,
-                hold=hold, value=value, x=x, y=y, drop=drop, submit=submit,
-                session_id=session_id, observation_id=observation_id, deadline=deadline,
-                input_value=input_value,
-            )
+            result = client.send_act(payload, deadline=deadline)
         except BridgeError as exc:
             return {"ok": False, "action_outcome": "unknown", "retry_safe": False,
                     "error": str(exc), "observation_status": failure_status(exc, process),
@@ -1744,33 +1755,20 @@ def act(
                                               "observe again in a moment, or continue without an id.")
             else:
                 result["observation_status"] = "ready" if result["observation"].get("stable") else "timeout"
-        if result.get("ok") is False or result.get("error") or not (observe or advance):
+        if result.get("ok") is False or result.get("error"):
             return result
-        if advance:
-            remaining = deadline - time.monotonic()
-            if remaining < 0.1:
-                result.update({"observation": None, "observation_status": "timeout"})
-                return result
-            progress = _advance_with_client(project_path, client, max_steps=max_steps,
-                                            timeout=remaining, screenshot=screenshot, mode=mode)
-            result["observation"] = progress.pop("observation", None)
-            png = progress.pop("_png", None)
-            if png is not None:
-                result["_png"] = png
-            result["progress"] = progress
-            result["observation_status"] = progress.get("observation_status", "timeout")
+        remaining = deadline - time.monotonic()
+        if remaining < 0.1:
+            result.update({"observation": None, "observation_status": "timeout"})
             return result
-        png_box: dict[str, bytes] = {}
-
-        def fetch(want_image):
-            return _fetch_observation(client, process, screenshot=want_image, deadline=deadline, png_box=png_box)
-
-        snapshot, status, error = settle(fetch, deadline, screenshot=screenshot)
-        result.update(observation=snapshot, observation_status=status)
-        _attach_png(result, png_box, snapshot)
-
-        if error:
-            result["observation_error"] = error
+        progress = _advance_with_client(project_path, client, max_steps=max_steps,
+                                        timeout=remaining, screenshot=screenshot)
+        result["observation"] = progress.pop("observation", None)
+        png = progress.pop("_png", None)
+        if png is not None:
+            result["_png"] = png
+        result["progress"] = progress
+        result["observation_status"] = progress.get("observation_status", "timeout")
         return result
 
     return _with_client(project_path, _handler)
@@ -1803,7 +1801,7 @@ def play(
         return {"ok": False, "error": "timeout must be a number from 0.1 to 120 seconds"}
     if not isinstance(screenshot, bool):
         return {"ok": False, "error": "screenshot must be a boolean"}
-    common = {"observation_id": observation_id, "advance": True, "max_steps": 200,
+    common = {"observation_id": observation_id, "max_steps": 200,
               "timeout": timeout, "screenshot": screenshot}
     if control_id is None:
         if value is not None:
@@ -1891,14 +1889,13 @@ def advance_until(
     timeout: float = 30.0,
     *,
     screenshot: bool = True,
-    mode: str = "skip",
 ) -> dict:
-    """Progress with bounded native skip by default; never select a control."""
+    """Progress with one bounded native skip to the next decision; never select a control."""
     if (isinstance(max_steps, bool) or not isinstance(max_steps, int) or not 1 <= max_steps <= 200
             or not _real_number(timeout) or not 0.1 <= timeout <= 120
-            or not isinstance(screenshot, bool) or mode not in ("skip", "dismiss")):
+            or not isinstance(screenshot, bool)):
         return {"ok": False, "stop": "invalid_arguments", "steps": 0, "observation": None,
-                "error": "Require max_steps 1..200, timeout 0.1..120, boolean screenshot, and mode skip or dismiss"}
+                "error": "Require max_steps 1..200, timeout 0.1..120, and boolean screenshot"}
     try:
         client = _client(project_path)
     except BridgeNotRunningError as exc:
@@ -1908,11 +1905,11 @@ def advance_until(
         return {"ok": False, "stop": "transport_error", "steps": 0, "observation": None,
                 "error": f"{type(exc).__name__}: {exc}"}
     return _advance_with_client(project_path, client, max_steps=max_steps, timeout=timeout,
-                                screenshot=screenshot, mode=mode)
+                                screenshot=screenshot)
 
 
 def _advance_with_client(project_path: str, client: BridgeClient, *, max_steps: int,
-                         timeout: float, screenshot: bool = True, mode: str = "skip") -> dict:
+                         timeout: float, screenshot: bool = True) -> dict:
     process = _owned_process(project_path, client)
     started = time.monotonic()
     wall_end = started + float(timeout)
@@ -1967,19 +1964,16 @@ def _advance_with_client(project_path: str, client: BridgeClient, *, max_steps: 
         collect()
         return raw
 
-    def dismiss(interaction):
+    def nudge(interaction):
+        # A line still a pause after any short pause: the plain guard refuses
+        # every unstable frame, so the one click has to accept the pause.
         try:
-            return client.dismiss_if(interaction=interaction, deadline=progress_end, **guard)
+            return client.dismiss_if(interaction=interaction, deadline=progress_end, allow_pause=True, **guard)
         except BridgeError as exc:
             return {"ok": False, "status": failure_status(exc, process), "error": str(exc)}
 
-    if mode == "skip":
-        result = run_native_skip(client, fetch, max_steps=max_steps, deadline=progress_end,
-                                 total_deadline=wall_end, between=collect, nudge=dismiss)
-    else:
-        result = run_advance_until(fetch, dismiss, max_steps=max_steps,
-                                   timeout=max(0.01, progress_end - time.monotonic()))
-        result["mode"] = "dismiss"
+    result = run_native_skip(client, fetch, max_steps=max_steps, deadline=progress_end,
+                             total_deadline=wall_end, between=collect, nudge=nudge)
     prior = result.get("observation")
     final, status, error = settle(fetch, wall_end, screenshot=screenshot)
     result.update(observation=final, observation_status=status)
@@ -3629,7 +3623,7 @@ _SCENE_SNAPSHOT_MAX_BYTES = 2_000_000
 
 def _scene_snapshot_dir(project_path: str) -> Path:
     try:
-        return ensure_nofollow_directory(project_state_dir(project_path) / "scenes")
+        return ensure_project_state_dir(project_path, "scenes")
     except PrivatePathError as exc:
         raise ValueError("scene snapshot directory is unsafe: %s" % exc) from exc
 

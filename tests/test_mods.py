@@ -6,6 +6,7 @@ import pytest
 
 from renforge import mods, policy
 from renforge.util import files as util_files
+from renforge.tools import live
 from renforge.tools import mods as mod_tools
 from renforge.state import project_state_dir
 
@@ -218,6 +219,28 @@ def test_package_zips_listed_files_without_compiled_or_manifest(tmp_path) -> Non
         assert archive.read("game/mods/demo/readme.md") == b"hello"
 
 
+def test_package_does_not_follow_a_linked_state_folder(tmp_path) -> None:
+    """The zip goes into RenForge's own state folder, never through a link planted there."""
+    import os
+
+    root = _project(tmp_path)
+    mods.write_file(root, "demo", "a.rpy", "label a:\n    return\n")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    state = project_state_dir(root)
+    state.mkdir(parents=True, exist_ok=True)
+    try:
+        os.symlink(elsewhere, state / "mods", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+
+    result = mod_tools.mod(str(root), "package", name="demo")
+
+    assert result["ok"] is False
+    assert "unsafe" in result["error"]
+    assert list(elsewhere.iterdir()) == []
+
+
 def test_package_unknown_mod_is_an_error(tmp_path) -> None:
     root = _project(tmp_path)
 
@@ -382,9 +405,9 @@ class _Reload:
 
 def _install_reload(monkeypatch, fake: _Reload) -> None:
     monkeypatch.setattr(mod_tools, "control", fake.control)
-    monkeypatch.setattr(mod_tools, "observe", fake.observe)
+    monkeypatch.setattr(live, "observe", fake.observe)
     monkeypatch.setattr(mod_tools, "get_errors", fake.get_errors)
-    monkeypatch.setattr(mod_tools.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(live.time, "sleep", lambda seconds: None)
 
 
 def test_reload_polls_until_stable_and_reports_clean_errors(tmp_path, monkeypatch) -> None:
@@ -444,7 +467,7 @@ def test_reload_gives_up_after_timeout(tmp_path, monkeypatch) -> None:
 def test_reload_skips_polling_when_control_fails(tmp_path, monkeypatch) -> None:
     fake = _Reload(observations=[], error_replies=[{"ok": True, "events": []}])
     monkeypatch.setattr(mod_tools, "get_errors", fake.get_errors)
-    monkeypatch.setattr(mod_tools, "observe", fake.observe)
+    monkeypatch.setattr(live, "observe", fake.observe)
     monkeypatch.setattr(
         mod_tools, "control", lambda project_path, action, **kwargs: {"ok": False, "error": "no running game"}
     )
@@ -614,10 +637,8 @@ def test_remove_uses_the_reparse_aware_link_check(tmp_path, monkeypatch) -> None
     root = _project(tmp_path)
     mods.write_file(root, "demo", "sub/a.rpy", "label a:\n    return\n")
     junction = (root / "game" / "mods" / "demo" / "sub").resolve()
-    real_check = util_files._component_is_link
-    monkeypatch.setattr(
-        mods, "_component_is_link", lambda path: Path(path) == junction or real_check(path), raising=False
-    )
+    real_check = util_files.is_link
+    monkeypatch.setattr(mods, "is_link", lambda path: Path(path) == junction or real_check(path))
 
     result = mods.remove(root, "demo")
 

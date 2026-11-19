@@ -18,6 +18,8 @@ import unicodedata
 from pathlib import Path
 from typing import Final
 
+from .util.files import ensure_nofollow_directory
+
 STATE_DIR_ENV: Final = "RENFORGE_STATE_DIR"
 
 
@@ -83,6 +85,17 @@ def project_state_dir(project_root: str | Path) -> Path:
     digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:16]
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", root.name).strip("._")[:48] or "project"
     return state_root() / "projects" / f"{name}-{digest}"
+
+
+def ensure_project_state_dir(project_root: str | Path, *parts: str) -> Path:
+    """Create (if needed) and return the project's state folder, or a folder in it.
+
+    No component may be a symlink or reparse point: a link planted in the
+    state tree must not redirect RenForge's writes. Raises
+    :class:`~renforge.util.files.PrivatePathError` when one is. It makes no
+    folder private; callers that need that check permissions themselves.
+    """
+    return ensure_nofollow_directory(project_state_dir(project_root).joinpath(*parts))
 
 
 def control_dir(project_root: str | Path) -> Path:

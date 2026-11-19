@@ -2424,10 +2424,10 @@ def test_windows_project_bridge_lock_helper_wiring_and_cleanup(tmp_path: Path, m
     from renforge.bridge.launcher import ProjectBridgeLock, _LockPathUnsafe
     from renforge.util import files as private_files
 
-    called = {"is_reparse": False, "set_dacl": False, "val_dacl": False, "closed_file": False}
+    called = {"is_link": False, "set_dacl": False, "val_dacl": False, "closed_file": False}
 
-    def fake_win_is_reparse(path):
-        called["is_reparse"] = True
+    def fake_is_link(path):
+        called["is_link"] = True
         return False
 
     def fake_win_set_dacl(path):
@@ -2437,7 +2437,7 @@ def test_windows_project_bridge_lock_helper_wiring_and_cleanup(tmp_path: Path, m
         called["val_dacl"] = True
         raise RuntimeError("DACL check failed")
 
-    monkeypatch.setattr("renforge.util.files._win_is_reparse", fake_win_is_reparse)
+    monkeypatch.setattr("renforge.util.files.is_link", fake_is_link)
     monkeypatch.setattr("renforge.util.files._win_set_protected_dacl", fake_win_set_dacl)
     monkeypatch.setattr("renforge.util.files._win_validate_protected_dacl", fake_win_val_dacl)
 
@@ -2485,7 +2485,7 @@ def test_windows_project_bridge_lock_helper_wiring_and_cleanup(tmp_path: Path, m
     with pytest.raises(_LockPathUnsafe, match="bridge lock DACL is unsafe"):
         lock._open_lock_file_windows()
 
-    assert called["is_reparse"] is True
+    assert called["is_link"] is True
     assert called["set_dacl"] is True
     assert called["val_dacl"] is True
     assert called["closed_file"] is True

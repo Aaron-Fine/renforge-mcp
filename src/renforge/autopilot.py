@@ -28,7 +28,7 @@ from .bridge.launcher import launch_with_bridge
 from .project import RenpyProject
 from .scanner import scan_project
 from .sdk import RenpySdk
-from .util.files import ensure_nofollow_directory
+from .state import ensure_project_state_dir
 
 
 def _story_labels(project_path: str | Path) -> set[str]:
@@ -77,7 +77,7 @@ def autopilot(
     seen_prefixes: set[tuple[int, ...]] = set()
     runs = 0
 
-    progress_path = ensure_nofollow_directory(project.cache_dir) / "autopilot.json"
+    progress_path = ensure_project_state_dir(project.root) / "autopilot.json"
 
     def _report(done: bool) -> dict[str, Any]:
         covered = sorted(total_labels & reached)

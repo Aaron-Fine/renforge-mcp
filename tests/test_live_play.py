@@ -65,7 +65,7 @@ def test_progression_reports_a_screenshot_that_does_not_decode(monkeypatch) -> N
     }
 
     class _Client:
-        _config = type("Cfg", (), {"host": "127.0.0.1", "port": 9, "token": "tok"})()
+        config = type("Cfg", (), {"host": "127.0.0.1", "port": 9, "token": "tok"})()
 
         def observe(self, screenshot=False, deadline=None):
             return {**frame, **({"screenshot": "corrupt"} if screenshot else {})}
@@ -91,3 +91,62 @@ def test_progression_reports_a_screenshot_that_does_not_decode(monkeypatch) -> N
     assert result["observation_status"] == "transport_error"
     assert "invalid screenshot" in result["observation_error"]
     assert {"type": "label", "label": "start"} in result["crossed"]
+
+
+def test_the_stuck_pause_nudge_asks_the_bridge_to_accept_a_pending_pause(monkeypatch) -> None:
+    """A {w=1.0}{nw} line that stays a pause is clicked once; the plain guard refuses every pause."""
+    from renforge import progression
+
+    stuck = {
+        "interaction": 7, "stable": False, "unstable_reason": "pause",
+        "statement": {"file": "game/script.rpy", "line": 22}, "label": "start",
+        "dialogue": {"who": None, "what": "Wait for it"},
+        "screens": [{"name": "say", "layer": "screens", "modal": False}],
+        "say_dismiss": "dismiss", "overlay_screens": [], "elements": [],
+        "omitted": {"focus_truncated": False, "unclassified": False},
+        "session_id": "s1", "observation_id": "o1",
+    }
+    dismisses: list[dict] = []
+
+    class _Client:
+        config = type("Cfg", (), {"host": "127.0.0.1", "port": 9, "token": "tok"})()
+
+        def observe(self, screenshot=False, deadline=None):
+            return dict(stuck)
+
+        def dismiss_if(self, **kwargs):
+            dismisses.append(kwargs)
+            return {"ok": True}
+
+        def progression(self, *_args, **_kwargs):
+            raise AssertionError("progression must not start from an unstable frame")
+
+        def poll_events(self, since=0, deadline=None):
+            return {"events": [], "cursor": since}
+
+    monkeypatch.setattr(progression, "STUCK_PAUSE_SECONDS", 0.05)
+    monkeypatch.setattr(live, "_client", lambda _path: _Client())
+    monkeypatch.setattr(live, "_owned_session", lambda _path: None)
+
+    live.advance_until("/tmp/renforge-stuck-pause", max_steps=5, timeout=0.5, screenshot=False)
+
+    assert len(dismisses) == 1
+    assert dismisses[0]["interaction"] == 7
+    assert dismisses[0]["allow_pause"] is True
+
+
+def test_waiting_for_a_stable_observation(monkeypatch) -> None:
+    """Shared by a session load and a mod reload: poll observe until the screen is stable."""
+    replies: list[dict] = []
+    monkeypatch.setattr(live, "observe", lambda *_a, **_k: replies.pop(0))
+    monkeypatch.setattr(live.time, "sleep", lambda _seconds: None)
+
+    replies[:] = [{"stable": False}, {"stable": True}, {"stable": True, "observation_id": "o2"}]
+    assert live.wait_for_stable_observation("/tmp/renforge-wait") == {"stable": True}
+    replies[:] = [{"stable": True}, {"stable": True, "observation_id": "o2"}]
+    assert live.wait_for_stable_observation("/tmp/renforge-wait", require_id=True) == {
+        "stable": True, "observation_id": "o2"}
+    # Out of time, the last observation comes back after at least one look.
+    replies[:] = [{"stable": False}, {"stable": True}]
+    assert live.wait_for_stable_observation("/tmp/renforge-wait", timeout=0.0) == {"stable": False}
+    assert replies == [{"stable": True}]

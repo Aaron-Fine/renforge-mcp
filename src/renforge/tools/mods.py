@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from .. import mods
 from ..compact import compact_observation
-from .live import control, get_errors, observe
+from .live import control, get_errors, wait_for_stable_observation
 
 ACTIONS = ("write", "list", "lint", "reload", "remove", "package", "guide")
 _ACTIONS_WITHOUT_NAME = ("list", "guide", "reload")
@@ -41,15 +40,8 @@ def _reload(project_path: str) -> dict[str, Any]:
     if not isinstance(reload_reply, dict) or not reload_reply.get("ok"):
         return {"ok": False, "reload": reload_reply, "observation": None, "errors": None}
 
-    observation: dict[str, Any] | None = None
-    deadline = time.monotonic() + RELOAD_TIMEOUT
-    while True:
-        observation = observe(project_path, screenshot=False)
-        if isinstance(observation, dict) and observation.get("stable") is True:
-            break
-        if time.monotonic() >= deadline:
-            break
-        time.sleep(RELOAD_POLL_INTERVAL)
+    observation = wait_for_stable_observation(project_path, timeout=RELOAD_TIMEOUT,
+                                              interval=RELOAD_POLL_INTERVAL)
 
     errors = get_errors(project_path, since=cursor)
     if not isinstance(errors, dict):

@@ -20,8 +20,8 @@ src/renforge/
     content_build.py # assets, translations, builds, docs
     mods.py         # renforge_mod
   interaction.py    # pure gameplay contract shared with the injected bridge
-  observe.py        # host image decoding + compatibility exports
-  progression.py    # native skip, guarded dismiss, settling, process failures
+  observe.py        # host decoding of delivered screenshots
+  progression.py    # native skip, stuck-pause nudge, settling, process failures
   bridge/           # in-game .rpy bridge, launcher, and client
   tools/
     live.py         # running-game control (launch, eval, screenshot, ...)
@@ -108,7 +108,8 @@ before that check; the namemap itself stays Node-keyed.
 
 RenForge follows that dump unwrap without waiting on a new SDK release and
 without patching installed `dump.py`. Each dump subprocess loads a temporary
-`.rpe.py` adapter from `RENPY_SEARCHPATH` that wraps `renpy.dump.dump` and,
+`.rpe` adapter (a zip whose `autorun.py` every Ren'Py 8 runs; `.rpe.py` came
+only in 8.3) from `RENPY_SEARCHPATH` that wraps `renpy.dump.dump` and,
 only when keys are not already strings, presents a string-keyed namemap for
 the duration of the dump. Because namemap keys remain `Node` objects even
 after upstream `dump.py` is fixed, the adapter still normalizes the map on
@@ -219,9 +220,9 @@ interaction the bridge freezes skip before screen construction; the periodic
 main-thread inventory resumes it only for known narrative. The lease counts
 advances and checks deadlines inside the game. Choices, inputs, custom controls,
 unknown interactions, exceptions, completion, and lease expiry disable owned
-skip and restore the saved preferences. `mode="dismiss"` keeps the guarded
-single-step path in the same host module; `observe.py` retains compatibility
-exports and handles delivered images.
+skip and restore the saved preferences. A line that stays a pause past any
+short pause gets one guarded dismiss that accepts the pending pause.
+`observe.py` decodes and bounds delivered images.
 
 The host polls events during progression and reserves part of the total budget
 for operation cleanup, two matching stable final observations, image capture,

@@ -465,14 +465,17 @@ def build_wrappers(context):
 
     def renforge_session(project_path: str, action: str, slot: str | None = None,
                          label: str | None = None, authorize: bool = False) -> dict:
-        """Start, check, save, load, list saves of, or stop a play session.
+        """Start, check, save, load, list saves of, import a player save into, or stop a play session.
 
         The canonical lifecycle for agents. ``launch`` uses agent-mode
         defaults: saves and preferences in the project's RenForge state
         folder (never the player's, and kept across launches), an isolated
         HOME, no Live Editor. Poll ``status`` until ready. ``save``, ``load``
         and ``list`` refuse a game whose saves or HOME are outside RenForge's
-        own folders (``SESSION_NOT_ISOLATED``).
+        own folders (``SESSION_NOT_ISOLATED``). ``import`` copies one of the
+        player's slots in, only reading the player's file; it refuses a running
+        game that keeps its saves somewhere RenForge does not own
+        (``SESSION_SAVES_ELSEWHERE``).
         """
 
         def _session() -> dict:
@@ -547,7 +550,7 @@ def build_wrappers(context):
             the session's saves folder, which the next launch uses.
             """
             from ..save_isolation import import_host_slots
-            from ..util.files import ensure_nofollow_directory
+            from ..state import ensure_project_state_dir
 
             saves = live.session_saves_dir(project_path)
             running = live.running_game_savedir(project_path)
@@ -564,7 +567,7 @@ def build_wrappers(context):
                 replaced = _has_slot(saves, name)
                 # The import creates only the saves folder itself; the state
                 # folder is RenForge's own (and already resolved), so make it here.
-                ensure_nofollow_directory(saves.parent)
+                ensure_project_state_dir(project_path)
                 result = import_host_slots(project_path, saves, slot=name, save_name=save_name)
             touched = list(result.get("files_touched") or [])
             if not result.get("ok"):
@@ -607,20 +610,12 @@ def build_wrappers(context):
             The bridge replies before the engine has restarted into the save, so
             its ``restored_label`` names the label from before the load.
             """
-            import time
-
             from ..compact import compact_observation
 
             result.pop("restored_label", None)
             result.pop("restarting", None)
             result.pop("ended_interaction", None)
-            observation = None
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                observation = live.observe(project_path, screenshot=False)
-                if isinstance(observation, dict) and observation.get("stable") and observation.get("observation_id"):
-                    break
-                time.sleep(0.25)
+            observation = live.wait_for_stable_observation(project_path, require_id=True)
             if isinstance(observation, dict) and observation.get("observation_id"):
                 result["observation"] = compact_observation(observation)
             return result

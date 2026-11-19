@@ -241,9 +241,7 @@ class ProjectBridgeLock:
 
         from ..util import files as private_files
 
-        if self.path.is_symlink() or (
-            self.path.exists() and private_files._win_is_reparse(self.path)
-        ):
+        if private_files.is_link(self.path):
             raise _LockPathUnsafe(f"bridge lock must not be a reparse point: {self.path}")
 
         GENERIC_READ = 0x80000000
