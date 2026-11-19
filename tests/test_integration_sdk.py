@@ -1603,9 +1603,12 @@ label start:
     with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            if any(item['name'] == 'target' for item in session.client.get_state().get('screens', [])):
+            screens = session.client.get_state().get('screens', [])
+            if any(item['name'] == 'target' for item in screens):
                 break
             time.sleep(0.1)
+        else:
+            pytest.fail("the target screen never showed: %r" % (screens,))
         from renforge.observe import apply_screenshot, classify
         import renforge.util.images as images
         monkeypatch.setattr(images, 'MCP_PNG_MAX_BYTES', 512)
@@ -1801,9 +1804,12 @@ def test_live_explain_reads_rpyc_only_game(sdk, tmp_path: Path) -> None:
 
         # Wait for the start menu to appear, then explain the label.
         for _ in range(40):
-            if any(control.get("text") == "Leave" for control in session.client.list_ui_elements()):
+            elements = session.client.list_ui_elements()
+            if any(control.get("text") == "Leave" for control in elements):
                 break
             time.sleep(0.25)
+        else:
+            pytest.fail("the start menu never showed: %r" % (elements,))
         start = session.client.explain(label="start")
         assert start["ok"] is True, start
         assert any(row["kind"] == "choice" and row["text"] == "Open if rf_gate" for row in start["statements"]), start
