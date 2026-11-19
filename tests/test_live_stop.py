@@ -1610,3 +1610,45 @@ def test_a_starting_launch_counts_storage_that_might_be_the_players(tmp_path: Pa
         if task is not None:
             task.done_event.wait(5)
         live._LAUNCHES.pop(live._key(project), None)
+
+
+def test_a_launch_with_a_start_label_replaces_a_running_session(tmp_path: Path, monkeypatch) -> None:
+    """The label reaches the game only at startup, so a reused game would never go there."""
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    running = _OwnedRunningSession(editor=False)
+    live._SESSIONS[key] = running
+    captured: dict = {}
+
+    def fake_launch(_sdk, _project, **kwargs):
+        captured.update(kwargs.get("extra_env") or {})
+        return _LaunchedSession(editor=False)
+
+    monkeypatch.setattr(live, "get_or_install_sdk", lambda *_a, **_k: "sdk")
+    monkeypatch.setattr(live, "launch_with_bridge", fake_launch)
+    try:
+        result = live.launch_game(str(project), editor=False, savedir="temporary", start_label="chapter_two")
+    finally:
+        live._SESSIONS.pop(key, None)
+    assert result["ok"] is True and result["already_running"] is False
+    assert running.close_calls == 1
+    assert captured["RENFORGE_BRIDGE_START_LABEL"] == "chapter_two"
+
+
+def test_a_launch_with_a_start_label_refuses_to_take_over_an_external_bridge(tmp_path: Path, monkeypatch) -> None:
+    project = _make_project(tmp_path)
+    monkeypatch.setattr(
+        live.BridgeClient,
+        "from_project",
+        classmethod(lambda cls, root, **_kwargs: _StateClient()),
+    )
+    monkeypatch.setattr(
+        live,
+        "get_or_install_sdk",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not relaunch")),
+    )
+
+    result = live.launch_game(str(project), editor=False, start_label="chapter_two")
+
+    assert result["ok"] is False
+    assert result["code"] == "BRIDGE_PROJECT_LOCKED"

@@ -701,7 +701,10 @@ gives the game its own HOME, and leaves the Live Editor out. Calling
 `renforge_observe` or `renforge_act` before the game is running returns
 `code="NO_RUNNING_GAME"`, or `GAME_STARTING` while it starts. For testing and modding, `label="..."` starts
 the story at that label instead: the game leaves its splash screen or main
-menu for it, which works for games shipped only as archives. Nothing the
+menu for it, which works for games shipped only as archives. The label is
+applied only at startup, so a game this server is running is stopped and
+started again for it, and one started elsewhere is refused with
+`BRIDGE_PROJECT_LOCKED`. Nothing the
 story did before the label has happened (variables keep their defaults, and a
 label normally reached with `call` ends the run when it returns), so every
 observation carries `started_at_label`; an unknown label is reported as

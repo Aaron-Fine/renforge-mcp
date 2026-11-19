@@ -2133,6 +2133,27 @@ def test_session_launch_keeps_its_own_home_even_when_isolation_defaults_to_exist
     assert captured["editor"] is False
 
 
+@pytest.mark.parametrize(("launched", "says_label"), [
+    ({"ok": True, "ready": True, "already_running": False}, True),
+    ({"ok": True, "ready": False, "status": "starting"}, True),
+    ({"ok": True, "ready": True, "already_running": True}, False),
+    ({"ok": False, "code": "LAUNCH_IN_PROGRESS"}, False),
+])
+def test_session_launch_reports_a_start_label_only_for_a_game_it_started(
+        tmp_path, monkeypatch, launched, says_label) -> None:
+    """A reused or refused launch never went to the label."""
+    from renforge.tools import live
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(live, "start_launch", lambda *_a, **_k: dict(launched))
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    result = app.tools["renforge_session"](str(tmp_path), "launch", label="chapter_two")
+
+    assert ("start_label" in result) is says_label
+
+
 def _saves_tool(monkeypatch, import_result):
     from renforge import dashboard_client
     from renforge.tools import live

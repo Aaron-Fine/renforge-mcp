@@ -491,7 +491,9 @@ def build_wrappers(context):
                 # the policy classifies this launch as isolated.
                 result = _start_launch(project_path, editor=False, savedir=str(saves), home="temporary",
                                        start_label=label.strip() if label else None)
-                if label and isinstance(result, dict):
+                # Only a game this call starts goes to the label: a reused one
+                # stays where it is, and a refused launch starts nothing.
+                if label and isinstance(result, dict) and result.get("ok") and not result.get("already_running"):
                     result["start_label"] = label.strip()
                 return result
             if action == "status":

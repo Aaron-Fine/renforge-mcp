@@ -970,6 +970,9 @@ def launch_game(
                                  preferences=preferences, bridge_eval=bridge_eval)
     eval_on = wanted["eval"]
 
+    # A warp and a start label reach the game only when it starts, so a
+    # running game is never handed back for them.
+    fresh_only = warp is not None or start_label is not None
     key = _key(project.root)
     existing = _SESSIONS.get(key)
     if existing is not None:
@@ -990,10 +993,11 @@ def launch_game(
                 requested_language=language,
                 active_language=active_language,
             )
-        # Reuse a live session only when no warp is requested and it still
-        # answers; otherwise tear it down (a warp needs a fresh --warp launch,
-        # and a dead process must be reaped so it does not linger as a zombie).
-        if warp is None and existing.process.poll() is None:
+        # Reuse a live session only when no warp or start label is requested
+        # and it still answers; otherwise tear it down (a warp needs a fresh
+        # --warp launch, and a dead process must be reaped so it does not
+        # linger as a zombie).
+        if not fresh_only and existing.process.poll() is None:
             # A launch must not be handed a game that uses the player's saves
             # or HOME where the launch isolates them, checked per component:
             # isolated saves with the host HOME still need isolated saves.
@@ -1056,7 +1060,7 @@ def launch_game(
         if _SESSIONS.get(key) is existing:
             _SESSIONS.pop(key, None)
 
-    if warp is None:
+    if not fresh_only:
         try:
             external = _client(project.root)
             state = external.get_state()
@@ -1111,7 +1115,7 @@ def launch_game(
         else:
             message = (
                 "Another RenForge bridge session is active for this project. "
-                "Stop it from the owning RenForge session before launching with warp."
+                "Stop it from the owning RenForge session before launching with warp or a start label."
             )
             active_language = state.get("language")
             result = {
