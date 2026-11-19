@@ -172,3 +172,39 @@ def test_a_long_container_is_not_copied_in_full_to_list_its_first_entries(runnin
 
     assert got["value"] == list(range(40)) and got["size"] == 5000 and got["truncated"] is True
     assert len(taken) <= 41
+
+
+# --- search ----------------------------------------------------------------
+
+
+def _button(line, label, children=()):
+    f = "game/menu.rpy"
+    return _script_node("SLDisplayable", f, line, name="textbutton", positional=["'%s'" % label],
+                        keyword=[("action", "Return()")], children=list(children), location=(f, line))
+
+
+def test_screen_search_lists_matches_in_document_order_and_keeps_the_first(running_bridge):
+    f = "game/menu.rpy"
+    _set_script(running_bridge, {})
+    running_bridge.renpy.game.script.all_stmts = []
+    nested = _script_node("SLIf", f, 3, entries=[("ready", _node("SLBlock", children=[_button(4, "Go on")]))])
+    ast = _node("SLScreen", children=[_button(1, "Go east"), _button(2, "Go west", [nested]), _button(5, "Go home")])
+    _set_screens(running_bridge, {("menu", None): _screen((f, 1), ast=ast)})
+
+    every = running_bridge.client.explain(search="'go")
+    first = running_bridge.client.explain(search="'go", limit=2)
+
+    assert [match["line"] for match in every["matches"]] == [1, 2, 4, 5]
+    assert [match["line"] for match in first["matches"]] == [1, 2] and first["truncated"] is True
+
+
+def test_search_snippet_keeps_the_match_when_case_folding_changes_length(running_bridge):
+    f = "game/script.rpy"
+    say = _script_node("Say", f, 2, who=None, what="ß" * 80 + "TARGET")
+    _set_script(running_bridge, {"start": _script_node("Label", f, 1, block=[say])})
+    running_bridge.renpy.game.script.all_stmts = [say]
+    _set_screens(running_bridge, {})
+
+    [match] = running_bridge.client.explain(search="target")["matches"]
+
+    assert "TARGET" in match["text"]

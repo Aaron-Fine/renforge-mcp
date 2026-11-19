@@ -6416,6 +6416,18 @@ init python:
         return "(" + ", ".join(parts) + ")"
 
 
+    def _renforge_explain_snippet(text, needle):
+        """Up to 60 characters either side of the first case-insensitive ``needle``.
+
+        The window is found in ``text`` itself: an index into its casefold
+        can point past the match, since folding changes length (sharp s
+        folds to "ss"). A match only folding finds shows the start of the text."""
+        import re as _re
+        found = _re.search(_re.escape(needle), text, _re.IGNORECASE)
+        start, end = (found.start(), found.end()) if found else (0, len(needle))
+        return text[max(0, start - 60):end + 60]
+
+
     def _renforge_explain_search(needle, limit):
         """Every loaded statement whose text contains ``needle``, with its enclosing label."""
         wanted = needle.casefold()
@@ -6438,10 +6450,8 @@ init python:
                 where.get("file"), where.get("line") or 0,
                 falls_through=node.__class__.__name__ in _RENFORGE_STORY_STATEMENTS)
             kind, text = found[0]
-            at = text.casefold().find(wanted)
-            snippet = text[max(0, at - 60):at + len(needle) + 60]
             matches.append({"kind": kind, "file": where.get("file"), "line": where.get("line"),
-                            "label": enclosing, "text": _renforge_explain_text(snippet)})
+                            "label": enclosing, "text": _renforge_explain_text(_renforge_explain_snippet(text, needle))})
         # Screen language: displayable arguments, properties, and conditions.
         seen = set()
         for screen_name, _variant, screen in _renforge_explain_screens():
@@ -6449,7 +6459,9 @@ init python:
             if truncated or ast is None or id(ast) in seen:
                 continue
             seen.add(id(ast))
-            stack = builtins.list(getattr(ast, "children", None) or ())
+            # Depth first in document order: children go on reversed, so the
+            # first is popped first, and a cut keeps the earliest matches.
+            stack = builtins.list(getattr(ast, "children", None) or ())[::-1]
             while stack and not truncated:
                 node = stack.pop()
                 try:
@@ -6467,8 +6479,10 @@ init python:
                     elif kind == "SLPython":
                         texts.append(_renforge_explain_pysrc(getattr(node, "code", None)) or "")
                     hit = next((text for text in texts if wanted in text.casefold()), None)
+                    below = []
                     for _label, children in _renforge_explain_branches(node):
-                        stack.extend(children or ())
+                        below.extend(children or ())
+                    stack.extend(below[::-1])
                 except Exception:
                     continue
                 if hit is None:
@@ -6477,10 +6491,9 @@ init python:
                     truncated = True
                     break
                 where = _renforge_explain_loc(node) or {}
-                at = hit.casefold().find(wanted)
                 matches.append({"kind": "screen", "file": where.get("file"), "line": where.get("line"),
                                 "screen": screen_name,
-                                "text": _renforge_explain_text(hit[max(0, at - 60):at + len(needle) + 60])})
+                                "text": _renforge_explain_text(_renforge_explain_snippet(hit, needle))})
         return {"ok": True, "search": needle, "matches": matches, "truncated": truncated}
 
 
