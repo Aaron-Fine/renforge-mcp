@@ -344,3 +344,23 @@ def test_input_update_text_without_check_size_is_still_supported(running_bridge)
     widget = TwoArgumentInput()
     assert running_bridge.globs["_renforge_replace_input_text"](widget, "Alex") == "Alex"
     assert widget.content == "Alex"
+
+
+# --- eval switch -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["OFF", "0", "false", "no", " off "])
+def test_any_eval_setting_other_than_on_switches_eval_off(running_bridge, monkeypatch, value):
+    monkeypatch.setenv("RENFORGE_BRIDGE_EVAL", value)
+    reply = running_bridge.client.request("eval", {"expr": "1 + 1"})
+    assert reply["error"] == "eval_disabled"
+    assert running_bridge.client.session_info()["eval_enabled"] is False
+
+
+@pytest.mark.parametrize("value", [None, "on", "ON"])
+def test_eval_runs_when_unset_or_on(running_bridge, monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("RENFORGE_BRIDGE_EVAL", raising=False)
+    else:
+        monkeypatch.setenv("RENFORGE_BRIDGE_EVAL", value)
+    assert running_bridge.client.eval_expr("1 + 1") == 2

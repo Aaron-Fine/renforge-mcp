@@ -17,6 +17,8 @@ init python:
     #   RENFORGE_BRIDGE_PROJECT_ROOT required canonical absolute project root
     #   RENFORGE_BRIDGE_PORT         default 0 (an ephemeral port is chosen)
     #   RENFORGE_BRIDGE_CONTROL_DIR  private control folder, outside the game
+    #   RENFORGE_BRIDGE_EVAL         unset or "on" lets eval and set_var run
+    #                                code; any other value switches them off
     # The launcher reserves starting metadata at
     #   <control dir>/bridge.json
     # Before serving, the bridge validates that record and publishes ready.
@@ -571,8 +573,13 @@ init python:
         return {"ok": True, "channels": _renforge_h_get_audio_state(payload)}
 
     def _renforge_eval_refused():
-        """eval and set_var run arbitrary code; a launch can switch them off."""
-        if os.environ.get("RENFORGE_BRIDGE_EVAL", "on") == "off":
+        """eval and set_var run arbitrary code; a launch can switch them off.
+
+        Fails closed: only an unset RENFORGE_BRIDGE_EVAL or "on" (any case)
+        leaves them on, so "OFF", "0" or "false" switch them off too.
+        """
+        setting = os.environ.get("RENFORGE_BRIDGE_EVAL")
+        if setting is not None and setting.strip().casefold() != "on":
             return {"ok": False, "error": "eval_disabled",
                     "message": "This session's bridge does not run code (no debug or editor toolset)."}
         return None
