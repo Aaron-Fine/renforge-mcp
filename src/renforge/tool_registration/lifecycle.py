@@ -607,20 +607,12 @@ def build_wrappers(context):
             The bridge replies before the engine has restarted into the save, so
             its ``restored_label`` names the label from before the load.
             """
-            import time
-
             from ..compact import compact_observation
 
             result.pop("restored_label", None)
             result.pop("restarting", None)
             result.pop("ended_interaction", None)
-            observation = None
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                observation = live.observe(project_path, screenshot=False)
-                if isinstance(observation, dict) and observation.get("stable") and observation.get("observation_id"):
-                    break
-                time.sleep(0.25)
+            observation = live.wait_for_stable_observation(project_path, require_id=True)
             if isinstance(observation, dict) and observation.get("observation_id"):
                 result["observation"] = compact_observation(observation)
             return result

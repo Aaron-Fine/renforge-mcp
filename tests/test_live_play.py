@@ -133,3 +133,20 @@ def test_the_stuck_pause_nudge_asks_the_bridge_to_accept_a_pending_pause(monkeyp
     assert len(dismisses) == 1
     assert dismisses[0]["interaction"] == 7
     assert dismisses[0]["allow_pause"] is True
+
+
+def test_waiting_for_a_stable_observation(monkeypatch) -> None:
+    """Shared by a session load and a mod reload: poll observe until the screen is stable."""
+    replies: list[dict] = []
+    monkeypatch.setattr(live, "observe", lambda *_a, **_k: replies.pop(0))
+    monkeypatch.setattr(live.time, "sleep", lambda _seconds: None)
+
+    replies[:] = [{"stable": False}, {"stable": True}, {"stable": True, "observation_id": "o2"}]
+    assert live.wait_for_stable_observation("/tmp/renforge-wait") == {"stable": True}
+    replies[:] = [{"stable": True}, {"stable": True, "observation_id": "o2"}]
+    assert live.wait_for_stable_observation("/tmp/renforge-wait", require_id=True) == {
+        "stable": True, "observation_id": "o2"}
+    # Out of time, the last observation comes back after at least one look.
+    replies[:] = [{"stable": False}, {"stable": True}]
+    assert live.wait_for_stable_observation("/tmp/renforge-wait", timeout=0.0) == {"stable": False}
+    assert replies == [{"stable": True}]

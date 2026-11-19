@@ -6,6 +6,7 @@ import pytest
 
 from renforge import mods, policy
 from renforge.util import files as util_files
+from renforge.tools import live
 from renforge.tools import mods as mod_tools
 from renforge.state import project_state_dir
 
@@ -382,9 +383,9 @@ class _Reload:
 
 def _install_reload(monkeypatch, fake: _Reload) -> None:
     monkeypatch.setattr(mod_tools, "control", fake.control)
-    monkeypatch.setattr(mod_tools, "observe", fake.observe)
+    monkeypatch.setattr(live, "observe", fake.observe)
     monkeypatch.setattr(mod_tools, "get_errors", fake.get_errors)
-    monkeypatch.setattr(mod_tools.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(live.time, "sleep", lambda seconds: None)
 
 
 def test_reload_polls_until_stable_and_reports_clean_errors(tmp_path, monkeypatch) -> None:
@@ -444,7 +445,7 @@ def test_reload_gives_up_after_timeout(tmp_path, monkeypatch) -> None:
 def test_reload_skips_polling_when_control_fails(tmp_path, monkeypatch) -> None:
     fake = _Reload(observations=[], error_replies=[{"ok": True, "events": []}])
     monkeypatch.setattr(mod_tools, "get_errors", fake.get_errors)
-    monkeypatch.setattr(mod_tools, "observe", fake.observe)
+    monkeypatch.setattr(live, "observe", fake.observe)
     monkeypatch.setattr(
         mod_tools, "control", lambda project_path, action, **kwargs: {"ok": False, "error": "no running game"}
     )

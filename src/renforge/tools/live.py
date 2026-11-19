@@ -1666,6 +1666,26 @@ def observe(project_path: str, *, screenshot: bool = True) -> dict:
     return _with_client(project_path, _handler)
 
 
+def wait_for_stable_observation(project_path: str, *, timeout: float = 15.0, interval: float = 0.25,
+                                require_id: bool = False) -> dict | None:
+    """Observe (without a screenshot) until the screen is stable, and return that observation.
+
+    With ``require_id`` a stable observation must also carry an
+    ``observation_id``. It looks at least once; when *timeout* runs out first
+    it returns the last observation as it was, which may be unstable or an
+    error reply.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        observation = observe(project_path, screenshot=False)
+        if (isinstance(observation, dict) and observation.get("stable") is True
+                and (not require_id or observation.get("observation_id"))):
+            return observation
+        if time.monotonic() >= deadline:
+            return observation
+        time.sleep(interval)
+
+
 def act(
     project_path: str,
     interaction: int | None = None,
