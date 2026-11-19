@@ -102,3 +102,86 @@ def test_say_event_carries_a_character_namespace_speaker(running_bridge):
     assert bridge.last_who == "Eileen"
     says = [event for event in bridge.events if event["type"] == "say"]
     assert says[-1]["who"] == "Eileen"
+
+
+# --- dialogue at a soft pause ---------------------------------------------------
+
+
+class SayBehavior:
+    """A soft `pause`: renpy.ui.saybehavior() with the default dismiss list."""
+
+    def __init__(self):
+        self.dismiss = ["dismiss"]
+
+
+def _soft_pause_without_say_screen(renpy):
+    renpy.display.focus.focus_list[:] = []
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(
+                layers={"transient": [types.SimpleNamespace(displayable=SayBehavior())]}
+            ),
+        )
+    )
+    renpy.display.interface.ongoing_transition = {}
+    renpy.get_filename_line = lambda: ("game/script.rpy", 20)
+    renpy.config.overlay_screens = []
+    renpy.get_screen = lambda name: None
+
+
+def test_soft_pause_after_a_line_reports_no_dialogue(running_bridge):
+    """A line, then `pause`: the ended line is not the pause's dialogue."""
+    renpy = running_bridge.renpy
+    _soft_pause_without_say_screen(renpy)
+    renpy.store._last_say_who = None
+    on_say = renpy.config.all_character_callbacks[-1]
+    start_interact = renpy.config.start_interact_callbacks[0]
+
+    on_say("begin", what="Hello.")
+    on_say("show", what="Hello.")
+    start_interact()
+    # While the line's own interaction runs, its text is the dialogue even
+    # when no say screen carries it (a custom say screen without `who`).
+    during = running_bridge.client.observe(screenshot=False)
+    assert during["dialogue"] == {"who": None, "what": "Hello."}
+
+    on_say("end", what="Hello.")
+    start_interact()
+    paused = running_bridge.client.observe(screenshot=False)
+    assert paused["say_dismiss"] == "dismiss"
+    assert paused["dialogue"] is None
+
+
+def test_line_left_by_an_exception_is_not_the_next_dialogue(running_bridge):
+    """Rollback out of a line skips its "end" callback; interact_done still runs."""
+    renpy = running_bridge.renpy
+    _soft_pause_without_say_screen(renpy)
+    renpy.store._last_say_who = None
+    on_say = renpy.config.all_character_callbacks[-1]
+    start_interact = renpy.config.start_interact_callbacks[0]
+
+    on_say("begin", what="Hello.")
+    on_say("show", what="Hello.")
+    start_interact()
+    on_say("interact_done", what="Hello.", exception=True)
+    start_interact()
+
+    assert running_bridge.client.observe(screenshot=False)["dialogue"] is None
+
+
+def test_menu_caption_shown_without_interaction_is_the_menu_dialogue(running_bridge):
+    """A caption said with interact=False stays up through the menu's interaction."""
+    renpy = running_bridge.renpy
+    _soft_pause_without_say_screen(renpy)
+    renpy.store._last_say_who = None
+    on_say = renpy.config.all_character_callbacks[-1]
+    start_interact = renpy.config.start_interact_callbacks[0]
+
+    for event in ("begin", "show", "show_done", "end"):
+        on_say(event, what="Which way?", interact=False)
+    start_interact()
+    assert running_bridge.client.observe(screenshot=False)["dialogue"] == {"who": None, "what": "Which way?"}
+
+    start_interact()
+    assert running_bridge.client.observe(screenshot=False)["dialogue"] is None

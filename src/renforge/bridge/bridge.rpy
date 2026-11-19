@@ -4534,7 +4534,25 @@ init python:
     def _renforge_strip_say_tags(value):
         return _renforge_runtime.interaction.strip_text_tags(value)
 
+    def _renforge_say_is_stale(bridge):
+        """Whether the stored line belongs to an earlier interaction than this one.
+
+        The say callbacks set ``say_stale_from``; before any line it is unset
+        and nothing counts as stale.
+        """
+        stale_from = getattr(bridge, "say_stale_from", None) if bridge is not None else None
+        if not isinstance(stale_from, builtins.int):
+            return False
+        return int(getattr(bridge, "observe_generation", 0) or 0) >= stale_from
+
     def _renforge_observe_dialogue(screen_nodes, say_dismiss):
+        """The current line as {"who", "what"}, or None when there is none.
+
+        A say screen's scope (or its rendered who/what widgets) wins. Without
+        one, the line the say callbacks stored is used while its statement
+        is still this interaction's, which also covers NVL and custom say
+        screens; a hard pause shows no dialogue.
+        """
         # last_say survives the say window. Publish it only while this
         # interaction is still that line, or while a say screen is showing.
         scoped_who = None
@@ -4594,6 +4612,11 @@ init python:
             who = _renforge_display_name(scoped_who) if scoped_who_set else speaker_from_store()
             what = scoped_what
         else:
+            # No say screen carries the line. The stored line is still this
+            # interaction's dialogue only while its say statement runs; a soft
+            # pause after it also dismisses with "dismiss".
+            if _renforge_say_is_stale(bridge):
+                return None
             # Character callbacks on 8.3+ receive ``what``. 8.0–8.2 call the
             # same hook without it, while the statement still stores the line
             # on ``_last_say_what``. Prefer the callback copy when it exists.
@@ -8784,8 +8807,18 @@ init python:
             if event == "begin":
                 bridge.say_id += 1
                 bridge.say_recorded = False
+                # last_say stays this interaction's dialogue until the line
+                # is over; say_stale_from is the first generation that is not.
+                bridge.say_stale_from = None
             if event == "end":
                 bridge.say_ended_generation = bridge.observe_generation
+                # A line shown with interact=False (a menu's caption) stays up
+                # for the next interaction; any other line ends with this one.
+                held = kwargs.get("interact", True) is False
+                bridge.say_stale_from = bridge.observe_generation + (2 if held else 1)
+            if event == "interact_done" and kwargs.get("exception"):
+                # Rollback or an error left the line without its "end".
+                bridge.say_stale_from = bridge.observe_generation + 1
             if event in ("begin", "show") and what and not bridge.say_recorded:
                 bridge.say_recorded = True
                 previous_say = bridge.last_say
