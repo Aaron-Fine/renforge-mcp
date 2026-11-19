@@ -43,13 +43,14 @@ from ..save_isolation import (
     apply_launch_isolation_defaults,
     agent_session_id,
     default_launch_value,
+    ALL_COMPONENTS,
     HOME_COMPONENT,
     import_selected_slots,
-    isolation_is_renforge_owned,
     isolation_knobs_unset,
+    isolation_owned_components,
     isolation_report,
     launch_exposed_components,
-    launch_request_is_renforge_owned,
+    launch_owned_components,
     launch_state_mode_error,
     list_host_slots,
     reuse_keeps_isolation,
@@ -463,7 +464,7 @@ def start_launch(
                 # The starting launch is the game the request would get: what
                 # it may expose counts. Unknown requirements are the worst.
                 exposed=(started or {}).get("may_expose", _ALL_COMPONENTS),
-                isolated=bool(started and started.get("isolated")),
+                owned=_requested_owned(started or {}),
                 eval_running=not started or started.get("eval", True) is not False,
                 wanted=requirements,
                 requested_language=language,
@@ -697,7 +698,7 @@ def _isolation_mismatch(
     }
 
 
-_ALL_COMPONENTS: frozenset[str] = frozenset({SAVEDIR_COMPONENT, HOME_COMPONENT})
+_ALL_COMPONENTS: frozenset[str] = ALL_COMPONENTS
 
 
 def launch_requirements(
@@ -719,8 +720,9 @@ def launch_requirements(
     ``may_expose``: the components a game started from it might leave on the
     player's own (the wide answer); a request arriving while it starts is
     judged against this.
-    ``isolated``: it stays in RenForge's own folders and so needs no
-    authorization; it may then get only a session that does too.
+    ``owned``: the components it keeps in RenForge's own folders; it may get
+    only a session that keeps at least those there too.
+    ``isolated``: it keeps both there and so needs no authorization.
     ``eval``: its bridge may run code.
 
     A ``warp`` relaunch with every knob auto is judged with the isolation it
@@ -728,10 +730,12 @@ def launch_requirements(
     """
     knobs = {"savedir": savedir, "home": home, "persistent": persistent, "preferences": preferences}
     knobs = apply_launch_isolation_defaults(**_inherit_replaced_isolation(project_path, warp, knobs))
+    owned = launch_owned_components(project_path=project_path, **knobs)
     return {
         "exposed": launch_exposed_components(project_path=project_path, certain=True, **knobs),
         "may_expose": launch_exposed_components(project_path=project_path, **knobs),
-        "isolated": launch_request_is_renforge_owned(project_path=project_path, **knobs),
+        "owned": owned,
+        "isolated": owned == _ALL_COMPONENTS,
         "eval": bridge_eval_allowed() and bridge_eval is not False,
     }
 
@@ -762,10 +766,17 @@ def _inherit_replaced_isolation(
     return knobs
 
 
+def _requested_owned(requirements: Mapping[str, Any]) -> frozenset[str]:
+    """The components a launch request keeps in RenForge's folders (``isolated`` alone means both)."""
+    if "owned" in requirements:
+        return frozenset(requirements["owned"] or ())
+    return _ALL_COMPONENTS if requirements.get("isolated") else frozenset()
+
+
 def _reuse_refusal(
     *,
     exposed: frozenset[str],
-    isolated: bool,
+    owned: frozenset[str],
     eval_running: bool,
     wanted: Mapping[str, Any],
     requested_language: str | None = None,
@@ -773,20 +784,21 @@ def _reuse_refusal(
     """Why a running or starting session must not be handed to a request, if it must not.
 
     The per-component rule comes first: the game may expose none of the
-    player's storage that the request isolates. On top of it, a request that
-    needs no authorization gets only a session in RenForge's own folders (the
-    policy gate asks the same question), and a request whose toolsets run no
-    code gets only a bridge that refuses eval.
+    player's storage that the request isolates. On top of it, every
+    component the request keeps in RenForge's own folders must be there in
+    the game too (so a request that needs no authorization, the policy
+    gate's question, gets only a session wholly in them), and a request
+    whose toolsets run no code gets only a bridge that refuses eval.
     """
     requested_exposed = frozenset(wanted.get("exposed") or ())
     if not reuse_keeps_isolation(requested_exposed, frozenset(exposed)):
         return _isolation_mismatch(
             requested_exposes=bool(requested_exposed), requested_language=requested_language
         )
-    if wanted.get("isolated") and not isolated:
+    if not _requested_owned(wanted) <= owned:
         message = ("The running game keeps its saves or HOME outside RenForge's own folders (the player's "
-                   "saves, or a folder an earlier launch was authorized for), but this launch asked for an "
-                   "isolated session. Stop it and launch again, or repeat the earlier launch's savedir and "
+                   "saves, or a folder an earlier launch was authorized for), where this launch asked to keep "
+                   "them in RenForge's folders. Stop it and launch again, or repeat the earlier launch's savedir and "
                    "home with authorize=true to use it.")
         code = "SESSION_ISOLATION_MISMATCH"
     elif eval_running and not wanted.get("eval", True):
@@ -817,8 +829,10 @@ def _session_exposed_components(session: Any, *, certain: bool = False) -> froze
 def _owned_session_facts(session: Any) -> dict[str, Any]:
     isolation = getattr(session, "isolation", None)
     project_root = getattr(session, "project_root", None)
-    return {"exposed": _session_exposed_components(session),
-            "isolated": isolation is not None and isolation_is_renforge_owned(isolation, project_root),
+    owned = (isolation_owned_components(isolation, project_root) if isolation is not None
+             else frozenset())
+    return {"exposed": _session_exposed_components(session), "owned": owned,
+            "isolated": owned == _ALL_COMPONENTS,
             "eval_running": getattr(session, "bridge_eval", True) is not False}
 
 
@@ -834,7 +848,7 @@ def _external_session_facts(client: BridgeClient) -> dict[str, Any]:
         info = client.session_info()
     except Exception:
         return {"isolation": {"exposes_user_saves": True}, "exposed": _ALL_COMPONENTS,
-                "isolated": False, "eval_running": True}
+                "owned": frozenset(), "isolated": False, "eval_running": True}
     return _session_facts_from_info(info)
 
 
@@ -842,7 +856,9 @@ def _session_facts_from_info(info: Mapping[str, Any]) -> dict[str, Any]:
     """:func:`_external_session_facts` for a ``session_info`` reply the bridge gave."""
     report = _external_isolation_report(info)
     exposed = _external_exposed_components(report)
-    return {"isolation": report, "exposed": exposed,
+    # A component counts as exposed exactly when it is not vouched to be in
+    # RenForge's own folders, so the owned ones are the rest.
+    return {"isolation": report, "exposed": exposed, "owned": _ALL_COMPONENTS - exposed,
             "isolated": not exposed, "eval_running": info.get("eval_enabled") is not False}
 
 
@@ -978,8 +994,10 @@ def launch_game(
             # isolated saves with the host HOME still need isolated saves.
             # Reusing a game that isolates more than asked is harmless. On top
             # of that, the RenForge-owned and eval rules (_reuse_refusal).
+            facts = _owned_session_facts(existing)
             refused = _reuse_refusal(
-                **_owned_session_facts(existing), wanted=wanted, requested_language=language
+                exposed=facts["exposed"], owned=facts["owned"], eval_running=facts["eval_running"],
+                wanted=wanted, requested_language=language,
             )
             if refused is not None:
                 return refused
@@ -1055,7 +1073,7 @@ def launch_game(
             # elsewhere) reports about its own storage and eval switch.
             facts = _external_session_facts(external)
             external_isolation = facts["isolation"]
-            refused = _reuse_refusal(exposed=facts["exposed"], isolated=facts["isolated"],
+            refused = _reuse_refusal(exposed=facts["exposed"], owned=facts["owned"],
                                      eval_running=facts["eval_running"], wanted=wanted,
                                      requested_language=language)
             if refused is not None:

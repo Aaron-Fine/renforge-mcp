@@ -656,6 +656,50 @@ def test_an_isolated_launch_never_reuses_a_session_authorized_onto_a_foreign_fol
         live._SESSIONS.pop(key, None)
 
 
+def test_a_launch_isolating_only_its_saves_never_reuses_a_session_on_a_foreign_savedir(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """savedir=temporary with home=existing still asks for saves in RenForge's own folders.
+
+    The savedir is checked on its own, as for a fully isolated launch: the
+    HOME the request leaves to the player says nothing about where it wants
+    its saves.
+    """
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    foreign = tmp_path / "Documents" / "game-saves"
+    live._SESSIONS[key] = _OwnedRunningSession(
+        editor=True, isolation=_isolation("path", home_mode="existing", savedir=foreign))
+    try:
+        refused = live.launch_game(str(project), savedir="temporary", home="existing")
+        assert refused["code"] == "SESSION_ISOLATION_MISMATCH", refused
+        assert live.launch_game(str(project), savedir=str(foreign), home="existing")["already_running"] is True
+    finally:
+        live._SESSIONS.pop(key, None)
+
+    # The same rule for a launch still starting.
+    release = threading.Event()
+
+    def slow_launch(_root, _cancel):
+        release.wait(5)
+        return {"ok": False, "ready": False, "error": "stopped by the test"}
+
+    try:
+        live.start_launch(str(project), slow_launch, wait_timeout=0,
+                          requirements=live.launch_requirements(project, savedir=str(foreign), home="existing"))
+        refused = live.start_launch(str(project), slow_launch, wait_timeout=0,
+                                    requirements=live.launch_requirements(project, savedir="temporary",
+                                                                          home="existing"))
+        assert refused["code"] == "SESSION_ISOLATION_MISMATCH", refused
+    finally:
+        release.set()
+        task = live._LAUNCHES.get(key)
+        if task is not None:
+            task.done_event.wait(5)
+        live._LAUNCHES.pop(key, None)
+
+
 def test_a_launch_that_arrives_while_another_starts_must_match_it(tmp_path: Path, monkeypatch) -> None:
     """LAUNCH_IN_PROGRESS would point the caller at a session it may not be given."""
     project = _make_project(tmp_path)
