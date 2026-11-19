@@ -301,14 +301,15 @@ from the project, because the project owner writes it.
 Every tool belongs to one group. `play` is the agent loop, with one tool per
 task: `renforge_info`, `renforge_session`, `renforge_observe`, `renforge_act`,
 and `renforge_explain`. `mod` holds `renforge_mod`, which writes and reloads
-game code, so a server limited to `play` cannot run code in the game. The
-other groups keep every earlier capability for existing clients, scripts, and
-the Live Editor:
+game code, so a server limited to `play` cannot run code in the game.
+`renforge_info` is listed whichever groups are chosen, because every workflow
+starts with it. The other groups keep every earlier capability for existing
+clients, scripts, and the Live Editor:
 
 | Toolset | What it holds |
 | --- | --- |
 | `mod` | `renforge_mod`: write, lint, reload, remove, and package mods |
-| `live` | Launch/stop/saves, advancing, clicks, keys, choices, UI listings, screenshots, the scene tree |
+| `live` | Launch/stop/saves, advancing, clicks, keys, choices, UI listings, screenshots and comparing them (including `renforge_estimate_translation`, the image-shift estimate), the scene tree |
 | `debug` | Game state, variables, `eval`, events, errors, waits, scenarios, autopilot |
 | `editor` | The Live Editor |
 | `project` | Static project analysis, lint and shadow validation (`renforge_validate`), references, assets |
@@ -317,7 +318,8 @@ the Live Editor:
 | `docs` | Ren'Py documentation search |
 
 `RENFORGE_TOOLSETS` (comma-separated, default `all`) chooses which groups the
-server lists. Unknown names stop the server at startup.
+server lists. Unknown names, or a value that names no group (`,`), stop the
+server at startup.
 
 ```bash
 RENFORGE_TOOLSETS=play renforge serve          # the agent loop only; no code runs in the game
@@ -1207,7 +1209,7 @@ Set these next to the `renforge serve` command in the MCP client config.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `RENFORGE_TOOLSETS` | all groups | Comma-separated tool groups the server lists (see [Toolsets](#toolsets)). Unknown names are an error. |
+| `RENFORGE_TOOLSETS` | all groups | Comma-separated tool groups the server lists (see [Toolsets](#toolsets)); `renforge_info` is always listed. Unknown names, or a value naming no group, are an error. |
 | `RENFORGE_POLICY` | `off` | `enforce` requires `authorize=true` for destructive and open-world calls. Invalid values fail closed to `enforce`. See [POLICY.md](POLICY.md). |
 | `RENFORGE_POLICY_ALLOW`, `RENFORGE_POLICY_ALLOW_RISK` | empty | Comma-separated operations or risk classes allowed without `authorize`; combined with the project policy file's lists. |
 | `RENFORGE_ISOLATION` | `existing` | `temporary` (any case) isolates every launch's saves, persistent data, preferences, and HOME by default; any other value keeps the user's own, as before. `renforge_session` always isolates. |

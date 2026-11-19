@@ -88,3 +88,38 @@ def test_info_and_instructions_name_only_the_listed_tools(monkeypatch):
     assert "renforge_mod" not in play_only and "toolsets keep the earlier tools" not in play_only
     everything = _instructions(list(TOOLSETS))
     assert "renforge_mod" in everything and "Live Editor" in everything
+
+
+@pytest.mark.parametrize("toolsets", ["live,editor", "debug", "project", "mod"])
+def test_renforge_info_is_listed_without_the_play_group(toolsets):
+    # Its description says "Call this first", and so do the server instructions.
+    listed = allowed_tools(TOOL_DEFINITIONS, {"RENFORGE_TOOLSETS": toolsets})
+    assert "renforge_info" in listed
+    assert "renforge_session" not in listed
+
+
+@pytest.mark.parametrize("value", [",", " , ", "Play", "play,plya"])
+def test_every_reader_of_the_variable_rejects_the_same_values(value):
+    from renforge.toolsets import bridge_eval_allowed, enabled_toolsets
+
+    env = {"RENFORGE_TOOLSETS": value}
+    with pytest.raises(RuntimeError):
+        allowed_tools(TOOL_DEFINITIONS, env)
+    with pytest.raises(RuntimeError):
+        enabled_toolsets(env)
+    # Launching games fails closed rather than enabling eval for a server
+    # whose tool list could not be worked out.
+    assert bridge_eval_allowed(env) is False
+
+
+def test_enabled_toolsets_matches_the_listed_tools():
+    from renforge.toolsets import enabled_toolsets
+
+    env = {"RENFORGE_TOOLSETS": "docs, play"}
+    assert enabled_toolsets(env) == ["play", "docs"]
+    assert enabled_toolsets({"RENFORGE_TOOLSETS": "play, all"}) == list(TOOLSETS)
+
+
+def test_image_shift_estimate_is_listed_with_the_capture_tools():
+    listed = allowed_tools(TOOL_DEFINITIONS, {"RENFORGE_TOOLSETS": "live"})
+    assert {"renforge_capture_screenshot", "renforge_estimate_translation"} <= listed
