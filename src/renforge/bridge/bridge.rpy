@@ -6892,7 +6892,13 @@ init python:
         return "<%s>" % _renforge_type_label(value)
 
     def _renforge_explain_variable(path):
-        """Read one store variable or dotted attribute path, never calling anything."""
+        """Read one store variable or dotted attribute path, never calling anything.
+
+        The walk stays in game data: it never steps into a module (renpy is in
+        the store, and renpy.os.environ is the environment the game inherited)
+        or reads a private (``_``) attribute after the first name, matching
+        the public fields _renforge_explain_value lists. Dict keys are data
+        and may start with ``_``."""
         import re as _re
         if not isinstance(path, builtins.str) or not _re.fullmatch(_RENFORGE_VARIABLE_RE, path.strip()):
             return {"error": "not a variable name"}
@@ -6902,9 +6908,13 @@ init python:
             return {"error": "not defined"}
         value = store[parts[0]]
         for part in parts[1:]:
+            if isinstance(value, types.ModuleType):
+                return {"error": "not data (%s)" % _renforge_type_label(value)}
             fields = getattr(value, "__dict__", None)
             if isinstance(value, builtins.dict) and part in value:
                 value = value[part]
+            elif part.startswith("_"):
+                return {"error": "no field %s" % part}
             elif isinstance(fields, builtins.dict) and part in fields:
                 value = fields[part]
             else:

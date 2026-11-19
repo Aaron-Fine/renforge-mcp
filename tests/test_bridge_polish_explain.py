@@ -349,3 +349,24 @@ def test_a_canonical_control_dir_with_a_trailing_separator_still_starts(tmp_path
 
     assert reported == ""
     assert '"ready"' in (control_dir(tmp_path.resolve()) / "bridge.json").read_text(encoding="utf-8")
+
+
+def test_a_variable_path_does_not_walk_through_a_module_or_a_private_field(running_bridge):
+    """A play-only server must not read the process environment through renpy.os."""
+    store = running_bridge.renpy.store
+    store.engine = types.ModuleType("engine")  # as renpy, which imports os
+    store.engine.os = os
+    store.box = types.SimpleNamespace(_secret="s", shown=1, table={"_key": 2})
+    store.env = os.environ
+
+    got = running_bridge.client.explain(
+        variables=["engine.os", "engine.os.environ._data", "box._secret", "env._data", "box.shown", "box.table._key"]
+    )["variables"]
+
+    assert got["engine.os"]["error"].startswith("not data")
+    assert got["engine.os.environ._data"]["error"].startswith("not data")
+    assert got["box._secret"] == {"error": "no field _secret"}
+    assert got["env._data"] == {"error": "no field _data"}
+    # Public fields and dict keys of store objects are still read.
+    assert got["box.shown"] == {"value": 1}
+    assert got["box.table._key"] == {"value": 2}

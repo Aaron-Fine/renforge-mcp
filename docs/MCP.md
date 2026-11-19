@@ -687,7 +687,9 @@ and `variables=["day", "player.day"]` reads named store variables or
 dotted fields directly. Pass `variables` alone: combined with `label`,
 `screen`, `id`, `source`, `search` or `query` it is refused. It reads at most
 100 names; with more, the reply carries `truncated: true`. Game objects come
-back as their simple public fields; functions are never called.
+back as their simple public fields; functions are never called. A dotted
+path never steps into a module or a private (`_`) field after its first
+name, so `renpy.os.environ` is refused; dict keys may start with `_`.
 
 `chrome` holds the game's interface: the conventional `quick_menu`, injected
 `_renforge_` screens, and buttons whose only actions are Ren'Py interface
