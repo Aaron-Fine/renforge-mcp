@@ -7,14 +7,9 @@ import hashlib
 
 import pytest
 
-from renforge.observe import (
-    apply_screenshot,
-    classify,
-    crossed_transcript,
-    guard_act,
-    guard_dismiss,
-    run_advance_until,
-)
+from renforge.interaction import classify, crossed_transcript, guard_act, guard_dismiss
+from renforge.observe import apply_screenshot
+from renforge.progression import run_advance_until
 
 
 def _element(**overrides):
