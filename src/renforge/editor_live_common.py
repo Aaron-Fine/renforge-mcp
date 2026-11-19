@@ -13,7 +13,10 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from renforge.bridge.client import BridgeError
+from renforge.editor.constants import TRANSACTION_DIRNAME
 from renforge.editor_task0_runner import _require_ok, _wait_for_status
+from renforge.state import project_state_dir
 
 
 def summarize_commit_report(report: dict[str, Any]) -> str:
@@ -67,6 +70,48 @@ DEMO_COPY_IGNORE = shutil.ignore_patterns(
     "zzrenforge_*",
     "zz_renforge_*",
 )
+
+
+def clear_transactions(project_root: Path) -> Path:
+    """Remove a fixture project's leftover editor transactions; return their folder."""
+    transaction_root = project_state_dir(project_root) / TRANSACTION_DIRNAME
+    shutil.rmtree(transaction_root, ignore_errors=True)
+    return transaction_root
+
+
+def wait_for_transaction(
+    client: Any,
+    source_path: Path,
+    expected_bytes: bytes,
+    *,
+    timeout: float = 60.0,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Poll the editor until a save or undo has reloaded and ``source_path`` holds ``expected_bytes``.
+
+    Returns the last editor status and the last bridge error, which is cleared
+    by any later successful status request, so a reload's brief disconnect is
+    not blamed for a commit that never finished. A source that cannot be read
+    yet (mid-replace) only means "not yet".
+    """
+    deadline = time.monotonic() + timeout
+    last_status: dict[str, Any] | None = None
+    bridge_failure: str | None = None
+    while time.monotonic() < deadline:
+        try:
+            status = client.request("editor_task0_status", {})
+        except BridgeError as exc:
+            bridge_failure = f"{type(exc).__name__}: {exc}"
+        else:
+            last_status = status
+            bridge_failure = None
+            if status.get("status_code") == "reload_committed" and status.get("save_in_progress") is False:
+                try:
+                    if source_path.read_bytes() == expected_bytes:
+                        return status, None
+                except OSError:
+                    pass
+        time.sleep(0.25)
+    return last_status, bridge_failure
 
 
 def inject_editor_live_resources(
