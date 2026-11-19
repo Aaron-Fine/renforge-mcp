@@ -22,8 +22,9 @@ From at least Ren'Py 8.4.1, ``Script.namemap`` is keyed by ``Node``
 ``dump.py`` unwraps ``Node`` keys before that check; the namemap itself
 stays Node-keyed. RenForge follows that dump unwrap in the dump subprocess
 instead of rewriting installed or cached SDK files: each
-``compile --json-dump`` injects a temporary ``.rpe.py`` adapter via
-``RENPY_SEARCHPATH``. The adapter still normalizes Node-keyed namemaps
+``compile --json-dump`` injects a temporary ``.rpe`` adapter via
+``RENPY_SEARCHPATH``, the extension form every Ren'Py 8 loads (``.rpe.py``
+came only in 8.3). The adapter still normalizes Node-keyed namemaps
 even when ``dump.py`` already unwraps; it is a no-op only when keys are
 already strings. The pinned default SDK is 8.5.3; compatible 8.4.1+ and
 8.5.x installs are supported.
@@ -37,16 +38,18 @@ from pathlib import Path
 from typing import Any
 
 from .project import RenpyProject
-from .save_isolation import renpy_tool_environment
+from .save_isolation import renpy_tool_environment, write_renpy_extension
 from .sdk import RenpySdk
 from .util.subprocess import run_command
 
 _DEFINITION_CATEGORIES = ("label", "define", "screen", "transform", "callable")
 
-JSON_DUMP_ADAPTER_FILENAME = "renforge_json_dump.rpe.py"
+JSON_DUMP_ADAPTER_FILENAME = "renforge_json_dump.rpe"
 
-# Executed inside the Ren'Py dump subprocess (bundled Python, no renforge
-# import). Keep this self-contained and compatible with Ren'Py 8.4+.
+# The autorun.py of the .rpe, executed inside the Ren'Py dump subprocess
+# (bundled Python, no renforge import). Keep this self-contained and
+# compatible with every Ren'Py 8: on string-keyed namemaps (before 8.4) it
+# changes nothing.
 JSON_DUMP_ADAPTER_SOURCE = '''# renforge json-dump adapter — unwrap Node-keyed namemap without editing SDK files
 import renpy.dump as _renforge_dump_mod
 
@@ -102,7 +105,7 @@ def run_native_dump(sdk: RenpySdk, project: RenpyProject, *, timeout: int = 180)
     normally does) and introspects the parsed script. Raises ``RuntimeError``
     if Ren'Py produced no dump file.
 
-    The dump subprocess receives an isolated ``.rpe.py`` adapter on
+    The dump subprocess receives an isolated ``.rpe`` adapter on
     ``RENPY_SEARCHPATH``. SDK files under ``sdk.root`` are never modified.
     """
     with tempfile.TemporaryDirectory(prefix="renforge-dump-") as work_home:
@@ -113,10 +116,7 @@ def run_native_dump(sdk: RenpySdk, project: RenpyProject, *, timeout: int = 180)
         out_dir = Path(work_home) / "out"
         adapter_dir.mkdir()
         out_dir.mkdir()
-        (adapter_dir / JSON_DUMP_ADAPTER_FILENAME).write_text(
-            JSON_DUMP_ADAPTER_SOURCE,
-            encoding="utf-8",
-        )
+        write_renpy_extension(adapter_dir / JSON_DUMP_ADAPTER_FILENAME, JSON_DUMP_ADAPTER_SOURCE)
         out_path = out_dir / "dump.json"
 
         command = project.renpy_command(sdk, ("compile", "--json-dump", str(out_path)))

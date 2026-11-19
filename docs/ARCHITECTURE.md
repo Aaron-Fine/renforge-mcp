@@ -108,7 +108,8 @@ before that check; the namemap itself stays Node-keyed.
 
 RenForge follows that dump unwrap without waiting on a new SDK release and
 without patching installed `dump.py`. Each dump subprocess loads a temporary
-`.rpe.py` adapter from `RENPY_SEARCHPATH` that wraps `renpy.dump.dump` and,
+`.rpe` adapter (a zip whose `autorun.py` every Ren'Py 8 runs; `.rpe.py` came
+only in 8.3) from `RENPY_SEARCHPATH` that wraps `renpy.dump.dump` and,
 only when keys are not already strings, presents a string-keyed namemap for
 the duration of the dump. Because namemap keys remain `Node` objects even
 after upstream `dump.py` is fixed, the adapter still normalizes the map on

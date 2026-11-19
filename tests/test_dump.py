@@ -4,6 +4,7 @@ import json
 import stat
 import sys
 import types
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -179,7 +180,8 @@ def test_run_native_dump_injects_adapter_without_touching_sdk(
         seen["adapter_dir"] = adapter_dir
         seen["searchpath"] = searchpath
         assert adapter.is_file()
-        text = adapter.read_text(encoding="utf-8")
+        with zipfile.ZipFile(adapter) as extension:
+            text = extension.read("autorun.py").decode("utf-8")
         assert "renforge json-dump adapter" in text
         assert "unwrap" in text
         out_path = Path(command[command.index("--json-dump") + 1])
@@ -294,3 +296,30 @@ def test_run_native_dump_writes_into_its_own_private_folder(monkeypatch: pytest.
     assert out_dir.parent == adapter_dir.parent
     assert out_dir != adapter_dir
     assert not out_dir.parent.exists()
+
+
+def test_the_dump_adapter_loads_on_every_supported_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ren'Py 8.0-8.2 load only .rpe zip extensions (their autorun.py); .rpe.py came in 8.3."""
+    import os
+
+    autoruns: list[str] = []
+    loose: list[str] = []
+
+    def fake_run(command, **kwargs):
+        adapter_dir = Path(kwargs["env"]["RENPY_SEARCHPATH"].split("::", 1)[0])
+        for name in sorted(os.listdir(adapter_dir)):
+            if name.lower().endswith(".rpe"):  # the only extension 8.0-8.2 load
+                with zipfile.ZipFile(adapter_dir / name) as extension:
+                    autoruns.append(extension.read("autorun.py").decode("utf-8"))
+            elif name.lower().endswith(".rpe.py"):
+                loose.append(name)
+        out_path = Path(command[command.index("--json-dump") + 1])
+        out_path.write_text("{}", encoding="utf-8")
+        return SimpleNamespace(returncode=0, timed_out=False, stdout="", stderr="")
+
+    monkeypatch.setattr(dump_mod, "run_command", fake_run)
+    dump_mod.run_native_dump(SimpleNamespace(), _fake_project())
+
+    assert autoruns == [dump_mod.JSON_DUMP_ADAPTER_SOURCE]
+    # 8.3 and later also load .rpe.py; the adapter must not run twice there.
+    assert loose == []
