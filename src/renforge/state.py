@@ -48,6 +48,14 @@ def _same_file(a: Path, b: Path) -> bool:
         return False
 
 
+# Resolved path -> its on-disk spelling. project_state_dir runs on every
+# activity entry and every bridge call (an observe poll is one every 0.25 s),
+# and spelling a path lists each of its ancestors. Bounded, and cleared when
+# full, because a long-lived server may see many paths.
+_SPELLINGS: dict[str, Path] = {}
+_SPELLINGS_MAX: Final = 1024
+
+
 def _on_disk_spelling(path: Path) -> Path:
     """Spell each component of ``path`` as its directory lists it.
 
@@ -56,7 +64,18 @@ def _on_disk_spelling(path: Path) -> Path:
     two state folders, and two bridge locks, for one directory. A component
     its directory does not list under that spelling takes the listed entry
     that is the same file; on a case-sensitive volume nothing changes.
+
+    An answer is kept for the life of the process once every component was
+    found in its directory's listing, so one server keeps one folder (and
+    lock) per project even if the folder is renamed while it runs. A path
+    with a component that is missing or could not be listed (a folder that
+    does not exist yet) is spelled afresh each time.
     """
+    key = str(path)
+    known = _SPELLINGS.get(key)
+    if known is not None:
+        return known
+    complete = True
     out = Path(path.anchor)
     for name in path.parts[1:]:
         candidate = out / name
@@ -64,13 +83,20 @@ def _on_disk_spelling(path: Path) -> Path:
             entries = os.listdir(out)
         except OSError:
             entries = [name]
+            complete = False
         if name not in entries:
             folded = _fold(name)
             for entry in entries:
                 if _fold(entry) == folded and _same_file(out / entry, candidate):
                     candidate = out / entry
                     break
+            else:
+                complete = False  # not there (yet): its spelling may change
         out = candidate
+    if complete:
+        if len(_SPELLINGS) >= _SPELLINGS_MAX:
+            _SPELLINGS.clear()
+        _SPELLINGS[key] = out
     return out
 
 
