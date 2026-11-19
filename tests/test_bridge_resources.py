@@ -34,7 +34,7 @@ def test_bridge_rpy_exposes_expected_symbols() -> None:
         "O_EXCL",
         "os.path.isabs",
         "os.path.realpath",
-        "renforge directory must not be a symlink",
+        "control directory parent must not be a symlink",
     ]
     for token in required:
         assert token in content, f"missing expected symbol: {token}"

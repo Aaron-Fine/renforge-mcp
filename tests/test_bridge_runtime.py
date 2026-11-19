@@ -6040,11 +6040,11 @@ def test_viewport_rejection_does_not_partially_change_an_axis(running_bridge):
     viewport = types.SimpleNamespace(xadjustment=horizontal, yadjustment=vertical)
     adapter = running_bridge.globs["_renforge_act_value"]
     reply = adapter({"x": 20, "y": 30}, types.SimpleNamespace(widget=viewport),
-                    "page", 1, {"role": "viewport"})
+                    {"id": "page", "interaction": 1}, {"role": "viewport"})
     assert reply["error"] == "unsupported"
     assert calls == []
     reply = adapter({"x": 20, "y": float("nan")}, types.SimpleNamespace(widget=viewport),
-                    "page", 1, {"role": "viewport"})
+                    {"id": "page", "interaction": 1}, {"role": "viewport"})
     assert reply["error"] == "value_required"
     assert calls == []
 
@@ -6097,10 +6097,10 @@ def test_drag_target_eligibility_and_target_only_callback(running_bridge):
     controls = [{"id": "source", "role": "drag", "draggable": True},
                 {"id": "target", "role": "drag", "droppable": False}]
     pairs = list(zip(focuses, controls))
-    refused = adapter({"drop": "target"}, focuses[0], "source", 1, controls[0], pairs)
+    refused = adapter({"drop": "target"}, focuses[0], {"ok": True, "id": "source", "interaction": 1}, pairs)
     assert refused["error"] == "unsupported" and calls == []
     controls[1]["droppable"] = True
-    accepted = adapter({"drop": "target"}, focuses[0], "source", 1, controls[0], pairs)
+    accepted = adapter({"drop": "target"}, focuses[0], {"ok": True, "id": "source", "interaction": 1}, pairs)
     assert accepted["ok"] and calls == [(target, [source])]
 
 
@@ -7478,10 +7478,9 @@ def test_explain_reads_state_as_data_without_running_game_code(running_bridge):
         SUNDAY = 7
 
     store.camper, store.day = Calendar(), Day.SUNDAY
-    loop = running_bridge.globs["_renforge_explain_condition_values"]({"nodes": [
-        {"kind": "for", "text": "camper in screamingGophers"},
-        {"kind": "if", "text": "camper.currentStatus == 1"},
-        {"kind": "if", "text": "day == Day.SUNDAY"}]})
+    loop = running_bridge.globs["_renforge_explain_condition_values"]({
+        "_bound": ["camper"],
+        "_conditions": ["camper.currentStatus == 1", "day == Day.SUNDAY"]})
     assert loop == {"day": "Day.SUNDAY"}
 
 

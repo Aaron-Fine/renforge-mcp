@@ -6239,14 +6239,17 @@ init python:
                 text = _renforge_explain_str(caption)
                 if condition not in (None, "True"):
                     text = "%s if %s" % (text, _renforge_explain_str(condition))
+                    _renforge_explain_note(state, condition=condition)
                 emit(state, depth, "choice", loc, text)
                 _renforge_explain_label_walk(block, depth + 1, state)
         elif kind == "If":
             for index, entry in enumerate(getattr(node, "entries", None) or ()):
                 branch, cond_text = _renforge_explain_branch(index, entry[0], "if")
+                _renforge_explain_note(state, condition=cond_text)
                 emit(state, depth, branch, loc, cond_text)
                 _renforge_explain_label_walk(entry[1], depth + 1, state)
         elif kind == "While":
+            _renforge_explain_note(state, condition=getattr(node, "condition", None))
             emit(state, depth, "while", loc, getattr(node, "condition", None))
             _renforge_explain_label_walk(getattr(node, "block", None), depth + 1, state)
         elif kind in ("Jump", "Call"):
@@ -6396,6 +6399,7 @@ init python:
             "statements": state["entries"],
             "truncated": state["truncated"],
             **({"falls_into": fell_into} if fell_into else {}),
+            **_renforge_explain_noted(state),
         }
 
 
@@ -6434,6 +6438,7 @@ init python:
             first = "showif" if kind == "SLShowIf" else "if"
             for index, entry in enumerate(getattr(node, "entries", None) or ()):
                 branch, cond_text = _renforge_explain_branch(index, entry[0], first)
+                _renforge_explain_note(state, condition=cond_text)
                 # A branch can set its parent's properties, such as a button's action.
                 keywords = _renforge_explain_sl_text(types.SimpleNamespace(
                     keyword=getattr(entry[1], "keyword", None)))
@@ -6442,6 +6447,7 @@ init python:
         elif kind == "SLFor":
             text = "%s in %s" % (_renforge_explain_str(getattr(node, "variable", None)),
                                  _renforge_explain_str(getattr(node, "expression", None)))
+            _renforge_explain_note(state, binds=getattr(node, "variable", None))
             emit(state, depth, "for", loc, text)
             _renforge_explain_screen_walk(children, depth + 1, state)
         elif kind == "SLUse":
@@ -6485,6 +6491,7 @@ init python:
         state = {"entries": [], "limit": limit, "truncated": False, "file": where.get("file")}
         _renforge_explain_screen_walk(getattr(ast, "children", None), 0, state)
         head.update({"nodes": state["entries"], "truncated": state["truncated"]})
+        head.update(_renforge_explain_noted(state))
         return head
 
 
@@ -6597,6 +6604,7 @@ init python:
         """The script statements at ``(file, line)``, with their full text."""
         script = getattr(getattr(renpy, "game", None), "script", None)
         found = []
+        noted = {"_conditions": [], "_bound": []}
         for node in getattr(script, "all_stmts", None) or ():
             where = _renforge_explain_loc(node)
             if where is None or (where["file"], where["line"]) != wanted:
@@ -6609,12 +6617,14 @@ init python:
                 state = {"entries": [], "limit": 300, "truncated": False, "file": where["file"]}
                 _renforge_explain_label_walk([node], 0, state)
                 entry["statements"] = state["entries"]
+                for key, items in _renforge_explain_noted(state).items():
+                    noted[key].extend(items)
             found.append(entry)
             if len(found) >= 8:
                 break
         if not found:
             return None
-        return {"statement": None, "script": found}
+        return {"statement": None, "script": found, **noted}
 
 
     def _renforge_explain_node_texts(node):
@@ -6759,6 +6769,18 @@ init python:
         return "(" + ", ".join(parts) + ")"
 
 
+    def _renforge_explain_snippet(text, needle):
+        """Up to 60 characters either side of the first case-insensitive ``needle``.
+
+        The window is found in ``text`` itself: an index into its casefold
+        can point past the match, since folding changes length (sharp s
+        folds to "ss"). A match only folding finds shows the start of the text."""
+        import re as _re
+        found = _re.search(_re.escape(needle), text, _re.IGNORECASE)
+        start, end = (found.start(), found.end()) if found else (0, len(needle))
+        return text[max(0, start - 60):end + 60]
+
+
     def _renforge_explain_search(needle, limit):
         """Every loaded statement whose text contains ``needle``, with its enclosing label."""
         wanted = needle.casefold()
@@ -6781,10 +6803,8 @@ init python:
                 where.get("file"), where.get("line") or 0,
                 falls_through=node.__class__.__name__ in _RENFORGE_STORY_STATEMENTS)
             kind, text = found[0]
-            at = text.casefold().find(wanted)
-            snippet = text[max(0, at - 60):at + len(needle) + 60]
             matches.append({"kind": kind, "file": where.get("file"), "line": where.get("line"),
-                            "label": enclosing, "text": _renforge_explain_text(snippet)})
+                            "label": enclosing, "text": _renforge_explain_text(_renforge_explain_snippet(text, needle))})
         # Screen language: displayable arguments, properties, and conditions.
         seen = set()
         for screen_name, _variant, screen in _renforge_explain_screens():
@@ -6792,7 +6812,9 @@ init python:
             if truncated or ast is None or id(ast) in seen:
                 continue
             seen.add(id(ast))
-            stack = builtins.list(getattr(ast, "children", None) or ())
+            # Depth first in document order: children go on reversed, so the
+            # first is popped first, and a cut keeps the earliest matches.
+            stack = builtins.list(getattr(ast, "children", None) or ())[::-1]
             while stack and not truncated:
                 node = stack.pop()
                 try:
@@ -6810,8 +6832,10 @@ init python:
                     elif kind == "SLPython":
                         texts.append(_renforge_explain_pysrc(getattr(node, "code", None)) or "")
                     hit = next((text for text in texts if wanted in text.casefold()), None)
+                    below = []
                     for _label, children in _renforge_explain_branches(node):
-                        stack.extend(children or ())
+                        below.extend(children or ())
+                    stack.extend(below[::-1])
                 except Exception:
                     continue
                 if hit is None:
@@ -6820,10 +6844,9 @@ init python:
                     truncated = True
                     break
                 where = _renforge_explain_loc(node) or {}
-                at = hit.casefold().find(wanted)
                 matches.append({"kind": "screen", "file": where.get("file"), "line": where.get("line"),
                                 "screen": screen_name,
-                                "text": _renforge_explain_text(hit[max(0, at - 60):at + len(needle) + 60])})
+                                "text": _renforge_explain_text(_renforge_explain_snippet(hit, needle))})
         return {"ok": True, "search": needle, "matches": matches, "truncated": truncated}
 
 
@@ -6834,15 +6857,17 @@ init python:
         """A store value as data: plain values as they are, a game object as its
         simple public fields. Nothing is called, so no game code runs."""
         import enum as _enum
+        import itertools as _itertools
         if isinstance(value, _enum.Enum):
             return "%s.%s" % (type(value).__name__, value.name)
         if value is None or isinstance(value, (bool, builtins.int, builtins.float, builtins.str)):
             return value
         if isinstance(value, (builtins.list, builtins.tuple, builtins.set, builtins.frozenset)):
-            items = builtins.list(value)[:_RENFORGE_VALUE_FIELDS]
+            # Only the first entries are listed, so only they are taken.
+            items = builtins.list(_itertools.islice(value, _RENFORGE_VALUE_FIELDS))
             return [_renforge_explain_value(item, depth + 1) for item in items] if depth < 2 else _renforge_jsonable(items)
         if isinstance(value, builtins.dict):
-            items = builtins.list(value.items())[:_RENFORGE_VALUE_FIELDS]
+            items = builtins.list(_itertools.islice(value.items(), _RENFORGE_VALUE_FIELDS))
             return {str(k): (_renforge_explain_value(v, depth + 1) if depth < 2 else _renforge_jsonable(v)) for k, v in items}
         fields = getattr(value, "__dict__", None)
         if isinstance(fields, builtins.dict) and depth < 1:
@@ -6875,12 +6900,12 @@ init python:
             else:
                 # A plain class attribute (a default the instance never set);
                 # properties and methods are never read, since that runs code.
-                found = None
+                missing = found = builtins.object()  # a class default can itself be None
                 for cls in getattr(type(value), "__mro__", ()):
                     if part in vars(cls):
                         found = vars(cls)[part]
                         break
-                if found is None or isinstance(found, (property, builtins.staticmethod, builtins.classmethod)) \
+                if found is missing or isinstance(found, (property, builtins.staticmethod, builtins.classmethod)) \
                         or callable(found) or hasattr(found, "__get__"):
                     return {"error": "no field %s" % part}
                 value = found
@@ -6908,6 +6933,7 @@ init python:
         # The start of a dotted path (persistent in persistent.x) is not read
         # on its own; only the whole path is.
         inner = builtins.set(id(node.value) for node in _ast.walk(tree) if isinstance(node, _ast.Attribute))
+        local = _renforge_condition_locals(tree)
         names = []
         for node in _ast.walk(tree):
             if id(node) in called or id(node) in inner or not isinstance(node, (_ast.Name, _ast.Attribute)):
@@ -6916,27 +6942,80 @@ init python:
             while isinstance(current, _ast.Attribute):
                 parts.append(current.attr)
                 current = current.value
-            if isinstance(current, _ast.Name):
+            if isinstance(current, _ast.Name) and id(current) not in local:
                 names.append(".".join([current.id] + parts[::-1]))
         return names
 
-    def _renforge_explain_condition_values(result):
-        """Current values of the variables behind the conditions in a result."""
-        texts = builtins.list(result.get("conditions") or [])
-        # Names a for loop binds are the loop's own, not store variables.
-        bound = builtins.set()
-        for entry in builtins.list(result.get("nodes") or []) + builtins.list(result.get("statements") or []):
-            if not isinstance(entry, builtins.dict):
+    def _renforge_condition_locals(tree):
+        """ids of the Name nodes a comprehension or lambda inside ``tree`` binds.
+
+        ``q`` in ``any(q.done for q in quests)`` is the comprehension's own,
+        not a store variable. A comprehension's first iterable is read in
+        the enclosing scope, so a name there stays a store variable."""
+        import ast as _ast
+        local = builtins.set()
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Lambda):
+                args = node.args
+                params = (builtins.list(getattr(args, "posonlyargs", None) or ()) + builtins.list(args.args)
+                          + builtins.list(args.kwonlyargs) + [args.vararg, args.kwarg])
+                bound = builtins.set(param.arg for param in params if param is not None)
+                scope = [node.body]
+            elif isinstance(node, (_ast.ListComp, _ast.SetComp, _ast.GeneratorExp, _ast.DictComp)):
+                bound = builtins.set(name.id for generator in node.generators
+                                     for name in _ast.walk(generator.target) if isinstance(name, _ast.Name))
+                scope = [getattr(node, field) for field in ("elt", "key", "value") if hasattr(node, field)]
+                for index, generator in enumerate(node.generators):
+                    scope.append(generator.target)
+                    scope.extend(generator.ifs)
+                    if index:
+                        scope.append(generator.iter)
+            else:
                 continue
-            if entry.get("kind") in ("if", "elif", "while", "showif"):
-                texts.append(entry.get("text") or "")
-            elif entry.get("kind") == "for":
-                target = (entry.get("text") or "").split(" in ", 1)[0]
-                bound.update(part.strip() for part in target.replace("(", " ").replace(")", " ").split(","))
-        for text in result.get("conditions") or []:
+            for part in scope:
+                for name in _ast.walk(part):
+                    if isinstance(name, _ast.Name) and name.id in bound:
+                        local.add(id(name))
+        return local
+
+    def _renforge_loop_targets(target):
+        """Names a ``for`` target binds: ``i``, ``(key, value)``, ``a, (b, c)``."""
+        import re as _re
+        return builtins.set(_re.findall(r"[A-Za-z_][A-Za-z0-9_]*", _renforge_explain_str(target)))
+
+    def _renforge_explain_note(state, condition=None, binds=None):
+        """Record a walked condition, or a loop target, for explain's ``values``.
+
+        Entry text is for reading: it is shortened and can carry the
+        properties a branch sets after its condition, so ``values`` reads
+        the raw condition recorded here instead."""
+        if condition:
+            state.setdefault("conditions", []).append(_renforge_explain_str(condition))
+        if binds:
+            state.setdefault("bound", builtins.set()).update(_renforge_loop_targets(binds))
+
+    def _renforge_explain_noted(state):
+        """What a walk recorded with ``_renforge_explain_note``, under the
+        private result keys ``_renforge_h_explain`` reads and then removes."""
+        return {"_conditions": builtins.list(state.get("conditions") or ()),
+                "_bound": builtins.sorted(state.get("bound") or ())}
+
+    def _renforge_explain_condition_values(result):
+        """Current values of the variables behind the conditions in a result.
+
+        ``conditions`` are the conditions enclosing an explained control
+        (``"if x > 3"``, ``"for i in items"``); ``_conditions`` and ``_bound``
+        are the raw conditions and loop targets a label, screen or script
+        walk recorded."""
+        texts = []
+        # Names a for loop binds are the loop's own, not store variables.
+        bound = builtins.set(result.get("_bound") or ())
+        for text in result.get("conditions") or ():
             if text.startswith("for "):
-                target = text[4:].split(" in ", 1)[0]
-                bound.update(part.strip() for part in target.replace("(", " ").replace(")", " ").split(","))
+                bound.update(_renforge_loop_targets(text[4:].split(" in ", 1)[0]))
+            else:
+                texts.append(text)
+        texts.extend(result.get("_conditions") or ())
         values = {}
         for text in texts:
             for name in _renforge_condition_names(text):
@@ -6947,22 +7026,50 @@ init python:
                     values[name] = read["value"]
         return values
 
+    _RENFORGE_EXPLAIN_VARIABLES_MAX = 100
+
     def _renforge_h_explain(payload):
+        """Explain game content from the loaded syntax trees, never evaluating it.
+
+        Payload: ``variables`` (a list of store names or dotted fields, read
+        as data; pass it alone) or one selector handled by
+        ``_renforge_h_explain_selected``. Label, screen, control and source
+        results also carry ``values``, the current values of the plain
+        variables their conditions read. Errors: ``variables must be a list
+        of names``, ``pass variables alone, ...`` and the selector errors."""
         payload = payload or {}
         if payload.get("variables") is not None:
             names = payload["variables"]
             if isinstance(names, builtins.str) or not isinstance(names, (builtins.list, builtins.tuple)) or not names:
                 return {"ok": False, "error": "variables must be a list of names"}
-            return {"ok": True, "variables": {str(name): _renforge_explain_variable(name) for name in names[:100]}}
+            if any(payload.get(key) is not None for key in ("label", "screen", "id", "source", "search", "query")):
+                return {"ok": False,
+                        "error": "pass variables alone, without label, screen, id, source, search or query"}
+            wanted = names[:_RENFORGE_EXPLAIN_VARIABLES_MAX]
+            return {"ok": True, "variables": {str(name): _renforge_explain_variable(name) for name in wanted},
+                    "truncated": len(names) > len(wanted)}
         result = _renforge_h_explain_selected(payload)
         if isinstance(result, builtins.dict) and result.get("ok") is not False:
             values = _renforge_explain_condition_values(result)
             if values:
                 # What the conditions above read right now.
                 result["values"] = values
+        if isinstance(result, builtins.dict):
+            # Walk notes feed values only; they are not part of the reply.
+            result.pop("_conditions", None)
+            result.pop("_bound", None)
         return result
 
     def _renforge_h_explain_selected(payload):
+        """Answer explain for at most one selector.
+
+        ``label`` (its statements), ``screen`` (its displayable tree), ``id``
+        (a control's screen-language statement and enclosing conditions),
+        ``source`` (``file:line``) or ``search`` (text in every loaded
+        statement); none gives the label and screen index, filtered by
+        ``query``. ``limit`` bounds entries (1-2000, default 200). Errors:
+        ``pass at most one of ...``, ``<key> must be a string``, ``unknown
+        label``/``unknown screen`` and ``search must not be empty``."""
         selectors = [key for key in ("label", "screen", "id", "source", "search") if payload.get(key) is not None]
         if len(selectors) > 1:
             return {"ok": False, "error": "pass at most one of label, screen, id, source, search"}
@@ -7032,6 +7139,8 @@ init python:
 
 
     def _renforge_progress_finish(reason):
+        """End the active progression with stop ``reason``, restoring the skip
+        state, skip delay, periodic timer and preferences it changed."""
         bridge = _renforge_runtime.bridge
         operation = bridge.progression if bridge is not None else None
         if operation is None or not operation["active"]:
@@ -7042,6 +7151,9 @@ init python:
         # Owned skip never leaks beyond the operation. Native fast mode can
         # bypass interaction checks, so only native slow skip is used here.
         renpy.config.skipping = None
+        # The operation's skipping was its own, not the player's: the skip
+        # watcher reports no skip.stopped for it.
+        bridge.prev_skipping = None
         if operation.get("skip_delay") is not None:
             renpy.config.skip_delay = operation["skip_delay"]
         prefs = operation["preferences"]
@@ -7049,6 +7161,13 @@ init python:
             setattr(prefs, name, value)
 
     def _renforge_progress_tick():
+        """Advance the active progression by one check; runs on every drain.
+
+        Stops it (``timeout``, ``max_steps``, ``loop``, ``unsupported`` or a
+        decision boundary from the interaction contract) or lets the engine
+        skip the current line with native slow skip, clicking instead when
+        the game has turned skipping off. Pauses and transitions are skipped
+        without judging the screens behind them."""
         bridge = _renforge_runtime.bridge
         operation = bridge.progression if bridge is not None else None
         if operation is None or not operation["active"]:
@@ -7142,6 +7261,17 @@ init python:
             renpy.config.skipping = None
 
     def _renforge_h_progression(payload):
+        """Start, poll or stop a bounded skip through dialogue the bridge owns.
+
+        ``action: "start"`` takes an ``id``, the observation's
+        ``interaction``/``session_id``/``observation_id``, ``max_steps``
+        (1-200), ``timeout`` (0.05-120 s) and optional ``expires_at`` (epoch
+        seconds); ``"status"`` and ``"stop"`` (optional ``reason``, default
+        ``cancelled``) take the same ``id``. Replies ``{"ok": True,
+        "progression": {"id", "active", "stop", "steps"}}``. Errors:
+        ``stale_operation``, ``invalid_operation``, ``progression_busy``,
+        ``invalid_budget``, ``expired``, ``already_skipping``,
+        ``unsupported`` and the interaction contract's identity guards."""
         payload = payload or {}
         bridge = _renforge_runtime.bridge
         operation = bridge.progression
@@ -7354,60 +7484,46 @@ init python:
         return True, stored
 
 
-    def _renforge_act_value(payload, focus, wanted, interaction, control):
+    def _renforge_act_refusal(error, interaction, control_id=None):
+        """act's refusal: the error, the interaction, and the control id when known."""
+        reply = {"ok": False, "error": error, "interaction": interaction}
+        if control_id is not None:
+            reply["id"] = control_id
+        return reply
+
+
+    def _renforge_act_value(payload, focus, result, control):
+        """Set a bar's ``value``, or a viewport's ``x``/``y`` scroll, through its adjustment.
+
+        ``result`` is act's success reply (operation, id, interaction, screen,
+        via); the stored values are added to it and it is returned. A
+        viewport changes no axis unless every requested axis can change.
+        Refusals: ``value_required`` (no finite number given) and
+        ``unsupported`` (the adjustment cannot change)."""
         widget = getattr(focus, "widget", None)
-        result = {
-            "ok": True,
-            "operation": "value",
-            "id": wanted,
-            "interaction": interaction,
-            "screen": control.get("screen"),
-            "via": "action",
-        }
+        refuse = lambda error: _renforge_act_refusal(error, result["interaction"], result["id"])
+        real_number = _renforge_runtime.interaction._real_number
         if control.get("role") == "viewport":
-            for axis, field in (("x", "xadjustment"), ("y", "yadjustment")):
-                if axis in payload:
-                    number = payload[axis]
-                    if not _renforge_runtime.interaction._real_number(number):
-                        return {"ok": False, "error": "value_required", "interaction": interaction, "id": wanted}
-                    if not callable(getattr(getattr(widget, field, None), "change", None)):
-                        return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
-            wrote = False
-            for axis, field in (("x", "xadjustment"), ("y", "yadjustment")):
-                if axis not in payload:
-                    continue
-                number = payload.get(axis)
-                if isinstance(number, bool) or not isinstance(number, (builtins.int, builtins.float)):
-                    return {
-                        "ok": False,
-                        "error": "value_required",
-                        "interaction": interaction,
-                        "id": wanted,
-                    }
-                changed, stored = _renforge_change_adjustment(getattr(widget, field, None), number)
+            axes = [(axis, field) for axis, field in (("x", "xadjustment"), ("y", "yadjustment")) if axis in payload]
+            if not axes:
+                return refuse("value_required")
+            for axis, field in axes:
+                if not real_number(payload[axis]):
+                    return refuse("value_required")
+                if not callable(getattr(getattr(widget, field, None), "change", None)):
+                    return refuse("unsupported")
+            for axis, field in axes:
+                changed, stored = _renforge_change_adjustment(getattr(widget, field, None), payload[axis])
                 if not changed:
-                    return {
-                        "ok": False,
-                        "error": "unsupported",
-                        "interaction": interaction,
-                        "id": wanted,
-                    }
+                    return refuse("unsupported")
                 result[axis] = stored
-                wrote = True
-            if not wrote:
-                return {
-                    "ok": False,
-                    "error": "value_required",
-                    "interaction": interaction,
-                    "id": wanted,
-                }
             return result
-        number = payload.get("value") if "value" in payload else None
-        if isinstance(number, bool) or not isinstance(number, (builtins.int, builtins.float)):
-            return {"ok": False, "error": "value_required", "interaction": interaction, "id": wanted}
+        number = payload.get("value")
+        if not real_number(number):
+            return refuse("value_required")
         changed, stored = _renforge_change_adjustment(getattr(widget, "adjustment", None), number)
         if not changed:
-            return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
+            return refuse("unsupported")
         result["value"] = stored
         return result
 
@@ -7440,27 +7556,22 @@ init python:
         return built
 
 
-    def _renforge_act_drop(payload, focus, wanted, interaction, control, pairs):
+    def _renforge_act_drop(payload, focus, result, pairs):
+        """Drop a drag on the drag ``drop`` names (``""`` releases it on nothing).
+
+        Runs the source's ``dragged`` callback, then the target's
+        ``dropped`` when ``dragged`` returned nothing. With no ``drop`` key a
+        drag that has a ``clicked`` action is clicked instead. ``result`` is
+        act's success reply; it gains ``drop`` (or operation ``click``) and
+        is returned. Refusals: ``missing`` (no such target), ``unsupported``
+        (target not droppable or refusing, or no callback to run)."""
         widget = getattr(focus, "widget", None)
-        result = {
-            "ok": True,
-            "operation": "drop",
-            "id": wanted,
-            "interaction": interaction,
-            "screen": control.get("screen"),
-            "action": control.get("action"),
-            "via": "action",
-        }
+        wanted, interaction = result["id"], result["interaction"]
         if "drop" not in payload:
             clicked = getattr(widget, "clicked", None)
             if clicked is not None:
                 if not _renforge_invoke_focus_action(focus):
-                    return {
-                        "ok": False,
-                        "error": "unsupported",
-                        "interaction": interaction,
-                        "id": wanted,
-                    }
+                    return _renforge_act_refusal("unsupported", interaction, wanted)
                 result["operation"] = "click"
                 return result
             payload = dict(payload)
@@ -7468,44 +7579,35 @@ init python:
         drop_name = payload.get("drop")
         target = None
         if isinstance(drop_name, builtins.str) and drop_name:
-            matched = False
-            for other_focus, other in pairs:
-                if other.get("id") != drop_name:
-                    continue
-                target = getattr(other_focus, "widget", None)
-                if other.get("role") != "drag" or not other.get("droppable") or not other.get("enabled", True) or other.get("covered"):
-                    return {"ok": False, "error": "unsupported", "interaction": interaction, "id": drop_name}
-                drop_allowable = getattr(target, "drop_allowable", None)
-                if callable(drop_allowable) and not drop_allowable(target, _renforge_drag_joined(widget)):
-                    return {"ok": False, "error": "unsupported", "interaction": interaction, "id": drop_name}
-                result["drop"] = drop_name
-                matched = True
-                break
-            if not matched:
-                return {"ok": False, "error": "missing", "interaction": interaction, "id": drop_name}
+            match = next(((other_focus, other) for other_focus, other in pairs if other.get("id") == drop_name), None)
+            if match is None:
+                return _renforge_act_refusal("missing", interaction, drop_name)
+            other_focus, other = match
+            target = getattr(other_focus, "widget", None)
+            if other.get("role") != "drag" or not other.get("droppable") or not other.get("enabled", True) or other.get("covered"):
+                return _renforge_act_refusal("unsupported", interaction, drop_name)
+            drop_allowable = getattr(target, "drop_allowable", None)
+            if callable(drop_allowable) and not drop_allowable(target, _renforge_drag_joined(widget)):
+                return _renforge_act_refusal("unsupported", interaction, drop_name)
+            result["drop"] = drop_name
         else:
             result["drop"] = None
         dragged = getattr(widget, "dragged", None)
         dropped = getattr(target, "dropped", None) if target is not None else None
         if dragged is None and dropped is None:
-            return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
+            return _renforge_act_refusal("unsupported", interaction, wanted)
         joined = _renforge_drag_joined(widget)
         rv = None
         if dragged is not None:
             called, rv = _renforge_call_action(dragged, (joined, target))
             if not called:
-                return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
+                return _renforge_act_refusal("unsupported", interaction, wanted)
         if rv is None and target is not None:
             dropped = getattr(target, "dropped", None)
             if dropped is not None:
                 called, rv = _renforge_call_action(dropped, (target, joined))
                 if not called:
-                    return {
-                        "ok": False,
-                        "error": "unsupported",
-                        "interaction": interaction,
-                        "id": wanted,
-                    }
+                    return _renforge_act_refusal("unsupported", interaction, wanted)
         _renforge_end_action_result(rv)
         return result
 
@@ -7571,7 +7673,69 @@ init python:
             return payload, "unsupported_input"
         return payload, None
 
+    def _renforge_act_key(payload, interaction, bridge):
+        """Press, hold (``hold: true``) or release (``hold: false``) the physical key ``key``.
+
+        Replies with the key's folded name, ``hold`` and the posted
+        ``events``; refuses an unknown key (listing the accepted ones) and a
+        ``hold`` that is not a boolean (``unsupported``)."""
+        key_value = payload.get("key")
+        if not isinstance(key_value, builtins.str) or not key_value.strip():
+            return {
+                "ok": False,
+                "error": "unknown key %r; accepted keys: %s" % (key_value, _RENFORGE_ACT_KEY_LIST),
+                "interaction": interaction,
+            }
+        folded = key_value.strip().casefold()
+        attr_name = _RENFORGE_ACT_KEY_ATTRS.get(folded)
+        keycode = (
+            getattr(pygame, attr_name, None)
+            if pygame is not None and attr_name is not None
+            else None
+        )
+        if attr_name is None or isinstance(keycode, bool) or not isinstance(keycode, builtins.int):
+            if attr_name is not None and pygame is None:
+                return {"ok": False, "error": "pygame_sdl2 event API is unavailable"}
+            return {
+                "ok": False,
+                "error": "unknown key %r; accepted keys: %s" % (folded, _RENFORGE_ACT_KEY_LIST),
+                "interaction": interaction,
+            }
+        if "hold" in payload:
+            hold = payload.get("hold")
+            if not isinstance(hold, bool):
+                return _renforge_act_refusal("unsupported", interaction)
+        else:
+            hold = None
+        event_names = _renforge_post_key(keycode, hold, folded if folded in _RENFORGE_ACT_KEY_LETTERS else "")
+        if bridge is not None:
+            if hold is True:
+                bridge.held_keys.add(folded)
+            else:
+                bridge.held_keys.discard(folded)
+        return {
+            "ok": True,
+            "operation": "key",
+            "key": folded,
+            "interaction": interaction,
+            "hold": hold,
+            "events": event_names,
+        }
+
     def _renforge_h_act(payload):
+        """Operate one control from a recent observe, or press a key.
+
+        Payload: ``interaction``, ``session_id`` and ``observation_id`` from
+        the observation, then either ``key`` (with optional ``hold``) or a
+        control ``id`` with what it takes: ``text`` (and ``submit``),
+        ``value``, ``x``/``y``, ``drop``, or the play tool's single ``input``.
+        The control's operations decide: value, drop, click (its action, or
+        a pointer click), or text. Replies ``{"ok": True, "operation", "id",
+        "interaction", ...}``; refusals carry ``error`` (``stale``,
+        ``missing``, ``unsupported``, ``value_required``, ``text_required``,
+        ``unsupported_input`` and the interaction contract's guards). When
+        the action steers the script (a Jump), the success reply rides on
+        the exception as ``renforge_result``."""
         payload = payload or {}
         contract = _renforge_runtime.interaction
         raw, pairs = _renforge_observe_raw(False, with_pairs=True, include_readout=False)
@@ -7590,62 +7754,21 @@ init python:
         # Session ownership still applies; unrelated key-up requests are guarded.
         if releasing:
             if payload.get("session_id") is not None and payload["session_id"] != raw["session_id"]:
-                return {"ok": False, "error": "stale", "interaction": interaction}
+                return _renforge_act_refusal("stale", interaction)
         else:
             refusal = contract.guard_identity(
                 raw, payload.get("interaction"), session_id=payload.get("session_id"),
                 observation_id=payload.get("observation_id"))
             if refusal:
                 return {"ok": False, "error": refusal, "interaction": interaction, "observation": raw}
-        key_value = payload.get("key") if "key" in payload else None
-        if key_value is not None:
-            if not isinstance(key_value, builtins.str) or not key_value.strip():
-                return {
-                    "ok": False,
-                    "error": "unknown key %r; accepted keys: %s" % (key_value, _RENFORGE_ACT_KEY_LIST),
-                    "interaction": interaction,
-                }
-            folded = key_value.strip().casefold()
-            attr_name = _RENFORGE_ACT_KEY_ATTRS.get(folded)
-            keycode = (
-                getattr(pygame, attr_name, None)
-                if pygame is not None and attr_name is not None
-                else None
-            )
-            if attr_name is None or isinstance(keycode, bool) or not isinstance(keycode, builtins.int):
-                if attr_name is not None and pygame is None:
-                    return {"ok": False, "error": "pygame_sdl2 event API is unavailable"}
-                return {
-                    "ok": False,
-                    "error": "unknown key %r; accepted keys: %s" % (folded, _RENFORGE_ACT_KEY_LIST),
-                    "interaction": interaction,
-                }
-            if "hold" in payload:
-                hold = payload.get("hold")
-                if not isinstance(hold, bool):
-                    return {"ok": False, "error": "unsupported", "interaction": interaction}
-            else:
-                hold = None
-            event_names = _renforge_post_key(keycode, hold, folded if folded in _RENFORGE_ACT_KEY_LETTERS else "")
-            if bridge is not None:
-                if hold is True:
-                    bridge.held_keys.add(folded)
-                else:
-                    bridge.held_keys.discard(folded)
-            return {
-                "ok": True,
-                "operation": "key",
-                "key": folded,
-                "interaction": interaction,
-                "hold": hold,
-                "events": event_names,
-            }
+        if payload.get("key") is not None:
+            return _renforge_act_key(payload, interaction, bridge)
         wanted = payload.get("id")
         if not isinstance(wanted, builtins.str) or not wanted:
-            return {"ok": False, "error": "missing", "interaction": interaction}
+            return _renforge_act_refusal("missing", interaction)
         match = next(((focus, control) for focus, control in pairs if control.get("id") == wanted), None)
         if match is None:
-            return {"ok": False, "error": "missing", "interaction": interaction, "id": wanted}
+            return _renforge_act_refusal("missing", interaction, wanted)
         focus, control = match
         snapshot = contract.classify(raw)
         refusal = contract.guard_act(
@@ -7656,38 +7779,25 @@ init python:
         if refusal:
             return {"ok": False, "error": refusal, "interaction": interaction, "id": wanted, "observation": raw}
         operations = control.get("operations") or []
-        if "value" in operations:
+        if "value" in operations or "drop" in operations:
+            result = {
+                "ok": True,
+                "operation": "value" if "value" in operations else "drop",
+                "id": wanted,
+                "interaction": interaction,
+                "screen": control.get("screen"),
+                "via": "action",
+            }
+            if result["operation"] == "value":
+                run = lambda: _renforge_act_value(payload, focus, result, control)
+            else:
+                result["action"] = control.get("action")
+                run = lambda: _renforge_act_drop(payload, focus, result, pairs)
             try:
-                return _renforge_with_focus_screen(focus, lambda: _renforge_act_value(payload, focus, wanted, interaction, control))
+                return _renforge_with_focus_screen(focus, run)
             except Exception as exc:
-                if not _renforge_is_script_control_flow(exc):
-                    raise
-                result = {
-                    "ok": True,
-                    "operation": "value",
-                    "id": wanted,
-                    "interaction": interaction,
-                    "screen": control.get("screen"),
-                    "via": "action",
-                }
-                setattr(exc, "renforge_result", result)
-                raise
-        if "drop" in operations:
-            try:
-                return _renforge_with_focus_screen(focus, lambda: _renforge_act_drop(payload, focus, wanted, interaction, control, pairs))
-            except Exception as exc:
-                if not _renforge_is_script_control_flow(exc):
-                    raise
-                result = {
-                    "ok": True,
-                    "operation": "drop",
-                    "id": wanted,
-                    "interaction": interaction,
-                    "screen": control.get("screen"),
-                    "action": control.get("action"),
-                    "via": "action",
-                }
-                setattr(exc, "renforge_result", result)
+                if _renforge_is_script_control_flow(exc):
+                    setattr(exc, "renforge_result", result)
                 raise
         if "click" in operations:
             result = {
@@ -7725,7 +7835,7 @@ init python:
         if "text" in operations:
             text = payload.get("text")
             if not isinstance(text, str):
-                return {"ok": False, "error": "text_required", "interaction": interaction, "id": wanted}
+                return _renforge_act_refusal("text_required", interaction, wanted)
             if pygame is None:
                 return {"ok": False, "error": "pygame_sdl2 event API is unavailable"}
             widget = getattr(focus, "widget", None)
@@ -7745,7 +7855,7 @@ init python:
             result = _renforge_type_input(widget, text, payload.get("submit", True))
             result.update({"operation": "text", "id": wanted, "interaction": interaction})
             return result
-        return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
+        return _renforge_act_refusal("unsupported", interaction, wanted)
 
     _RENFORGE_HANDLERS = {
         "ping": _renforge_h_ping,
@@ -7820,7 +7930,12 @@ init python:
         except Exception:
             skipping = None
         prev_skip = bridge.prev_skipping
-        if prev_skip and not skipping:
+        progression = getattr(bridge, "progression", None)
+        if progression is not None and progression.get("active"):
+            # A progression turns skipping on and off itself, line by line;
+            # that is not the player skipping.
+            pass
+        elif prev_skip and not skipping:
             screen = None
             try:
                 if renpy.get_screen("choice") is not None:
@@ -8016,11 +8131,22 @@ init python:
         return True
 
     def _renforge_bridge_control_dir(project_root):
-        # RenForge keeps its state outside the game; the launcher says where.
+        """The private control directory: RENFORGE_BRIDGE_CONTROL_DIR, else
+        ``<project_root>/.renforge/control``.
+
+        RenForge keeps its state outside the game and the launcher says
+        where. Like the project root, a configured directory must be an
+        absolute path with no symlink on it (trailing separators aside):
+        with a trailing separator, lstat follows a linked directory and the
+        parent check looks at the directory itself, so the no-follow checks
+        could be stepped around. Raises OSError otherwise."""
         import os as _os
         configured = (_os.environ.get("RENFORGE_BRIDGE_CONTROL_DIR") or "").strip()
         if configured:
-            return configured
+            path = configured.rstrip(_os.sep + (_os.altsep or ""))
+            if not path or not _os.path.isabs(path) or _os.path.realpath(path) != path:
+                raise OSError("control directory must be an absolute path without symlinks")
+            return path
         return _os.path.join(project_root, ".renforge", "control")
 
     def _renforge_bridge_info_path(project_root):
@@ -8554,10 +8680,10 @@ init python:
         import stat as _stat
 
         control_dir = _renforge_bridge_control_dir(project_root)
-        renforge_dir = _os.path.dirname(control_dir)
+        parent_dir = _os.path.dirname(control_dir)
         # Reject symlink/reparse ancestors before accepting control contents.
-        if _renforge_bridge_path_is_symlink(renforge_dir):
-            raise OSError("renforge directory must not be a symlink")
+        if _renforge_bridge_path_is_symlink(parent_dir):
+            raise OSError("control directory parent must not be a symlink")
         if _renforge_bridge_path_is_symlink(control_dir):
             raise OSError("control directory must not be a symlink")
         try:
