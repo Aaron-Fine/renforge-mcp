@@ -81,8 +81,10 @@ def settle(fetch, deadline, *, screenshot=True):
                 return framed, "ready", None
             if framed["stable"] and framed["interaction"] == last["interaction"] and identity != previous:
                 return framed, "ready", None
+            # The screenshot may show a new interaction: its run starts here.
             last = framed
             previous = None
+            streak = 0
         else:
             previous = identity if last["stable"] else None
         time.sleep(min(POLL_SECONDS, max(0, deadline - time.monotonic())))

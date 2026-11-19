@@ -1077,6 +1077,26 @@ def test_settle_accepts_a_screen_that_keeps_changing_within_one_interaction():
     assert status == "ready" and result["unstable_reason"] == "pause"
 
 
+def test_settle_starts_a_new_run_when_the_screenshot_shows_a_new_interaction(monkeypatch):
+    """The old interaction's run of reads must not count for the next one."""
+    from renforge import progression
+    import time
+    monkeypatch.setattr(progression, "POLL_SECONDS", 0.001)
+    reads = []
+
+    def fetch(shot):
+        # Four changing reads of interaction 1, then interaction 2 changing on every read.
+        n = len(reads)
+        reads.append(n)
+        return _raw(interaction=1 if n < 4 else 2, observation_id="r%d" % n)
+
+    result, status, _error = progression.settle(fetch, time.monotonic() + 2, screenshot=True)
+    assert status == "ready" and result["interaction"] == 2
+    # A fresh interaction that never repeats needs a full run of plain reads plus the screenshot.
+    second = len(reads) - 4
+    assert second >= progression.SETTLE_SAME_INTERACTION + 1, second
+
+
 def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch):
     """A {w=1.0}{nw} line stayed a "pause" until act ran out of time."""
     import time
