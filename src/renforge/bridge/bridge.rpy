@@ -803,7 +803,9 @@ init python:
         """Put `text` in the field, dropping whatever was already there.
 
         Returns the stored string, False when the field rejects it, or None
-        when this widget has no Ren'Py input value to replace.
+        when this widget has no Ren'Py input value to replace. An error from
+        the game's own callback (the InputValue's ``set_text``, which
+        ``update_text`` runs) propagates, so the reply names it.
         """
         filtered = _renforge_input_filtered(widget, text)
         if text and not filtered:
@@ -814,19 +816,16 @@ init python:
                 widget.caret_pos = len(filtered)
             except Exception:
                 pass
-            wrote = False
             try:
                 update(filtered, True, True)
-                wrote = True
-            except TypeError:
-                pass
-            except Exception:
-                pass
-            if not wrote:
-                try:
-                    update(filtered, True)
-                except Exception:
-                    return False
+            except TypeError as exc:
+                # Retry without check_size only when the call itself was
+                # refused: that TypeError has no frame inside update_text.
+                # Ren'Py's Input takes check_size on every supported 8.x.
+                traceback = exc.__traceback__
+                if traceback is None or traceback.tb_next is not None:
+                    raise
+                update(filtered, True)
             current = getattr(widget, "content", None)
             if current != filtered:
                 return False
@@ -835,10 +834,7 @@ init python:
         set_text = getattr(value, "set_text", None) if value is not None else None
         if not callable(set_text):
             return None
-        try:
-            set_text(filtered)
-        except Exception:
-            return False
+        set_text(filtered)
         try:
             widget.content = filtered
         except Exception:

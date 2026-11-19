@@ -276,3 +276,71 @@ def test_hover_refuses_a_control_with_no_reachable_point(running_bridge):
     assert hovered["ok"] is False
     assert hovered["error"] == "UI element has no eligible click"
     assert renpy._moves == []
+
+
+# --- input replacement errors ---------------------------------------------
+
+
+class _FailingInput:
+    """Input whose InputValue callback raises, as Input.update_text runs it."""
+
+    def __init__(self):
+        self.content = "Zack"
+        self.caret_pos = 4
+        self.length = None
+        self.allow = None
+        self.exclude = None
+        self.calls = 0
+
+    def update_text(self, new_content, editable, check_size=False):
+        self.calls += 1
+        self.content = new_content
+        raise ValueError("name is reserved")
+
+
+def test_input_callback_errors_are_reported_not_swallowed(running_bridge):
+    widget = _FailingInput()
+    with pytest.raises(ValueError, match="reserved"):
+        running_bridge.globs["_renforge_replace_input_text"](widget, "Alex")
+    assert widget.calls == 1
+
+    class Input(_FailingInput):
+        """Named like Ren'Py's Input, which the focused-input check accepts."""
+
+    running_bridge.renpy._focused_widget = Input()
+    reply = running_bridge.client.request("send_input", {"text": "Alex"})
+    assert reply.get("ok") is not True
+    assert "ValueError: name is reserved" in str(reply.get("error"))
+
+
+def test_input_value_errors_are_reported_not_swallowed(running_bridge):
+    """A widget without update_text is replaced through its InputValue."""
+
+    class Input:
+        def __init__(self):
+            self.content = "Zack"
+            self.value = self
+
+        def set_text(self, text):
+            raise ValueError("name is reserved")
+
+    running_bridge.renpy._focused_widget = Input()
+    reply = running_bridge.client.request("send_input", {"text": "Alex"})
+    assert reply.get("ok") is not True
+    assert "ValueError: name is reserved" in str(reply.get("error"))
+
+
+def test_input_update_text_without_check_size_is_still_supported(running_bridge):
+    class TwoArgumentInput:
+        def __init__(self):
+            self.content = ""
+            self.length = None
+            self.allow = None
+            self.exclude = None
+
+        def update_text(self, new_content, editable):
+            self.content = new_content
+
+    widget = TwoArgumentInput()
+    assert running_bridge.globs["_renforge_replace_input_text"](widget, "Alex") == "Alex"
+    assert widget.content == "Alex"
