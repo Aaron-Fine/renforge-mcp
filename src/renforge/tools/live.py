@@ -1973,9 +1973,17 @@ def _advance_with_client(project_path: str, client: BridgeClient, *, max_steps: 
         except BridgeError as exc:
             return {"ok": False, "status": failure_status(exc, process), "error": str(exc)}
 
+    def nudge(interaction):
+        # A line still a pause after any short pause: the plain guard refuses
+        # every unstable frame, so the one click has to accept the pause.
+        try:
+            return client.dismiss_if(interaction=interaction, deadline=progress_end, allow_pause=True, **guard)
+        except BridgeError as exc:
+            return {"ok": False, "status": failure_status(exc, process), "error": str(exc)}
+
     if mode == "skip":
         result = run_native_skip(client, fetch, max_steps=max_steps, deadline=progress_end,
-                                 total_deadline=wall_end, between=collect, nudge=dismiss)
+                                 total_deadline=wall_end, between=collect, nudge=nudge)
     else:
         result = run_advance_until(fetch, dismiss, max_steps=max_steps,
                                    timeout=max(0.01, progress_end - time.monotonic()))
