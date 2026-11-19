@@ -179,7 +179,7 @@ def validate_project(
         staged_bytes = _encode_staged(staged)
         resolved_timeout = _resolve_timeout(timeout)
         try:
-            project = RenpyProject(Path(project_path), create_cache=False)
+            project = RenpyProject(Path(project_path))
         except (OSError, ValueError) as exc:
             return {
                 "ok": False,
