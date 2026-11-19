@@ -1423,11 +1423,16 @@ init python:
         if not callable(load):
             return {"ok": False, "error": "save loading is unavailable"}
 
+        # From 8.2 invoke_in_main_thread queues the load and returns, so this
+        # handler reports it below. Only an inline load (no queue) ends this
+        # request with the engine's restart and must report it here.
+        inline = not callable(getattr(renpy, "invoke_in_main_thread", None))
+
         def _do_load():
             try:
                 load(slot)
             except Exception as exc:
-                if _renforge_is_script_control_flow(exc):
+                if inline and _renforge_is_script_control_flow(exc):
                     # The engine restarts into the loaded game after the reply.
                     _renforge_emit_business("load.completed", slot=slot, restored_label=None)
                     setattr(exc, "renforge_result", {"ok": True, "slot": slot,
