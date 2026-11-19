@@ -34,7 +34,6 @@ def validate_frame(frame: Mapping[str, Any], *, session_id: Any,
 _BUTTON_ROLES = {"button", "imagebutton", "textbutton", "hotspot", "imagemap"}
 _BAR_ROLES = {"bar", "slider"}
 _TEXT_ROLES = {"input"}
-_EMPTY_ROLES = {"viewport", "drag", "draggroup"}
 
 
 def normalize_role(role: Any) -> str:
@@ -45,8 +44,8 @@ def normalize_role(role: Any) -> str:
         return "bar"
     if raw in _TEXT_ROLES:
         return "input"
-    if raw in _EMPTY_ROLES or raw.startswith("drag"):
-        return "drag" if raw.startswith("drag") else raw
+    if raw.startswith("drag"):
+        return "drag"
     return raw or "unknown"
 
 
@@ -87,20 +86,13 @@ def _screen_name(value: Any) -> str | None:
     return None
 
 
-def _menu_index(value: Any) -> int | None:
+def _int_or_none(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         return None
     return value
 
 
-def _widget_id(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
-
-
-def _action_text(value: Any) -> str | None:
+def _nonempty_str(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     text = value.strip()
@@ -121,11 +113,11 @@ def assign_control_ids(elements: list[Mapping[str, Any]]) -> list[dict[str, Any]
     for fallback, element in enumerate(elements):
         screen = _screen_name(element.get("screen"))
         role = normalize_role(element.get("role"))
-        widget_id = _widget_id(element.get("widget_id"))
-        menu_index = _menu_index(element.get("menu_index"))
-        drag_name = _widget_id(element.get("drag_name"))
+        widget_id = _nonempty_str(element.get("widget_id"))
+        menu_index = _int_or_none(element.get("menu_index"))
+        drag_name = _nonempty_str(element.get("drag_name"))
         image = image_basename(element.get("image_name"))
-        action = _action_text(element.get("action"))
+        action = _nonempty_str(element.get("action"))
         synthetic = False
         if widget_id:
             base = f"{screen}/{widget_id}" if screen else widget_id
@@ -143,7 +135,7 @@ def assign_control_ids(elements: list[Mapping[str, Any]]) -> list[dict[str, Any]
             base = f"{screen or 'screen'}/{image}"
             source = "image"
         else:
-            ordinal = _menu_index(element.get("ordinal"))
+            ordinal = _int_or_none(element.get("ordinal"))
             if ordinal is None:
                 ordinal = fallback
             base = f"{screen or 'screen'}/{role}/{ordinal}"
@@ -195,12 +187,6 @@ def normalize_say_dismiss(value: Any) -> str | None:
     if "dismiss_hard_pause" in found:
         return "dismiss_hard_pause"
     return None
-
-
-def _interaction(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value
 
 
 def _bool(value: Any, default: bool) -> bool:
@@ -582,8 +568,9 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
             controls.extend(promoted)
             chrome = [control for control in chrome if control not in promoted]
             decisions = [control for control in controls if _is_decision(control)]
-    first_pause = _dialogue(raw) is None and raw.get("seen") is False
-    if say_dismiss == "dismiss" and not modal and (_dialogue(raw) is not None or first_pause):
+    dialogue = _dialogue(raw)
+    first_pause = dialogue is None and raw.get("seen") is False
+    if say_dismiss == "dismiss" and not modal and (dialogue is not None or first_pause):
         # Ren'Py ends this line on a plain click. Buttons on screens kept up
         # from earlier lines (a phone or codex HUD) are not what this line
         # waits for, so they stay controls rather than a choice. Screens that
@@ -628,7 +615,7 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "session_id": raw.get("session_id"),
         "observation_id": raw.get("observation_id"),
-        "interaction": _interaction(raw.get("interaction")),
+        "interaction": _int_or_none(raw.get("interaction")),
         "stable": stable,
         "unstable_reason": reason,
         "statement": _statement(raw),
@@ -639,7 +626,7 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
         "started_at_label": raw.get("started_at_label") if isinstance(raw.get("started_at_label"), str) else None,
         "start_label_error": raw.get("start_label_error") if isinstance(raw.get("start_label_error"), str) else None,
         "lifecycle": {"phase": phase, "ending": ending},
-        "dialogue": _dialogue(raw),
+        "dialogue": dialogue,
         "text_revealing": raw.get("text_revealing"),
         # Set while Ren'Py's exception screen is up: {"message", "traceback_file"}.
         "game_error": dict(raw["game_error"]) if isinstance(raw.get("game_error"), Mapping) else None,
@@ -648,7 +635,7 @@ def classify(raw: Mapping[str, Any]) -> dict[str, Any]:
         "forward": forward,
         "controls": controls,
         "chrome": chrome,
-        "readout": _without_dialogue(_readout(raw), _dialogue(raw)),
+        "readout": _without_dialogue(_readout(raw), dialogue),
         "input_candidates": list(raw.get("input_candidates") or []),
         # Key bindings of the screens shown: a screen may continue only on a
         # key ("Press SPACE to continue"); `act` sends the given key/<name>.
@@ -695,7 +682,7 @@ def validate_act_payload(payload: Mapping[str, Any]) -> str | None:
     if payload.get("interaction") is None:
         if payload.get("observation_id") is None:
             return "stale"
-    elif _interaction(payload.get("interaction")) is None:
+    elif _int_or_none(payload.get("interaction")) is None:
         return "stale"
     has_id = isinstance(payload.get("id"), str) and bool(payload.get("id"))
     has_key = payload.get("key") is not None
@@ -748,7 +735,7 @@ def guard_identity(snapshot: Mapping[str, Any], interaction: Any, *,
         return "unstable"
     if interaction is None and observation_id is not None:
         return None
-    if _interaction(interaction) is None or snapshot.get("interaction") != interaction:
+    if _int_or_none(interaction) is None or snapshot.get("interaction") != interaction:
         return "stale"
     return None
 

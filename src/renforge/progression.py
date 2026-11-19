@@ -41,13 +41,17 @@ def failure_status(error: Exception, process=None) -> str:
 SETTLE_SAME_INTERACTION = 4
 
 
-def _busy(raw, deadline) -> bool:
+def _busy(raw: Mapping[str, Any], deadline: float) -> bool:
     """A reply that timed out while budget remains: the game's main thread was
     busy (decoding a new scene's images, say), so asking again is safe."""
     return raw.get("status") == "timeout" and deadline - time.monotonic() > POLL_SECONDS
 
 
-def settle(fetch, deadline, *, screenshot=True):
+Fetch = Callable[[bool], Mapping[str, Any]]
+
+
+def settle(fetch: Fetch, deadline: float, *,
+           screenshot: bool = True) -> tuple[dict[str, Any] | None, str, str | None]:
     """Require two matching stable observations after progression is disabled.
 
     A screen that keeps changing within one stable interaction never matches
@@ -95,12 +99,25 @@ def settle(fetch, deadline, *, screenshot=True):
     return None, "timeout", "final observation did not settle within the budget"
 
 
+def _finish_from_status(result: dict[str, Any], status: Mapping[str, Any]) -> bool:
+    """Copy the operation's step count; True (with the stop recorded) once it ended."""
+    result["steps"] = status.get("steps", 0)
+    if status.get("active") is not False:
+        return False
+    result["stop"] = status.get("stop") or "none"
+    # A custom hub is a normal place to stop and hand control back.
+    result["ok"] = result["stop"] != "crash"
+    return True
+
+
 # Longer than any short pause (5 s) plus its grace: a "pause" still pending
 # after this is stuck, and a line the player can click past is clicked once.
 STUCK_PAUSE_SECONDS = 6.0
 
 
-def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, between=None, nudge=None):
+def run_native_skip(client: Any, fetch: Fetch, *, max_steps: int, deadline: float, total_deadline: float,
+                    between: Callable[[], Any] | None = None,
+                    nudge: Callable[[int | None], Any] | None = None) -> dict[str, Any]:
     """Start one bridge-owned skip operation and wait for it to stop.
 
     Once started, poll only the operation's status (and ``between``, which
@@ -128,12 +145,7 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, betwe
                     break
                 if between is not None:
                     between()
-                status = reply.get("progression", {})
-                result["steps"] = status.get("steps", 0)
-                if status.get("active") is False:
-                    result["stop"] = status.get("stop") or "none"
-                    # A custom hub is a normal place to stop and hand control back.
-                    result["ok"] = result["stop"] != "crash"
+                if _finish_from_status(result, reply.get("progression", {})):
                     break
                 time.sleep(min(POLL_SECONDS, max(0, deadline - time.monotonic())))
                 continue
@@ -181,13 +193,8 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, betwe
                     result.update(ok=False, stop="unsupported", error=reply.get("error"))
                     break
                 status = reply.get("progression", {})
-            if status.get("id") == operation_id:
-                result["steps"] = status.get("steps", 0)
-                if status.get("active") is False:
-                    result["stop"] = status.get("stop") or "none"
-                    # A custom hub is a normal place to stop and hand control back.
-                    result["ok"] = result["stop"] != "crash"
-                    break
+            if status.get("id") == operation_id and _finish_from_status(result, status):
+                break
             time.sleep(min(POLL_SECONDS, max(0, deadline - time.monotonic())))
     except BridgeError as exc:
         result.update(ok=False, stop=failure_status(exc), error=str(exc))
@@ -219,7 +226,7 @@ def _finished(stop: str, steps: int, observation: dict[str, Any] | None) -> dict
 
 
 def run_advance_until(
-    fetch: Callable[[bool], Mapping[str, Any]],
+    fetch: Fetch,
     dismiss: Callable[[int], Mapping[str, Any]],
     *,
     max_steps: int,
