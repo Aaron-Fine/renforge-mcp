@@ -195,6 +195,8 @@ def test_high_risk_tool_guidance_includes_safety_notes() -> None:
     assert "prefer" in _desc("renforge_eval").lower()
     assert "overwrite" in _desc("renforge_saves").lower()
     assert "overwrite" in _desc("renforge_capture_screenshot").lower()
+    # Captures are in the state folder, outside the project: relative_path is then absolute.
+    assert "absolute" in _desc("renforge_capture_screenshot")
     assert "writes" in _desc("renforge_generate_translations").lower()
     assert "write" in _desc("renforge_web_build").lower()
     assert "open-world" not in _desc("renforge_web_build").lower()
