@@ -61,6 +61,7 @@ from ..save_isolation import (
     storage_is_renforge_owned,
 )
 from ..sdk import get_or_install_sdk, require_supported_runtime
+from ..session_registry import canonical_project_path
 from ..state import ensure_project_state_dir, project_state_dir
 from ..state_compact import (
     apply_serialization_limits,
@@ -548,8 +549,9 @@ def launch_status(project_path: str) -> dict[str, Any]:
 
 
 def _key(project_path: str | Path) -> str:
-    canonical = Path(project_path).expanduser().resolve()
-    return os.path.normcase(str(canonical))
+    # Spelled as the state folder and bridge lock spell it, so every spelling
+    # of one folder finds the session this process owns.
+    return os.path.normcase(canonical_project_path(project_path))
 
 
 def _owned_session(project_path: str | Path) -> BridgeSession | None:

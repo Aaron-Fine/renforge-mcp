@@ -87,6 +87,34 @@ def test_registry_key_applies_normcase(tmp_path: Path, monkeypatch) -> None:
     assert live._key(project) == f"normalized:{project.resolve()}"
 
 
+def test_registry_key_follows_the_state_folder_on_a_case_insensitive_volume(tmp_path: Path, monkeypatch) -> None:
+    """Two spellings of one folder share a state folder and bridge lock, so they share the owned session too."""
+    from renforge import state
+
+    project = tmp_path / "Game"
+    (project / "game").mkdir(parents=True)
+    other_spelling = tmp_path / "game"
+    # A case-insensitive volume (macOS by default): both spellings are one folder.
+    monkeypatch.setattr(state, "_same_file", lambda a, b: str(a).casefold() == str(b).casefold())
+    assert project_state_dir(other_spelling) == project_state_dir(project)
+
+    session = SimpleNamespace(closed=False)
+    monkeypatch.setitem(live._SESSIONS, live._key(project), session)
+
+    assert live._key(other_spelling) == live._key(project)
+    assert live.owns_session(str(other_spelling)) is True
+
+    # The shared bridge metadata names the project as the disk spells it, so
+    # either spelling reads it instead of rejecting it as another project's.
+    from renforge.bridge.control import read_bridge_info, write_starting_bridge_info
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    write_starting_bridge_info(other_spelling, session_id="a" * 32, token="b" * 64)
+    info = read_bridge_info(project, require_ready=False)
+    assert info.project_root == str(project.resolve())
+    assert read_bridge_info(other_spelling, require_ready=False) == info
+
+
 class _QuitClient:
     def __init__(self) -> None:
         self.control_calls: list[str] = []

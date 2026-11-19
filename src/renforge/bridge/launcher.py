@@ -46,6 +46,7 @@ from .client import BridgeClient, BridgeConfig, BridgeProtocolError
 from .control import read_bridge_info, write_starting_bridge_info
 from ..editor import BridgeRuntimeProbe, EditorCoordinator, EditorEndpoint
 from ..util.files import PrivatePathError, ensure_private_directory
+from ..session_registry import canonical_project_path
 from ..state import control_dir
 
 _BRIDGE_RESOURCE: Path = Path(__file__).parent / "bridge.rpy"
@@ -1182,7 +1183,8 @@ def _launch_after_project_lock(
 
         env["RENFORGE_BRIDGE_TOKEN"] = token
         env["RENFORGE_BRIDGE_SESSION_ID"] = session_id
-        env["RENFORGE_BRIDGE_PROJECT_ROOT"] = str(project.root)
+        # The bridge checks this against the metadata, which spells the root as the disk lists it.
+        env["RENFORGE_BRIDGE_PROJECT_ROOT"] = canonical_project_path(project.root)
         env["RENFORGE_BRIDGE_CONTROL_DIR"] = str(control_dir(project.root))
         env["RENFORGE_BRIDGE_PORT"] = str(port)
         # Transitions only slow an agent down and leave half-drawn frames to wait

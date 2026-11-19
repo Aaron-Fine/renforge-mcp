@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
-from .session_registry import dashboard_connection
+from .session_registry import canonical_project_path, dashboard_connection
 
 _HTTP_TIMEOUT_SECONDS = 45.0
 # An import copies whole save files while holding the session open.
@@ -57,8 +56,8 @@ def _request(
     selected_project = connection.get("project")
     if not all(isinstance(value, str) and value for value in (url, token, selected_project)):
         return None
-    selected_key = os.path.normcase(str(Path(selected_project).expanduser().resolve()))
-    requested_key = os.path.normcase(str(Path(project_path).expanduser().resolve()))
+    selected_key = os.path.normcase(canonical_project_path(selected_project))
+    requested_key = os.path.normcase(canonical_project_path(project_path))
     if selected_key != requested_key:
         return None
 
