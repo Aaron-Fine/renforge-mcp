@@ -784,9 +784,11 @@ init python:
         return True
 
     def _renforge_input_filtered(widget, text):
-        # Same limits Input.event applies while typing: allow, exclude, length.
+        """``text`` as the Input would keep it when typed: allow, exclude, length."""
+        # Input.event applies the limit with `if self.length:`, so 0 and None
+        # both mean no limit.
         length = getattr(widget, "length", None)
-        if isinstance(length, bool) or not isinstance(length, builtins.int) or length < 0:
+        if isinstance(length, bool) or not isinstance(length, builtins.int) or length <= 0:
             length = None
         accepted = ""
         for character in text:

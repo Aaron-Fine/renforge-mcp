@@ -122,3 +122,14 @@ def test_a_custom_click_attribute_must_hold_renpy_actions_when_they_exist(runnin
         assert globs["_renforge_focus_action_value"](focus) is None
     finally:
         del renpy.ui
+
+
+# --- input length ------------------------------------------------------------
+
+
+def test_input_length_zero_is_no_limit(running_bridge):
+    """Input.event checks ``if self.length:``, so 0 means unlimited."""
+    widget = types.SimpleNamespace(length=0, allow=None, exclude=None)
+    assert running_bridge.globs["_renforge_input_filtered"](widget, "hello") == "hello"
+    widget.length = 3
+    assert running_bridge.globs["_renforge_input_filtered"](widget, "hello") == "hel"
