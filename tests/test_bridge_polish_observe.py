@@ -243,3 +243,83 @@ def test_lifecycle_read_changes_nothing(running_bridge, monkeypatch):
     assert bridge.pending_ending == pending
     assert bridge.ending is None and bridge.ending_counter == 0
     assert _ending_events(bridge) == []
+
+
+# --- kept_up screens ----------------------------------------------------------
+
+
+class ScreenDisplayable:
+    """A shown screen: a HUD is not transient, a say screen is."""
+
+    def __init__(self, name, transient):
+        self.screen_name = (name, None)
+        self.transient = transient
+        self.layer = "screens"
+        self.modal = False
+        self.hiding = False
+        self.scope = {}
+        self.child = None
+        self.children = []
+
+
+def _show_screens(renpy, *screens):
+    renpy.display.focus.focus_list[:] = []
+    renpy.game = types.SimpleNamespace(
+        context=lambda: types.SimpleNamespace(
+            interacting=True,
+            scene_lists=types.SimpleNamespace(
+                layers={"screens": [types.SimpleNamespace(displayable=screen) for screen in screens]}
+            ),
+        )
+    )
+    renpy.display.interface.ongoing_transition = {}
+    renpy.get_filename_line = lambda: ("game/script.rpy", 30)
+    renpy.config.overlay_screens = []
+    renpy.get_screen = lambda name: None
+
+
+def _kept_up(running_bridge):
+    reply = running_bridge.client.observe(screenshot=False)
+    return {screen["name"]: screen["kept_up"] for screen in reply["screens"]}
+
+
+def test_hud_shown_during_an_unobserved_interaction_is_kept_up(running_bridge):
+    """`show screen hud` then `pause`, unobserved; the next line keeps the HUD up."""
+    renpy = running_bridge.renpy
+    start_interact = renpy.config.start_interact_callbacks[0]
+    hud = ScreenDisplayable("hud", False)
+
+    _show_screens(renpy, hud)
+    start_interact()  # the pause nobody observed
+    _show_screens(renpy, hud, ScreenDisplayable("say", True))
+    start_interact()  # the next line
+
+    assert _kept_up(running_bridge) == {"hud": True, "say": False}
+
+
+def test_screen_shown_with_this_interaction_is_not_kept_up(running_bridge):
+    renpy = running_bridge.renpy
+    _show_screens(renpy, ScreenDisplayable("hud", False))
+    renpy.config.start_interact_callbacks[0]()
+
+    assert _kept_up(running_bridge) == {"hud": False}
+
+
+def test_first_seen_forgets_screens_that_left_and_checks_the_name(running_bridge):
+    """A stamp belongs to one shown screen; a reused object id does not inherit it."""
+    renpy = running_bridge.renpy
+    start_interact = renpy.config.start_interact_callbacks[0]
+    hud = ScreenDisplayable("hud", False)
+    _show_screens(renpy, hud)
+    start_interact()
+    _show_screens(renpy)
+    start_interact()
+
+    assert not _bridge().screen_first_seen
+
+    # Same object id, another screen: as Python may reuse a freed screen's id.
+    _show_screens(renpy, hud)
+    start_interact()
+    hud.screen_name = ("inventory", None)
+    start_interact()
+    assert _kept_up(running_bridge) == {"inventory": False}

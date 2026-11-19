@@ -5358,7 +5358,53 @@ init python:
         return builtins.dict(nodes=nodes, named=named, truncated=bool(stack), geometry=_renforge_render_geometry())
 
 
+    def _renforge_screen_key(node):
+        """A shown screen's key in screen_first_seen.
+
+        The name guards against a freed screen's id being reused by another.
+        """
+        return (id(node), _renforge_observe_screen_node_name(node))
+
+    def _renforge_screen_first_seen(node, layer, known, generation):
+        """The generation a screen first appeared in, from ``known`` stamps.
+
+        An unknown screen is new with ``generation``, except one a loaded save
+        restored (by name, rebuilt before the first interaction), which was
+        shown before the save: -1.
+        """
+        key = _renforge_screen_key(node)
+        if key in known:
+            return known[key]
+        bridge = _renforge_runtime.bridge
+        restored_at, restored = getattr(bridge, "restored_screens", None) or (None, ())
+        if generation == restored_at and (key[1], layer) in restored:
+            return -1
+        return generation
+
+    def _renforge_stamp_screens():
+        """Stamp each shown screen with the interaction it first appeared in.
+
+        Runs from the start-interaction hook, so a screen shown during an
+        interaction nobody observed still counts as kept up at the next one.
+        Screens no longer on a layer are dropped, so their ids are forgotten.
+        """
+        bridge = _renforge_runtime.bridge
+        if bridge is None:
+            return
+        generation = getattr(bridge, "observe_generation", 0)
+        known = getattr(bridge, "screen_first_seen", None) or {}
+        stamped = builtins.dict()
+        for layer, node in _renforge_scene_roots():
+            if node.__class__.__name__ == "ScreenDisplayable":
+                stamped[_renforge_screen_key(node)] = _renforge_screen_first_seen(node, layer, known, generation)
+        bridge.screen_first_seen = stamped
+
     def _renforge_collect_interaction(inventory=None):
+        """Screens, say dismiss events and truncation for one observe.
+
+        Returns ``(screens, say_dismiss, truncated, screen_nodes)``; each screen
+        record says whether it was kept up from an earlier interaction.
+        """
         if inventory is None:
             inventory = _renforge_scene_inventory()
         screens = []
@@ -5376,24 +5422,27 @@ init python:
         # The interaction each shown screen object first appeared in. One
         # Ren'Py still shows from an earlier interaction, and that is not
         # this interaction's own (say, menu, call screen), was kept up across
-        # lines: a HUD such as a phone or codex button.
+        # lines: a HUD such as a phone or codex button. The start-interaction
+        # hook stamps screens (_renforge_stamp_screens); observe adds only a
+        # screen an action showed after this interaction started.
         bridge = _renforge_runtime.bridge
         generation = getattr(bridge, "observe_generation", 0) if bridge is not None else 0
-        before = getattr(bridge, "screen_first_seen", None) or {}
-        restored_at, restored = getattr(bridge, "restored_screens", None) or (None, ())
+        known = getattr(bridge, "screen_first_seen", None) or {}
         first_seen = {}
+        added = {}
         for node, layer in zip(screen_nodes, layers):
-            if id(node) in before:
-                first_seen[id(node)] = before[id(node)]
-            elif generation == restored_at and (_renforge_observe_screen_node_name(node), layer) in restored:
-                first_seen[id(node)] = -1
-            else:
-                first_seen[id(node)] = generation
-        if bridge is not None:
-            bridge.screen_first_seen = first_seen
+            key = _renforge_screen_key(node)
+            first_seen[key] = _renforge_screen_first_seen(node, layer, known, generation)
+            if key not in known:
+                added[key] = first_seen[key]
+        if bridge is not None and added:
+            merged = builtins.dict(known)
+            merged.update(added)
+            bridge.screen_first_seen = merged
         seen_screens = {}
         for node, layer in zip(screen_nodes, layers):
-            kept_up = (getattr(node, "transient", None) is False and first_seen[id(node)] < generation)
+            kept_up = (getattr(node, "transient", None) is False
+                       and first_seen[_renforge_screen_key(node)] < generation)
             _renforge_observe_record_screen(node, layer, screens, seen_screens, kept_up)
         say_dismiss = _renforge_runtime.interaction.normalize_say_dismiss(dismiss)
         return screens, say_dismiss, inventory["truncated"], screen_nodes
@@ -5429,7 +5478,7 @@ init python:
             for entry in entries:
                 node = getattr(entry, "displayable", None)
                 if node.__class__.__name__ == "ScreenDisplayable":
-                    first_seen[id(node)] = -1
+                    first_seen[_renforge_screen_key(node)] = -1
                     names.add((_renforge_observe_screen_node_name(node), layer))
         bridge.screen_first_seen = first_seen
         # Ren'Py can rebuild a restored screen before the first interaction
@@ -8894,6 +8943,7 @@ init python:
                 if operation["steps"] >= operation["max_steps"]:
                     _renforge_progress_finish("max_steps")
             bridge.observe_generation = int(getattr(bridge, "observe_generation", 0)) + 1
+            _renforge_stamp_screens()
             _renforge_commit_ending()
             if not getattr(bridge, "transitions_applied", False):
                 # Preferences exist by the first interaction. The launcher asks
