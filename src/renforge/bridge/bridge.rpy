@@ -7741,11 +7741,22 @@ init python:
         return True
 
     def _renforge_bridge_control_dir(project_root):
-        # RenForge keeps its state outside the game; the launcher says where.
+        """The private control directory: RENFORGE_BRIDGE_CONTROL_DIR, else
+        ``<project_root>/.renforge/control``.
+
+        RenForge keeps its state outside the game and the launcher says
+        where. Like the project root, a configured directory must be an
+        absolute path with no symlink on it (trailing separators aside):
+        with a trailing separator, lstat follows a linked directory and the
+        parent check looks at the directory itself, so the no-follow checks
+        could be stepped around. Raises OSError otherwise."""
         import os as _os
         configured = (_os.environ.get("RENFORGE_BRIDGE_CONTROL_DIR") or "").strip()
         if configured:
-            return configured
+            path = configured.rstrip(_os.sep + (_os.altsep or ""))
+            if not path or not _os.path.isabs(path) or _os.path.realpath(path) != path:
+                raise OSError("control directory must be an absolute path without symlinks")
+            return path
         return _os.path.join(project_root, ".renforge", "control")
 
     def _renforge_bridge_info_path(project_root):
@@ -8279,10 +8290,10 @@ init python:
         import stat as _stat
 
         control_dir = _renforge_bridge_control_dir(project_root)
-        renforge_dir = _os.path.dirname(control_dir)
+        parent_dir = _os.path.dirname(control_dir)
         # Reject symlink/reparse ancestors before accepting control contents.
-        if _renforge_bridge_path_is_symlink(renforge_dir):
-            raise OSError("renforge directory must not be a symlink")
+        if _renforge_bridge_path_is_symlink(parent_dir):
+            raise OSError("control directory parent must not be a symlink")
         if _renforge_bridge_path_is_symlink(control_dir):
             raise OSError("control directory must not be a symlink")
         try:

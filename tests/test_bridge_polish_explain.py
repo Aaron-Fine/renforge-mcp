@@ -6,12 +6,14 @@ so the bridge's class-name dispatch sees the names the engine produces.
 
 from __future__ import annotations
 
+import os
 import time
 import types
 
 import pytest
+from renforge.state import control_dir, project_state_dir
 from test_bridge_explain import _node, _screen, _script_node, _set_screens, _set_script
-from test_bridge_runtime import _arm_stable_interaction, _FakeFocus, _native_skip_setup
+from test_bridge_runtime import _arm_stable_interaction, _exec_bridge_with_env, _FakeFocus, _native_skip_setup
 from test_bridge_runtime import running_bridge  # noqa: F401 - shared bridge fixture
 
 
@@ -297,3 +299,45 @@ def test_act_value_and_drop_keep_their_reply_when_the_action_jumps(running_bridg
     assert result is not None and result["ok"] is True and result["via"] == "action"
     assert {key: result[key] for key in expected} == expected
     assert result["interaction"] == 8
+
+
+# --- the configured control directory ----------------------------------------
+
+
+def _start_with_control_dir(tmp_path, monkeypatch, configured):
+    _, bridge, stderr = _exec_bridge_with_env(tmp_path, monkeypatch, env={
+        "RENFORGE_BRIDGE_TOKEN": "b" * 64,
+        "RENFORGE_BRIDGE_SESSION_ID": "a" * 32,
+        "RENFORGE_BRIDGE_CONTROL_DIR": configured,
+    })
+    assert bridge is not None
+    try:
+        for _ in range(300):
+            if bridge.stop.is_set() or stderr.getvalue():
+                break
+            if (control_dir(tmp_path.resolve()) / "bridge.json").read_text(encoding="utf-8").find('"ready"') >= 0:
+                break
+            time.sleep(0.01)
+        return stderr.getvalue()
+    finally:
+        bridge.stop.set()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+def test_a_control_dir_reached_through_a_linked_parent_is_refused(tmp_path, monkeypatch):
+    project_root = tmp_path.resolve()
+    link = project_root / "linked-state"
+    link.symlink_to(project_state_dir(project_root), target_is_directory=True)
+
+    # The trailing separator once made the parent check look at the control
+    # directory itself, so the linked parent went unnoticed.
+    reported = _start_with_control_dir(tmp_path, monkeypatch, str(link / "control") + os.sep)
+
+    assert reported == "RENFORGE_BRIDGE_STARTUP_ERROR=BRIDGE_INFO_CONFLICT\n"
+
+
+def test_a_canonical_control_dir_with_a_trailing_separator_still_starts(tmp_path, monkeypatch):
+    reported = _start_with_control_dir(tmp_path, monkeypatch, str(control_dir(tmp_path.resolve())) + os.sep)
+
+    assert reported == ""
+    assert '"ready"' in (control_dir(tmp_path.resolve()) / "bridge.json").read_text(encoding="utf-8")
