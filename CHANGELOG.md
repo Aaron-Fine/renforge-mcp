@@ -453,6 +453,31 @@ versioning.
 
 ### Fixed
 
+- `renforge_mod` writes work when the project path goes through a symlink
+  (a linked games library, macOS `/var`, `/home` -> `/var/home`); only links
+  under `game/` are refused. `write` no longer takes over a file it did not
+  create: a `game/mods/<name>/` folder without a manifest, or a file (or a
+  `.rpy`'s `.rpyc`) the manifest does not list, is refused, because `remove`
+  would then delete it. The manifest name is refused in any case or folder,
+  removal uses the same junction-aware link check as writes, and `package`
+  skips an invalid manifest entry under `missing` as `list` and `remove` do.
+- `renforge_mod(action="lint")` lints a temporary shadow copy, as
+  `renforge_validate` does, so it no longer writes `.rpyc` or cache files
+  in the game. It keeps Ren'Py parse errors (`File "...", line N:`), passes
+  on `timed_out` and a bounded `raw_tail` when it fails with nothing in the
+  mod, and reports an unknown mod instead of linting the whole project.
+- `renforge_mod` `write`, `remove`, and `package` return
+  `files_touched`/`files_deleted`, so the activity journal records them, and
+  `reload` returns a compact observation like the other play tools.
+- `RENFORGE_TOOLSETS` is parsed once: a value naming no group (`,`) or a
+  mis-cased name stops the server, instead of listing no tools while
+  `renforge_info`, the instructions, and the bridge eval switch described
+  every group (the eval switch fails closed). `renforge_info` is listed by
+  every server, and `renforge_estimate_translation` (an image-shift
+  estimate) moves from `translation` to `live`.
+- `renforge_mod` is annotated `destructiveHint=true` and
+  `openWorldHint=true`, and `renforge_session` `openWorldHint=true`, matching
+  their riskiest actions.
 - `renforge_capture_screenshot` failed with a `ValueError` since captures
   moved to the state folder outside the game. Its `relative_path` and
   `files_touched` receipt now name the capture's absolute path there, as

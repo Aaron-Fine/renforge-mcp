@@ -6,7 +6,7 @@
 src/renforge/
   cli.py            # argparse entrypoint (inspect / serve / ui)
   server.py         # MCP app bootstrap + FastMCP/fallback; delegates tool registration
-  tool_definitions.py # canonical 60-tool public contract (names, schemas, annotations)
+  tool_definitions.py # canonical 61-tool public contract (names, schemas, annotations)
   tool_schema.py    # shared JSON Schema fragments used by the contract catalog
   tool_registration/
     registry.py     # backend-aware ToolRegistrar; clones wrappers before annotating
@@ -60,7 +60,7 @@ never mutates shared `__annotations__` or `__doc__`, then applies description,
 unknown names, parameter drift, duplicate registrations, and backends that
 cannot accept required metadata raise instead of shipping a partial catalog.
 
-The public 60-tool contract is snapshotted in
+The public 61-tool contract is snapshotted in
 `tests/snapshots/mcp_public_tool_contract.json`. Intentional API changes must
 update that file; accidental ones fail CI.
 
@@ -160,7 +160,7 @@ The server falls back to a compatibility mode with a clear message if
 
 ## Runtime policy
 
-`policy.py` classifies high-risk MCP calls (session, launch, control, saves,
+`policy.py` classifies high-risk MCP calls (play-loop, session, launch, control, saves,
 mod, editor, eval, set_var, wait_until and scenario tools; the full list is in
 [POLICY.md](POLICY.md)) from the tool name and validated parameters, then allows or denies them inside `_log_tool_call`
 before the live implementation runs. MCP `ToolAnnotations` remain static
