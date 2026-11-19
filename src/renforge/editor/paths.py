@@ -139,7 +139,8 @@ def _filesystem_dir(path: Path) -> Path:
     return path.parent
 
 
-def _same_filesystem(left: Path, right: Path) -> bool:
+def same_filesystem(left: Path, right: Path) -> bool:
+    """Return whether *left* and *right* sit on one filesystem (False if either is unreadable)."""
     try:
         return _filesystem_dir(left).stat().st_dev == _filesystem_dir(right).stat().st_dev
     except OSError:
@@ -324,7 +325,7 @@ def conditional_replace_file(
         displaced.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise EditorPathError("PATH_PARENT_INVALID", f"cannot create displaced parent: {exc}") from exc
-    if not _same_filesystem(source, displaced.parent):
+    if not same_filesystem(source, displaced.parent):
         raise EditorPathError(
             "SOURCE_CAS_UNAVAILABLE",
             "displaced path must share the source filesystem",

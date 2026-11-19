@@ -5274,3 +5274,129 @@ def test_project_relative_receipt_anchors_relative_paths_to_the_project(tmp_path
         ".renforge/scenes/a.json"
     )
     assert _project_relative_path(project, outside) == outside.resolve().as_posix()
+
+
+def _fake_state_on_other_device(monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Make every path under the RenForge state root report a different ``st_dev``.
+
+    The suite's state root shares a filesystem with ``tmp_path``. A game on a
+    second drive does not, and the atomic exchange refuses to cross devices.
+    """
+    from renforge.editor import coordinator as coordinator_module
+    from renforge.editor import paths as paths_module
+    from renforge.state import state_root
+
+    root = state_root()
+    real_lstat_regular = paths_module._lstat_regular
+
+    def offset(path: Path) -> int:
+        try:
+            Path(path).resolve().relative_to(root)
+        except ValueError:
+            return 0
+        return 1_000_000
+
+    def device(path: Path) -> int:
+        return paths_module._filesystem_dir(Path(path)).stat().st_dev + offset(path)
+
+    def fake_lstat_regular(path: Path) -> Any:
+        st = real_lstat_regular(path)
+        return SimpleNamespace(st_mode=st.st_mode, st_dev=st.st_dev + offset(path))
+
+    def fake_same_filesystem(left: Path, right: Path) -> bool:
+        try:
+            return device(left) == device(right)
+        except OSError:
+            return False
+
+    monkeypatch.setattr(paths_module, "_lstat_regular", fake_lstat_regular)
+    monkeypatch.setattr(paths_module, "same_filesystem", fake_same_filesystem)
+    monkeypatch.setattr(coordinator_module, "same_filesystem", fake_same_filesystem, raising=False)
+    return root
+
+
+def test_commit_and_rollback_work_when_state_is_on_another_filesystem(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A game on another drive than the state folder can still be saved and rolled back.
+
+    The exchange files must sit on the source's filesystem; the journal stays in
+    the state folder, and nothing is left in the project once the exchange is done.
+    """
+    _fake_state_on_other_device(monkeypatch)
+    project, source = _make_project(tmp_path)
+    observation = _base_observation(script_generation=40)
+    probe = _Probe(
+        observe_reply={
+            **observation,
+            "frame_id": "independent-frame-40",
+            "object_id": "obj-independent-40",
+        }
+    )
+    coordinator = EditorCoordinator(project, _make_sdk(tmp_path), attestation_timeout=0.2)
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    baseline = source.read_bytes()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analysis = _analyze(sock, auth, observation, request_id="an-cross-fs")
+            commit = _commit(sock, auth, analysis, x=71, y=72, request_id="co-cross-fs")
+            assert commit["ok"] is True, commit.get("error")
+            assert "xpos 71 ypos 72" in source.read_text(encoding="utf-8")
+            tx = commit["result"]["transaction_id"]
+
+            # No attestation arrives, so the timer rolls the save back.
+            _wait_for_commit_state(sock, auth, tx, "rolled_back")
+            assert source.read_bytes() == baseline
+    finally:
+        coordinator.close()
+    # The exchange left nothing behind in the game's project folder.
+    assert not (project.root / ".renforge").exists()
+
+
+def test_commit_and_close_rollback_across_real_filesystems(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Same as above on two real filesystems, where the host offers a second one."""
+    import shutil
+    import tempfile
+
+    shm = Path("/dev/shm")
+    if not shm.is_dir() or not os.access(shm, os.W_OK) or shm.stat().st_dev == tmp_path.stat().st_dev:
+        pytest.skip("needs a writable /dev/shm on a different filesystem from tmp_path")
+    state_dir = Path(tempfile.mkdtemp(prefix="renforge-state-", dir=shm))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(state_dir))
+    try:
+        project, source = _make_project(tmp_path)
+        observation = _base_observation(script_generation=41)
+        probe = _Probe(
+            observe_reply={
+                **observation,
+                "frame_id": "independent-frame-41",
+                "object_id": "obj-independent-41",
+            }
+        )
+        coordinator = EditorCoordinator(project, _make_sdk(tmp_path), attestation_timeout=120.0)
+        coordinator.attach_runtime_probe(probe)
+        endpoint = coordinator.start()
+        baseline = source.read_bytes()
+        closed = False
+        try:
+            with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+                auth = _auth(sock, endpoint)
+                analysis = _analyze(sock, auth, observation, request_id="an-real-fs")
+                commit = _commit(sock, auth, analysis, x=73, y=74, request_id="co-real-fs")
+                assert commit["ok"] is True, commit.get("error")
+                transaction_id = commit["result"]["transaction_id"]
+                assert "xpos 73 ypos 74" in source.read_text(encoding="utf-8")
+            status = coordinator.close()
+            closed = True
+            assert status["transactions"][transaction_id] == "rolled_back"
+            assert source.read_bytes() == baseline
+        finally:
+            if not closed:
+                coordinator.close()
+        assert not (project.root / ".renforge").exists()
+    finally:
+        shutil.rmtree(state_dir, ignore_errors=True)

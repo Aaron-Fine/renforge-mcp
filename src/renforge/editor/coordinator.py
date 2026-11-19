@@ -23,8 +23,10 @@ from .constants import (
     MAX_INTENTS,
     MAX_PATH_BYTES,
     MAX_STRING_BYTES,
+    PROJECT_EXCHANGE_DIRNAME,
     PROTOCOL_NAME,
     PROTOCOL_VERSION,
+    RENFORGE_DIRNAME,
     TRANSACTION_DIRNAME,
 )
 from .exceptions import EditorError
@@ -35,7 +37,9 @@ from .paths import (
     fsync_directory,
     hash_file_nofollow,
     resolve_game_path,
+    same_filesystem,
     sha256_bytes,
+    write_exclusive_bytes,
 )
 from .runtime import RuntimeProbe
 from .shadow import ShadowLintResult, validate_shadow_project
@@ -78,6 +82,7 @@ from .source import (
     uses_runtime_delta_position,
 )
 from ..state import project_state_dir
+from ..util.files import PrivatePathError, ensure_nofollow_directory
 from .scope import require_in_scope
 
 
@@ -296,8 +301,9 @@ class EditorCoordinator:
         self._lock = threading.RLock()
         self._request_lock = threading.Lock()
 
-        self._transaction_root = project_state_dir(self._project.root) / TRANSACTION_DIRNAME
-        self._transaction_root.mkdir(parents=True, exist_ok=True)
+        self._transaction_root = ensure_nofollow_directory(
+            project_state_dir(self._project.root) / TRANSACTION_DIRNAME
+        )
         fsync_directory(self._transaction_root.parent)
         fsync_directory(self._transaction_root)
 
@@ -2346,8 +2352,10 @@ class EditorCoordinator:
 
     def _publish_transaction_bytes(self, transaction: _TransactionRecord) -> None:
         """CAS-publish staged bytes over the live source, retaining displaced evidence."""
-        exchange_dir = self._transaction_root / transaction.transaction_id / "exchange"
-        exchange_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            exchange_dir = self._exchange_dir(transaction)
+        except (OSError, PrivatePathError) as exc:
+            raise EditorError("SOURCE_CAS_UNAVAILABLE", f"cannot prepare exchange folder: {exc}") from exc
         replacement_path = exchange_dir / "replacement"
         displaced_path = exchange_dir / f"displaced-{uuid.uuid4().hex}"
         if replacement_path.exists() or replacement_path.is_symlink():
@@ -2356,10 +2364,9 @@ class EditorCoordinator:
             except OSError as exc:
                 raise EditorError("SOURCE_CAS_UNAVAILABLE", f"cannot prepare replacement path: {exc}") from exc
         try:
-            from .paths import write_exclusive_bytes
-
             write_exclusive_bytes(replacement_path, transaction.staged_bytes)
         except OSError as exc:
+            self._discard_project_exchange(exchange_dir, replacement_path)
             raise EditorError("SOURCE_CAS_UNAVAILABLE", f"cannot stage replacement bytes: {exc}") from exc
 
         transaction.state = "publishing"
@@ -2379,6 +2386,9 @@ class EditorCoordinator:
                 displaced_path=displaced_path,
             )
         except EditorPathError as exc:
+            if exc.code != "SOURCE_EXCHANGE_CONFLICT":
+                # Nothing was exchanged; the staged bytes are in the journal.
+                self._discard_project_exchange(exchange_dir, replacement_path)
             if exc.code == "STALE_SOURCE":
                 transaction.state = "failed"
                 self._persist_transaction(transaction)
@@ -2402,6 +2412,8 @@ class EditorCoordinator:
             self._persist_transaction(transaction)
             raise EditorError(exc.code, str(exc), details=getattr(exc, "details", None)) from exc
 
+        # The displaced bytes were checked equal to the journal's original.
+        self._discard_project_exchange(exchange_dir, result.displaced_path)
         transaction.state = "published"
         transaction.diagnostics = {
             **dict(transaction.diagnostics or {}),
@@ -2446,13 +2458,21 @@ class EditorCoordinator:
                 return
 
         # Current disk matches staged: CAS original back into place.
-        exchange_dir = self._transaction_root / transaction.transaction_id / "exchange"
-        exchange_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            exchange_dir = self._exchange_dir(transaction)
+        except (OSError, PrivatePathError):
+            with self._lock:
+                transaction.state = "rollback_conflict"
+                transaction.uncertain_paths = [transaction.source_relative_path]
+                transaction.diagnostics = {
+                    **dict(transaction.diagnostics or {}),
+                    "rollback_error": "ROLLBACK_FILE_ERROR",
+                }
+                self._persist_transaction(transaction)
+            return
         original_candidate = exchange_dir / f"rollback-original-{uuid.uuid4().hex}"
         displaced_path = exchange_dir / f"rollback-displaced-{uuid.uuid4().hex}"
         try:
-            from .paths import write_exclusive_bytes
-
             write_exclusive_bytes(original_candidate, transaction.original_bytes)
             conditional_replace_file(
                 transaction.source_absolute_path,
@@ -2486,10 +2506,51 @@ class EditorCoordinator:
                 self._persist_transaction(transaction)
             return
 
+        # The displaced bytes were checked equal to the journal's staged copy.
+        self._discard_project_exchange(exchange_dir, displaced_path)
         with self._lock:
             transaction.state = "rolled_back"
             transaction.uncertain_paths = []
             self._persist_transaction(transaction)
+
+    def _exchange_dir(self, transaction: _TransactionRecord) -> Path:
+        """Return (creating it) the folder for one transaction's exchange files.
+
+        The atomic exchange only works within one filesystem. The journal and
+        shadow always stay in the state folder; when the source sits on another
+        filesystem (a game on a second drive), the replacement and displaced
+        files go to ``<project>/.renforge/editor-exchange/<transaction>`` on the
+        source's side instead, and ``_discard_project_exchange`` removes them
+        once the exchange has succeeded or never happened.
+        """
+        if same_filesystem(transaction.source_absolute_path, self._transaction_root):
+            return ensure_nofollow_directory(self._transaction_root / transaction.transaction_id / "exchange")
+        return ensure_nofollow_directory(self._project_exchange_root() / transaction.transaction_id)
+
+    def _project_exchange_root(self) -> Path:
+        return Path(self._project.root) / RENFORGE_DIRNAME / PROJECT_EXCHANGE_DIRNAME
+
+    def _discard_project_exchange(self, exchange_dir: Path, *paths: Path) -> None:
+        """Remove exchange files kept in the project, and their folders once empty.
+
+        Only called when the files hold no evidence the journal lacks. Files in
+        the state folder are left alone; a conflict keeps every file anywhere.
+        """
+        project_root = self._project_exchange_root()
+        if exchange_dir.parent != project_root:
+            return
+        for path in paths:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                return
+        # rmdir only removes empty folders, so a policy.json or a retained
+        # conflict keeps its parent.
+        for folder in (exchange_dir, project_root, project_root.parent):
+            try:
+                folder.rmdir()
+            except OSError:
+                return
 
     def _persist_transaction(self, transaction: _TransactionRecord) -> None:
         tx_dir = self._transaction_root / transaction.transaction_id

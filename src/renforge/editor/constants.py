@@ -13,7 +13,11 @@ MAX_INTENTS: Final = 256
 MAX_DIAGNOSTICS_BYTES: Final = 64 * 1024
 
 TRANSACTION_DIRNAME: Final = "editor-transactions"
+# The project's own RenForge folder. RenForge state lives in the state folder;
+# this one only holds the owner's policy.json, and editor exchange files while
+# a save crosses filesystems (PROJECT_EXCHANGE_DIRNAME inside it).
 RENFORGE_DIRNAME: Final = ".renforge"
+PROJECT_EXCHANGE_DIRNAME: Final = "editor-exchange"
 
 COMMIT_STATES: Final = {
     "staged",
