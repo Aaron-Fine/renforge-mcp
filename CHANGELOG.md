@@ -77,7 +77,8 @@ versioning.
   the play loop's steps; it leaves out the Live Editor block unless both the
   `editor` and `live` toolsets are listed, since its workflow launches with
   `renforge_launch`. The server instructions likewise name only the
-  listed tools, and say what each `forward` value asks of the agent.
+  listed tools (the Live Editor too only with both), and say what each
+  `forward` value asks of the agent.
 - The `renforge_observe` description leads with `forward` and what to call
   next. It said the PNG's SHA-256 is `frame_id` (it is `frame_hash`) and that
   keyboard shortcuts are not inventoried (`keys` lists them). Compact
@@ -95,6 +96,8 @@ versioning.
   stages its exchange files in `<project>/.renforge/editor-exchange/`
   instead, because the atomic exchange cannot cross filesystems, and removes
   them when it is done; a conflict keeps them as evidence.
+  `RenpyProject.cache_dir` is gone; `renforge.state.project_state_dir`
+  names the folder.
 - Launches in a Wayland session use `SDL_VIDEODRIVER=wayland,x11` so games
   start while the screen is locked. The startup deadline defaults to 180 s and
   reads `RENFORGE_STARTUP_TIMEOUT`.
@@ -134,7 +137,9 @@ versioning.
   read class-level defaults. A long list or dict says it is cut short
   (`size`, `truncated`) instead of silently dropping entries. `variables`
   is passed alone (with another selector it is refused) and reads at most
-  100 names, saying `truncated` when given more. `explain(source=...)` on a menu, `if`, or
+  100 names, saying `truncated` when given more. A dotted path never steps
+  into a module or a private (`_`) field after its first name, so
+  `renpy.os.environ` (the game's environment) cannot be read. `explain(source=...)` on a menu, `if`, or
   `while` lists what each branch does, and label and screen entries name
   their file only when it differs from the result's own. Search lists a
   screen's matches in source order with whole snippets.
@@ -482,13 +487,19 @@ versioning.
   would then delete it. The manifest name is refused in any case or folder,
   removal uses the same junction-aware link check as writes, and `package`
   skips an invalid manifest entry under `missing` as `list` and `remove` do.
+  `remove` refuses a mod whose own folder, `game/mods` or `game` is a link,
+  instead of deleting the manifest and empty folders in the link's target,
+  and never enters a linked folder (a Windows junction) inside the mod.
 - `renforge_mod(action="lint")` lints a temporary shadow copy, as
   `renforge_validate` does, so it no longer writes `.rpyc` or cache files
-  in the game. It keeps Ren'Py parse errors (`File "...", line N:`), passes
+  in the game. It lints with the game's own engine version, as
+  `version="stable"` does elsewhere (the `renforge.json` pin, the shipped
+  engine, then `script_version.txt`), never an SDK found in the project. It keeps Ren'Py parse errors (`File "...", line N:`), passes
   on `timed_out` and a bounded `raw_tail` when it fails with nothing in the
   mod, and reports an unknown mod instead of linting the whole project.
 - `renforge_mod` `write`, `remove`, and `package` return
-  `files_touched`/`files_deleted`, so the activity journal records them, and
+  `files_touched`/`files_deleted`, so the activity journal records them
+  (the packaged zip as a POSIX path, like every other receipt), and
   `reload` returns a compact observation like the other play tools.
 - `RENFORGE_TOOLSETS` is parsed once: a value naming no group (`,`) or a
   mis-cased name stops the server, instead of listing no tools while
@@ -510,7 +521,8 @@ versioning.
   is refused, and an `advance` step fails on a count outside its schema
   (`"3"`, `0`, `2.9`) instead of advancing once.
 - The dashboard answers malformed requests with a 400 naming the field instead
-  of acting on a coerced value: a boolean, zero or negative launch `timeout`,
+  of acting on a coerced value: a boolean, zero or negative launch `timeout`
+  (or an integer too large to be a deadline, which was a 500),
   an unknown `display`/`audio`, a non-boolean `cleanup_on_stop` on `/api/warp`,
   a non-string `expr`, a boolean or negative screenshot size, a choice `index`
   that is not an integer or an empty choice `text`, an unknown control action,
@@ -534,6 +546,11 @@ versioning.
   the engine widget.
 - Autopilot ends a run when the bridge refuses a choice and lists it under
   `choice_errors`, instead of counting the menu as explored.
+- Project scans (`renforge_scan_project`, `renforge_assets`,
+  `renforge_find_references`, and the dashboard's script list, story map and
+  translation strings) no longer walk into a folder under `game/` that is a
+  Windows junction and read the scripts in the tree it points to; symlinked
+  folders were already skipped.
 
 ## [0.7.6] - 2026-11-18
 
