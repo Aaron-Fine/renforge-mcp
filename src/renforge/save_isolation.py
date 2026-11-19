@@ -31,6 +31,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -1314,7 +1315,9 @@ def _preserve_x11_auth(host_env: Mapping[str, str]) -> dict[str, str]:
 
 # Loaded by Ren'Py from RENPY_SEARCHPATH before it reads persistent data or
 # sets up save locations. Sessions do the same from a ``python early`` file.
-TOOL_SAVES_ADAPTER_FILENAME = "renforge_tool_saves.rpe.py"
+# A .rpe zip (its autorun.py runs) loads on every Ren'Py 8; the plain .rpe.py
+# form loads only from 8.3 on.
+TOOL_SAVES_ADAPTER_FILENAME = "renforge_tool_saves.rpe"
 TOOL_SAVES_ADAPTER_SOURCE = """\
 import os
 import renpy
@@ -1336,6 +1339,17 @@ renpy.savelocation.init = _renforge_one_save_location
 """
 
 
+def write_renpy_extension(path: Path, source: str) -> Path:
+    """Write *source* as a Ren'Py ``.rpe`` extension at *path* and return it.
+
+    Ren'Py runs the zip's ``autorun.py`` when it finds the file on its search
+    path, early in startup; every Ren'Py 8 release loads this form.
+    """
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as extension:
+        extension.writestr("autorun.py", source)
+    return path
+
+
 @contextmanager
 def renpy_tool_environment() -> Iterator[dict[str, str]]:
     """Environment for a one-shot Ren'Py command run against a game.
@@ -1350,7 +1364,7 @@ def renpy_tool_environment() -> Iterator[dict[str, str]]:
         base = Path(root)
         adapter_dir = base / "adapter"
         adapter_dir.mkdir()
-        (adapter_dir / TOOL_SAVES_ADAPTER_FILENAME).write_text(TOOL_SAVES_ADAPTER_SOURCE, encoding="utf-8")
+        write_renpy_extension(adapter_dir / TOOL_SAVES_ADAPTER_FILENAME, TOOL_SAVES_ADAPTER_SOURCE)
         home = base / HOME_DIRNAME
         _prepare_isolated_home(home)
         saves = base / SAVES_DIRNAME
