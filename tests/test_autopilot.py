@@ -65,3 +65,38 @@ def test_autopilot_launches_are_isolated_whatever_the_server_default(tmp_path, m
         pass
     assert seen.get("savedir") == "temporary"
     assert seen.get("home") == "temporary"
+
+
+def test_a_refused_choice_ends_the_run_and_is_reported(tmp_path, monkeypatch) -> None:
+    """A refused selection must not count as explored or keep re-queuing the menu."""
+    import renforge.autopilot as autopilot_module
+    from renforge.project import RenpyProject
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+
+    class _RefusingClient:
+        def poll_events(self, since=0):
+            return {"events": [], "cursor": since}
+
+        def list_menu_choices(self):
+            return [{"index": 0, "text": "Left"}, {"index": 1, "text": "Right"}]
+
+        def select_choice(self, **_kwargs):
+            return {"ok": False, "error": "ambiguous choice"}
+
+        def advance(self):
+            raise AssertionError("a refused choice must end the run")
+
+    class _Session:
+        client = _RefusingClient()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(autopilot_module, "launch_with_bridge", lambda *_a, **_k: _Session())
+    report = autopilot_module.autopilot(object(), RenpyProject(_DEMO), max_runs=2, max_steps=10, settle=0)
+    assert report["runs"] == 2
+    assert report["runs_pending"] == 0
+    assert report["choices_explored"] == 0
+    assert [item["choice"] for item in report["choice_errors"]] == ["Left", "Right"]
+    assert report["choice_errors"][0]["error"] == "ambiguous choice"

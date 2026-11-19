@@ -4,7 +4,8 @@ Each run launches the game fresh and replays a fixed prefix of earlier menu
 selections. At the next new menu, Autopilot selects the first choice and queues
 the remaining choices as prefixes for later runs. It collects label and dialogue
 events after every interaction, records bridge exceptions as crashes, and stops
-a run when a story label repeats or the step limit is reached.
+a run when a story label repeats, the step limit is reached, or the bridge
+refuses a choice (reported in ``choice_errors``).
 
 The bridge derives the current story choices from the active menu screen's
 ``items`` scope and maps actionable item captions to visible controls. This is
@@ -68,6 +69,7 @@ def autopilot(
     reached: set[str] = set()
     dialogue: set[str] = set()
     crashes: list[dict] = []
+    choice_errors: list[dict] = []
     choices_explored = 0
 
     frontier: deque[list[int]] = deque([[]])
@@ -92,6 +94,7 @@ def autopilot(
             "dialogue_lines": len(dialogue),
             "choices_explored": choices_explored,
             "crashes": crashes,
+            "choice_errors": choice_errors,
         }
 
     def _emit(done: bool) -> None:
@@ -164,7 +167,12 @@ def autopilot(
                     seq_pos += 1
                     idx = min(idx, len(choices) - 1)
                     # Select by visible text (the reliable focus-resolution path).
-                    session.client.select_choice(text=choices[idx]["text"])
+                    # A refused choice (ambiguous, covered, disabled) leaves the
+                    # menu up, so the run cannot go further down this branch.
+                    reply = session.client.select_choice(text=choices[idx]["text"])
+                    if isinstance(reply, dict) and reply.get("ok") is False:
+                        choice_errors.append({"choice": choices[idx]["text"], "error": reply.get("error")})
+                        break
                     choices_explored += 1
                     time.sleep(settle)
                     continue

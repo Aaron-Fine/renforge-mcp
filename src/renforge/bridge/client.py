@@ -498,7 +498,12 @@ class BridgeClient:
     def select_choice(self, text: str | None = None, index: int | None = None,
                       *, interaction: int | None = None, session_id: str | None = None,
                       observation_id: str | None = None) -> dict:
-        """Select a current choice, optionally guarded by an observation identity."""
+        """Select a current choice, optionally guarded by an observation identity.
+
+        A refusal (no match, an ambiguous caption, a disabled or covered
+        choice, a stale guard) is returned as ``{"ok": False, "error": ...}``
+        rather than raised, so callers must check ``ok``.
+        """
         payload = {"text": text, "index": index}
         payload.update({key: value for key, value in dict(interaction=interaction,
             session_id=session_id, observation_id=observation_id).items() if value is not None})
