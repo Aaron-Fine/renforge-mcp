@@ -465,14 +465,17 @@ def build_wrappers(context):
 
     def renforge_session(project_path: str, action: str, slot: str | None = None,
                          label: str | None = None, authorize: bool = False) -> dict:
-        """Start, check, save, load, list saves of, or stop a play session.
+        """Start, check, save, load, list saves of, import a player save into, or stop a play session.
 
         The canonical lifecycle for agents. ``launch`` uses agent-mode
         defaults: saves and preferences in the project's RenForge state
         folder (never the player's, and kept across launches), an isolated
         HOME, no Live Editor. Poll ``status`` until ready. ``save``, ``load``
         and ``list`` refuse a game whose saves or HOME are outside RenForge's
-        own folders (``SESSION_NOT_ISOLATED``).
+        own folders (``SESSION_NOT_ISOLATED``). ``import`` copies one of the
+        player's slots in, only reading the player's file; it refuses a running
+        game that keeps its saves somewhere RenForge does not own
+        (``SESSION_SAVES_ELSEWHERE``).
         """
 
         def _session() -> dict:
