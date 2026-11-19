@@ -7094,60 +7094,46 @@ init python:
         return True, stored
 
 
-    def _renforge_act_value(payload, focus, wanted, interaction, control):
+    def _renforge_act_refusal(error, interaction, control_id=None):
+        """act's refusal: the error, the interaction, and the control id when known."""
+        reply = {"ok": False, "error": error, "interaction": interaction}
+        if control_id is not None:
+            reply["id"] = control_id
+        return reply
+
+
+    def _renforge_act_value(payload, focus, result, control):
+        """Set a bar's ``value``, or a viewport's ``x``/``y`` scroll, through its adjustment.
+
+        ``result`` is act's success reply (operation, id, interaction, screen,
+        via); the stored values are added to it and it is returned. A
+        viewport changes no axis unless every requested axis can change.
+        Refusals: ``value_required`` (no finite number given) and
+        ``unsupported`` (the adjustment cannot change)."""
         widget = getattr(focus, "widget", None)
-        result = {
-            "ok": True,
-            "operation": "value",
-            "id": wanted,
-            "interaction": interaction,
-            "screen": control.get("screen"),
-            "via": "action",
-        }
+        refuse = lambda error: _renforge_act_refusal(error, result["interaction"], result["id"])
+        real_number = _renforge_runtime.interaction._real_number
         if control.get("role") == "viewport":
-            for axis, field in (("x", "xadjustment"), ("y", "yadjustment")):
-                if axis in payload:
-                    number = payload[axis]
-                    if not _renforge_runtime.interaction._real_number(number):
-                        return {"ok": False, "error": "value_required", "interaction": interaction, "id": wanted}
-                    if not callable(getattr(getattr(widget, field, None), "change", None)):
-                        return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
-            wrote = False
-            for axis, field in (("x", "xadjustment"), ("y", "yadjustment")):
-                if axis not in payload:
-                    continue
-                number = payload.get(axis)
-                if isinstance(number, bool) or not isinstance(number, (builtins.int, builtins.float)):
-                    return {
-                        "ok": False,
-                        "error": "value_required",
-                        "interaction": interaction,
-                        "id": wanted,
-                    }
-                changed, stored = _renforge_change_adjustment(getattr(widget, field, None), number)
+            axes = [(axis, field) for axis, field in (("x", "xadjustment"), ("y", "yadjustment")) if axis in payload]
+            if not axes:
+                return refuse("value_required")
+            for axis, field in axes:
+                if not real_number(payload[axis]):
+                    return refuse("value_required")
+                if not callable(getattr(getattr(widget, field, None), "change", None)):
+                    return refuse("unsupported")
+            for axis, field in axes:
+                changed, stored = _renforge_change_adjustment(getattr(widget, field, None), payload[axis])
                 if not changed:
-                    return {
-                        "ok": False,
-                        "error": "unsupported",
-                        "interaction": interaction,
-                        "id": wanted,
-                    }
+                    return refuse("unsupported")
                 result[axis] = stored
-                wrote = True
-            if not wrote:
-                return {
-                    "ok": False,
-                    "error": "value_required",
-                    "interaction": interaction,
-                    "id": wanted,
-                }
             return result
-        number = payload.get("value") if "value" in payload else None
-        if isinstance(number, bool) or not isinstance(number, (builtins.int, builtins.float)):
-            return {"ok": False, "error": "value_required", "interaction": interaction, "id": wanted}
+        number = payload.get("value")
+        if not real_number(number):
+            return refuse("value_required")
         changed, stored = _renforge_change_adjustment(getattr(widget, "adjustment", None), number)
         if not changed:
-            return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
+            return refuse("unsupported")
         result["value"] = stored
         return result
 
@@ -7180,27 +7166,22 @@ init python:
         return built
 
 
-    def _renforge_act_drop(payload, focus, wanted, interaction, control, pairs):
+    def _renforge_act_drop(payload, focus, result, pairs):
+        """Drop a drag on the drag ``drop`` names (``""`` releases it on nothing).
+
+        Runs the source's ``dragged`` callback, then the target's
+        ``dropped`` when ``dragged`` returned nothing. With no ``drop`` key a
+        drag that has a ``clicked`` action is clicked instead. ``result`` is
+        act's success reply; it gains ``drop`` (or operation ``click``) and
+        is returned. Refusals: ``missing`` (no such target), ``unsupported``
+        (target not droppable or refusing, or no callback to run)."""
         widget = getattr(focus, "widget", None)
-        result = {
-            "ok": True,
-            "operation": "drop",
-            "id": wanted,
-            "interaction": interaction,
-            "screen": control.get("screen"),
-            "action": control.get("action"),
-            "via": "action",
-        }
+        wanted, interaction = result["id"], result["interaction"]
         if "drop" not in payload:
             clicked = getattr(widget, "clicked", None)
             if clicked is not None:
                 if not _renforge_invoke_focus_action(focus):
-                    return {
-                        "ok": False,
-                        "error": "unsupported",
-                        "interaction": interaction,
-                        "id": wanted,
-                    }
+                    return _renforge_act_refusal("unsupported", interaction, wanted)
                 result["operation"] = "click"
                 return result
             payload = dict(payload)
@@ -7208,44 +7189,35 @@ init python:
         drop_name = payload.get("drop")
         target = None
         if isinstance(drop_name, builtins.str) and drop_name:
-            matched = False
-            for other_focus, other in pairs:
-                if other.get("id") != drop_name:
-                    continue
-                target = getattr(other_focus, "widget", None)
-                if other.get("role") != "drag" or not other.get("droppable") or not other.get("enabled", True) or other.get("covered"):
-                    return {"ok": False, "error": "unsupported", "interaction": interaction, "id": drop_name}
-                drop_allowable = getattr(target, "drop_allowable", None)
-                if callable(drop_allowable) and not drop_allowable(target, _renforge_drag_joined(widget)):
-                    return {"ok": False, "error": "unsupported", "interaction": interaction, "id": drop_name}
-                result["drop"] = drop_name
-                matched = True
-                break
-            if not matched:
-                return {"ok": False, "error": "missing", "interaction": interaction, "id": drop_name}
+            match = next(((other_focus, other) for other_focus, other in pairs if other.get("id") == drop_name), None)
+            if match is None:
+                return _renforge_act_refusal("missing", interaction, drop_name)
+            other_focus, other = match
+            target = getattr(other_focus, "widget", None)
+            if other.get("role") != "drag" or not other.get("droppable") or not other.get("enabled", True) or other.get("covered"):
+                return _renforge_act_refusal("unsupported", interaction, drop_name)
+            drop_allowable = getattr(target, "drop_allowable", None)
+            if callable(drop_allowable) and not drop_allowable(target, _renforge_drag_joined(widget)):
+                return _renforge_act_refusal("unsupported", interaction, drop_name)
+            result["drop"] = drop_name
         else:
             result["drop"] = None
         dragged = getattr(widget, "dragged", None)
         dropped = getattr(target, "dropped", None) if target is not None else None
         if dragged is None and dropped is None:
-            return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
+            return _renforge_act_refusal("unsupported", interaction, wanted)
         joined = _renforge_drag_joined(widget)
         rv = None
         if dragged is not None:
             called, rv = _renforge_call_action(dragged, (joined, target))
             if not called:
-                return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
+                return _renforge_act_refusal("unsupported", interaction, wanted)
         if rv is None and target is not None:
             dropped = getattr(target, "dropped", None)
             if dropped is not None:
                 called, rv = _renforge_call_action(dropped, (target, joined))
                 if not called:
-                    return {
-                        "ok": False,
-                        "error": "unsupported",
-                        "interaction": interaction,
-                        "id": wanted,
-                    }
+                    return _renforge_act_refusal("unsupported", interaction, wanted)
         _renforge_end_action_result(rv)
         return result
 
@@ -7311,7 +7283,69 @@ init python:
             return payload, "unsupported_input"
         return payload, None
 
+    def _renforge_act_key(payload, interaction, bridge):
+        """Press, hold (``hold: true``) or release (``hold: false``) the physical key ``key``.
+
+        Replies with the key's folded name, ``hold`` and the posted
+        ``events``; refuses an unknown key (listing the accepted ones) and a
+        ``hold`` that is not a boolean (``unsupported``)."""
+        key_value = payload.get("key")
+        if not isinstance(key_value, builtins.str) or not key_value.strip():
+            return {
+                "ok": False,
+                "error": "unknown key %r; accepted keys: %s" % (key_value, _RENFORGE_ACT_KEY_LIST),
+                "interaction": interaction,
+            }
+        folded = key_value.strip().casefold()
+        attr_name = _RENFORGE_ACT_KEY_ATTRS.get(folded)
+        keycode = (
+            getattr(pygame, attr_name, None)
+            if pygame is not None and attr_name is not None
+            else None
+        )
+        if attr_name is None or isinstance(keycode, bool) or not isinstance(keycode, builtins.int):
+            if attr_name is not None and pygame is None:
+                return {"ok": False, "error": "pygame_sdl2 event API is unavailable"}
+            return {
+                "ok": False,
+                "error": "unknown key %r; accepted keys: %s" % (folded, _RENFORGE_ACT_KEY_LIST),
+                "interaction": interaction,
+            }
+        if "hold" in payload:
+            hold = payload.get("hold")
+            if not isinstance(hold, bool):
+                return _renforge_act_refusal("unsupported", interaction)
+        else:
+            hold = None
+        event_names = _renforge_post_key(keycode, hold, folded if folded in _RENFORGE_ACT_KEY_LETTERS else "")
+        if bridge is not None:
+            if hold is True:
+                bridge.held_keys.add(folded)
+            else:
+                bridge.held_keys.discard(folded)
+        return {
+            "ok": True,
+            "operation": "key",
+            "key": folded,
+            "interaction": interaction,
+            "hold": hold,
+            "events": event_names,
+        }
+
     def _renforge_h_act(payload):
+        """Operate one control from a recent observe, or press a key.
+
+        Payload: ``interaction``, ``session_id`` and ``observation_id`` from
+        the observation, then either ``key`` (with optional ``hold``) or a
+        control ``id`` with what it takes: ``text`` (and ``submit``),
+        ``value``, ``x``/``y``, ``drop``, or the play tool's single ``input``.
+        The control's operations decide: value, drop, click (its action, or
+        a pointer click), or text. Replies ``{"ok": True, "operation", "id",
+        "interaction", ...}``; refusals carry ``error`` (``stale``,
+        ``missing``, ``unsupported``, ``value_required``, ``text_required``,
+        ``unsupported_input`` and the interaction contract's guards). When
+        the action steers the script (a Jump), the success reply rides on
+        the exception as ``renforge_result``."""
         payload = payload or {}
         contract = _renforge_runtime.interaction
         raw, pairs = _renforge_observe_raw(False, with_pairs=True, include_readout=False)
@@ -7330,62 +7364,21 @@ init python:
         # Session ownership still applies; unrelated key-up requests are guarded.
         if releasing:
             if payload.get("session_id") is not None and payload["session_id"] != raw["session_id"]:
-                return {"ok": False, "error": "stale", "interaction": interaction}
+                return _renforge_act_refusal("stale", interaction)
         else:
             refusal = contract.guard_identity(
                 raw, payload.get("interaction"), session_id=payload.get("session_id"),
                 observation_id=payload.get("observation_id"))
             if refusal:
                 return {"ok": False, "error": refusal, "interaction": interaction, "observation": raw}
-        key_value = payload.get("key") if "key" in payload else None
-        if key_value is not None:
-            if not isinstance(key_value, builtins.str) or not key_value.strip():
-                return {
-                    "ok": False,
-                    "error": "unknown key %r; accepted keys: %s" % (key_value, _RENFORGE_ACT_KEY_LIST),
-                    "interaction": interaction,
-                }
-            folded = key_value.strip().casefold()
-            attr_name = _RENFORGE_ACT_KEY_ATTRS.get(folded)
-            keycode = (
-                getattr(pygame, attr_name, None)
-                if pygame is not None and attr_name is not None
-                else None
-            )
-            if attr_name is None or isinstance(keycode, bool) or not isinstance(keycode, builtins.int):
-                if attr_name is not None and pygame is None:
-                    return {"ok": False, "error": "pygame_sdl2 event API is unavailable"}
-                return {
-                    "ok": False,
-                    "error": "unknown key %r; accepted keys: %s" % (folded, _RENFORGE_ACT_KEY_LIST),
-                    "interaction": interaction,
-                }
-            if "hold" in payload:
-                hold = payload.get("hold")
-                if not isinstance(hold, bool):
-                    return {"ok": False, "error": "unsupported", "interaction": interaction}
-            else:
-                hold = None
-            event_names = _renforge_post_key(keycode, hold, folded if folded in _RENFORGE_ACT_KEY_LETTERS else "")
-            if bridge is not None:
-                if hold is True:
-                    bridge.held_keys.add(folded)
-                else:
-                    bridge.held_keys.discard(folded)
-            return {
-                "ok": True,
-                "operation": "key",
-                "key": folded,
-                "interaction": interaction,
-                "hold": hold,
-                "events": event_names,
-            }
+        if payload.get("key") is not None:
+            return _renforge_act_key(payload, interaction, bridge)
         wanted = payload.get("id")
         if not isinstance(wanted, builtins.str) or not wanted:
-            return {"ok": False, "error": "missing", "interaction": interaction}
+            return _renforge_act_refusal("missing", interaction)
         match = next(((focus, control) for focus, control in pairs if control.get("id") == wanted), None)
         if match is None:
-            return {"ok": False, "error": "missing", "interaction": interaction, "id": wanted}
+            return _renforge_act_refusal("missing", interaction, wanted)
         focus, control = match
         snapshot = contract.classify(raw)
         refusal = contract.guard_act(
@@ -7396,38 +7389,25 @@ init python:
         if refusal:
             return {"ok": False, "error": refusal, "interaction": interaction, "id": wanted, "observation": raw}
         operations = control.get("operations") or []
-        if "value" in operations:
+        if "value" in operations or "drop" in operations:
+            result = {
+                "ok": True,
+                "operation": "value" if "value" in operations else "drop",
+                "id": wanted,
+                "interaction": interaction,
+                "screen": control.get("screen"),
+                "via": "action",
+            }
+            if result["operation"] == "value":
+                run = lambda: _renforge_act_value(payload, focus, result, control)
+            else:
+                result["action"] = control.get("action")
+                run = lambda: _renforge_act_drop(payload, focus, result, pairs)
             try:
-                return _renforge_with_focus_screen(focus, lambda: _renforge_act_value(payload, focus, wanted, interaction, control))
+                return _renforge_with_focus_screen(focus, run)
             except Exception as exc:
-                if not _renforge_is_script_control_flow(exc):
-                    raise
-                result = {
-                    "ok": True,
-                    "operation": "value",
-                    "id": wanted,
-                    "interaction": interaction,
-                    "screen": control.get("screen"),
-                    "via": "action",
-                }
-                setattr(exc, "renforge_result", result)
-                raise
-        if "drop" in operations:
-            try:
-                return _renforge_with_focus_screen(focus, lambda: _renforge_act_drop(payload, focus, wanted, interaction, control, pairs))
-            except Exception as exc:
-                if not _renforge_is_script_control_flow(exc):
-                    raise
-                result = {
-                    "ok": True,
-                    "operation": "drop",
-                    "id": wanted,
-                    "interaction": interaction,
-                    "screen": control.get("screen"),
-                    "action": control.get("action"),
-                    "via": "action",
-                }
-                setattr(exc, "renforge_result", result)
+                if _renforge_is_script_control_flow(exc):
+                    setattr(exc, "renforge_result", result)
                 raise
         if "click" in operations:
             result = {
@@ -7465,7 +7445,7 @@ init python:
         if "text" in operations:
             text = payload.get("text")
             if not isinstance(text, str):
-                return {"ok": False, "error": "text_required", "interaction": interaction, "id": wanted}
+                return _renforge_act_refusal("text_required", interaction, wanted)
             if pygame is None:
                 return {"ok": False, "error": "pygame_sdl2 event API is unavailable"}
             widget = getattr(focus, "widget", None)
@@ -7485,7 +7465,7 @@ init python:
             result = _renforge_type_input(widget, text, payload.get("submit", True))
             result.update({"operation": "text", "id": wanted, "interaction": interaction})
             return result
-        return {"ok": False, "error": "unsupported", "interaction": interaction, "id": wanted}
+        return _renforge_act_refusal("unsupported", interaction, wanted)
 
     _RENFORGE_HANDLERS = {
         "ping": _renforge_h_ping,

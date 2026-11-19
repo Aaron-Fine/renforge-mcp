@@ -9,8 +9,9 @@ from __future__ import annotations
 import time
 import types
 
+import pytest
 from test_bridge_explain import _node, _screen, _script_node, _set_screens, _set_script
-from test_bridge_runtime import _native_skip_setup
+from test_bridge_runtime import _arm_stable_interaction, _FakeFocus, _native_skip_setup
 from test_bridge_runtime import running_bridge  # noqa: F401 - shared bridge fixture
 
 
@@ -234,3 +235,65 @@ def test_a_progression_does_not_report_its_own_skipping_as_skip_events(running_b
     renpy.config.skipping = "fast"
     time.sleep(0.1)
     assert _skip_events(running_bridge) == [("skip.started", None)]
+
+
+# --- act keeps its reply when an action steers the script ---------------------
+
+
+class _JumpOut(Exception):
+    pass
+
+
+def _act_board(running_bridge):
+    """A bar and a drag on one screen; each one's callback jumps out."""
+    renpy = running_bridge.renpy
+
+    class Adjustment:
+        value, range, step, page = 2, 10, 1, 10
+
+        def change(self, value):
+            raise _JumpOut()
+
+    class Bar:
+        def __init__(self):
+            self.adjustment = Adjustment()
+            self.mcp_id = "volume"
+
+    class Drag:
+        drag_name, draggable, droppable = "token", True, True
+        clicked, dropped = None, None
+        x, y, w, h = 0, 0, 40, 40
+        child = types.SimpleNamespace(filename="images/token.png")
+
+        def dragged(self, joined, drop):
+            raise _JumpOut()
+
+    class ScreenDisplayable:
+        screen_name, layer, modal, hiding = ("board", None), "screens", False, False
+
+    token = Drag()
+    screen = ScreenDisplayable()
+    screen.widgets, screen.children, screen.child = {}, [token], token
+    _arm_stable_interaction(running_bridge, generation=8)
+    renpy.game.context = lambda: types.SimpleNamespace(interacting=True, scene_lists=types.SimpleNamespace(
+        layers={"screens": [types.SimpleNamespace(displayable=screen)]}))
+    renpy.game.JumpOutException = _JumpOut
+    focus = _FakeFocus("", 200, 200, 80, 16, widget=Bar())
+    focus.screen_name = "board"
+    renpy.display.focus.focus_list[:] = [focus]
+    renpy.display.behavior.run = lambda action, *args: action(*args)
+
+
+@pytest.mark.parametrize("request_, expected", [
+    ({"id": "board/volume", "value": 4}, {"operation": "value", "id": "board/volume", "screen": "board"}),
+    ({"id": "board/token", "drop": ""}, {"operation": "drop", "id": "board/token", "screen": "board"}),
+])
+def test_act_value_and_drop_keep_their_reply_when_the_action_jumps(running_bridge, request_, expected):
+    _act_board(running_bridge)
+    with pytest.raises(_JumpOut) as raised:
+        running_bridge.globs["_renforge_h_act"](dict(request_, interaction=8))
+
+    result = getattr(raised.value, "renforge_result", None)
+    assert result is not None and result["ok"] is True and result["via"] == "action"
+    assert {key: result[key] for key in expected} == expected
+    assert result["interaction"] == 8
