@@ -6,9 +6,11 @@ so the bridge's class-name dispatch sees the names the engine produces.
 
 from __future__ import annotations
 
+import time
 import types
 
 from test_bridge_explain import _node, _screen, _script_node, _set_screens, _set_script
+from test_bridge_runtime import _native_skip_setup
 from test_bridge_runtime import running_bridge  # noqa: F401 - shared bridge fixture
 
 
@@ -208,3 +210,27 @@ def test_search_snippet_keeps_the_match_when_case_folding_changes_length(running
     [match] = running_bridge.client.explain(search="target")["matches"]
 
     assert "TARGET" in match["text"]
+
+
+# --- progression owns its skipping -------------------------------------------
+
+
+def _skip_events(running_bridge):
+    return [(event["type"], event.get("reason")) for event in running_bridge.client.poll_events()["events"]
+            if event["type"].startswith("skip.")]
+
+
+def test_a_progression_does_not_report_its_own_skipping_as_skip_events(running_bridge, monkeypatch):
+    bridge, renpy, _raw = _native_skip_setup(running_bridge, monkeypatch)
+    assert renpy.config.skipping == "slow"
+    time.sleep(0.1)  # the bridge's drains run with the progression's skip on
+
+    stopped = running_bridge.client.progression("stop", "owner", reason="cancelled")
+    time.sleep(0.1)
+
+    assert stopped["progression"]["stop"] == "cancelled" and renpy.config.skipping is None
+    assert _skip_events(running_bridge) == []
+    # Skipping the player turns on afterwards is reported again.
+    renpy.config.skipping = "fast"
+    time.sleep(0.1)
+    assert _skip_events(running_bridge) == [("skip.started", None)]

@@ -6779,6 +6779,9 @@ init python:
         # Owned skip never leaks beyond the operation. Native fast mode can
         # bypass interaction checks, so only native slow skip is used here.
         renpy.config.skipping = None
+        # The operation's skipping was its own, not the player's: the skip
+        # watcher reports no skip.stopped for it.
+        bridge.prev_skipping = None
         if operation.get("skip_delay") is not None:
             renpy.config.skip_delay = operation["skip_delay"]
         prefs = operation["preferences"]
@@ -7557,7 +7560,12 @@ init python:
         except Exception:
             skipping = None
         prev_skip = bridge.prev_skipping
-        if prev_skip and not skipping:
+        progression = getattr(bridge, "progression", None)
+        if progression is not None and progression.get("active"):
+            # A progression turns skipping on and off itself, line by line;
+            # that is not the player skipping.
+            pass
+        elif prev_skip and not skipping:
             screen = None
             try:
                 if renpy.get_screen("choice") is not None:
