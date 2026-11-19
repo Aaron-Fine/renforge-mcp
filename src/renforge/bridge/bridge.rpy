@@ -790,6 +790,7 @@ init python:
         )
 
     def _renforge_input_char_allowed(widget, character):
+        """Whether the Input's ``allow`` and ``exclude`` (strings or regexes) let ``character`` in."""
         allow = getattr(widget, "allow", None)
         exclude = getattr(widget, "exclude", None)
         if allow:
@@ -871,6 +872,10 @@ init python:
         return filtered
 
     def _renforge_post_key(keycode, hold=None, text=""):
+        """Post a physical key: down and up, or only down (``hold`` True) or up (False).
+
+        Returns the phases posted, as "keydown"/"keyup".
+        """
         # A keyboard's key-down carries the character it types, and Ren'Py
         # matches a bare `key "d"` binding on that character.
         phases = (pygame.KEYDOWN, pygame.KEYUP) if hold is None else ((pygame.KEYDOWN,) if hold else (pygame.KEYUP,))
@@ -1859,6 +1864,7 @@ init python:
 
 
     def _renforge_point_candidates(bounds):
+        """The probe points inside ``bounds``, in ``_RENFORGE_PROBE_POINTS`` order."""
         if not bounds or bounds.get("width", 0) <= 0 or bounds.get("height", 0) <= 0:
             return []
         x, y, w, h = (bounds[key] for key in ("x", "y", "width", "height"))
@@ -1866,12 +1872,14 @@ init python:
 
 
     def _renforge_engine_focus_ids():
+        """``id()`` of every widget in Ren'Py's own focus list."""
         focus_module = getattr(renpy.display, "focus", None)
         return {id(getattr(focus, "widget", None))
                 for focus in getattr(focus_module, "focus_list", ()) or ()}
 
 
     def _renforge_has_focus_mask(widget):
+        """Whether the widget's style sets a focus mask (only its opaque part is clickable)."""
         try:
             mask = getattr(getattr(widget, "style", None), "focus_mask", None)
         except Exception:
@@ -2017,7 +2025,7 @@ init python:
         return None
 
     def _renforge_focus_action_name(focus, widget):
-        """Action class name, as upstream's UI-element ids use it."""
+        """Action class name, as UI-element ids (``screen.Action``) use it."""
         for owner in (widget, focus):
             if owner is None:
                 continue
@@ -2036,13 +2044,14 @@ init python:
                     continue
         return None
 
-    def _renforge_legacy_element_ids(pairs):
-        """Give UI-element tools upstream's ids, distinct from observe's.
+    def _renforge_ui_element_ids(pairs):
+        """Give each control its UI-element id, keeping observe's id in ``control_id``.
 
-        list_ui_elements, click_element, hover_element, scene_tree, and hit
-        tests are upstream tools: an explicit id, else the screen's widget
-        name, else screen.Action, else screen.text, else screen:role:text.
-        observe/act keep their own screen/... ids.
+        list_ui_elements, click_element, hover_element, scene_tree, and
+        hit_test name a control by an explicit id, else the screen's widget
+        name, else screen.Action, else screen.text, else screen:role:text,
+        with "#2", "#3" on repeats. observe and act use the screen/... id
+        kept in ``control_id``.
         """
         used = {}
         for ordinal, (focus, record) in enumerate(pairs):
@@ -2069,8 +2078,14 @@ init python:
         return pairs
 
     def _renforge_focusable_elements(max_items=None, max_text_chars=None, inventory=None):
+        """``(focus, element)`` pairs for every current control, with UI-element ids.
+
+        ``max_items`` keeps the first ones; ``max_text_chars`` truncates text
+        fields (the raw type and screen stay in ``_raw_type`` and
+        ``_raw_screen``). ``inventory`` reuses a scene inventory already built.
+        """
         pairs, _truncated = _renforge_observe_focus_pairs(inventory)
-        _renforge_legacy_element_ids(pairs)
+        _renforge_ui_element_ids(pairs)
         if max_items is not None:
             pairs = pairs[:max_items]
         if max_text_chars is not None:
@@ -2347,6 +2362,13 @@ init python:
                 _renforge_reset_testmouse_state()
 
     def _renforge_pointer_tick(cancel=False):
+        """Advance a pending pointer click by one main-thread tick.
+
+        A click is hovered first, then pressed once its due time comes, and
+        the waiting request is answered when it finishes, times out, the
+        interaction changes, or ``cancel`` is set. Returns True while a click
+        is still pending.
+        """
         bridge = _renforge_runtime.bridge
         pending = getattr(bridge, "pointer_click", None)
         if pending is None:
@@ -2553,7 +2575,7 @@ init python:
         for focus, element in elements:
             if wanted_screen and str(element.get("screen") or "").casefold() != wanted_screen:
                 continue
-            # Upstream element ids, widget names, and observe's control ids all resolve.
+            # UI-element ids, widget names, and observe's control ids all resolve.
             if (wanted_id is not None and str(element.get("id")) != wanted_id
                     and element.get("widget_id") != wanted_id
                     and element.get("control_id") != wanted_id):
