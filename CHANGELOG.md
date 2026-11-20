@@ -26,10 +26,12 @@ versioning.
   first. The policy reads the path the launch uses, stripped and expanded.
 - A launch reuses a running game only when it matches the request. On top
   of 0.7.6's per-component check, it is refused with
-  `SESSION_ISOLATION_MISMATCH` when a launch that needs no authorization
-  would get a game keeping its saves or HOME outside RenForge's own folders
-  (the player's saves or HOME, or a folder an earlier launch was authorized
-  for), and `SESSION_EVAL_MISMATCH` when a play-only server would get a
+  `SESSION_ISOLATION_MISMATCH` when the launch keeps its saves or HOME in
+  RenForge's own folders and the game keeps that one elsewhere (the
+  player's saves or HOME, or a folder an earlier launch was authorized
+  for). Saves and HOME are judged apart, so `savedir=temporary` with
+  `home=existing` is never handed a game whose saves are elsewhere. It is
+  refused with `SESSION_EVAL_MISMATCH` when a play-only server would get a
   bridge that runs code. The policy gate and this check share one rule. A
   launch that arrives while another starts is refused the same way instead
   of being told to poll it, and `renforge_launch_status` reports `isolated`
@@ -58,8 +60,8 @@ versioning.
   `SESSION_NOT_ISOLATED` before a slot is written, loaded, or listed, so
   these actions keep their promise of never touching the player's saves.
   `renforge_session(action="launch")` is refused the same way, before
-  anything starts, when its saves folder in the state folder resolves
-  anywhere else (a link planted there).
+  anything starts, when its saves folder in the state folder, or any folder
+  on the way to it, is a link, even one to another folder there.
 - `renforge_validate` (0.7.5) is in the `project` toolset.
 - Write receipts (0.7.4) for files in the state folder (captures, scene
   snapshots, the activity log's `files_touched_file` sidecar) are absolute
@@ -68,10 +70,10 @@ versioning.
   receipt and passes on the import's own failure codes; a missing slot is
   `NO_MATCHING_SAVE_SLOTS`. It copies the slot to where the running game
   keeps its saves; a running game whose saves are in a folder this server
-  did not create is refused with `SESSION_SAVES_ELSEWHERE`. A running game
-  whose bridge does not answer (busy, or still starting) gets a retryable
-  error and nothing is copied, instead of the slot landing in a folder the
-  game does not read.
+  did not create is refused with `SESSION_SAVES_ELSEWHERE`. A game this
+  server did not start whose bridge does not answer (busy, or still
+  starting) gets a retryable error and nothing is copied, instead of the
+  slot landing in a folder the game does not read.
 - `renforge_autopilot` always launches isolated; `RENFORGE_ISOLATION=existing`
   gave it the player's saves, and it takes no `authorize`.
 - Tools that need a running game say so when none is: `code="NO_RUNNING_GAME"`
@@ -98,11 +100,12 @@ versioning.
   Opening or launching a project no longer creates `<project>/.renforge`.
   On a case-insensitive volume every spelling of a project path shares one
   state folder, one bridge lock, one dashboard and one owned session, so a
-  game launched through one spelling is this server's own through another. A Live Editor save, undo or rollback of
-  a game on another filesystem than the state folder (a second drive)
-  stages its exchange files in `<project>/.renforge/editor-exchange/`
-  instead, because the atomic exchange cannot cross filesystems, and removes
-  them when it is done; a conflict keeps them as evidence.
+  game launched through one spelling is this server's own through another.
+  A Live Editor save, undo or rollback of a game on another filesystem than
+  the state folder (a second drive) stages its exchange files in
+  `<project>/.renforge/editor-exchange/` instead, because the atomic
+  exchange cannot cross filesystems, and removes them when it is done; a
+  conflict keeps them as evidence.
   `RenpyProject.cache_dir` is gone; `renforge.state.project_state_dir`
   names the folder.
 - Launches in a Wayland session use `SDL_VIDEODRIVER=wayland,x11` so games
@@ -146,10 +149,11 @@ versioning.
   is passed alone (with another selector it is refused) and reads at most
   100 names, saying `truncated` when given more. A dotted path never steps
   into a module or a private (`_`) field after its first name, so
-  `renpy.os.environ` (the game's environment) cannot be read. `explain(source=...)` on a menu, `if`, or
-  `while` lists what each branch does, and label and screen entries name
-  their file only when it differs from the result's own. Search lists a
-  screen's matches in source order with whole snippets.
+  `renpy.os.environ` (the game's environment) cannot be read.
+  `explain(source=...)` on a menu, `if`, or `while` lists what each branch
+  does, and label and screen entries name their file only when it differs
+  from the result's own. Search lists a screen's matches in source order
+  with whole snippets.
 - Acting with an observation that is slightly out of date is accepted when
   only unrelated parts of the screen changed (a notification closing) and the
   target control is unchanged. Menu captions are read without text tags,
@@ -501,8 +505,9 @@ versioning.
   `renforge_validate` does, so it no longer writes `.rpyc` or cache files
   in the game. It lints with the game's own engine version, as
   `version="stable"` does elsewhere (the `renforge.json` pin, the shipped
-  engine, then `script_version.txt`), never an SDK found in the project. It keeps Ren'Py parse errors (`File "...", line N:`), passes
-  on `timed_out` and a bounded `raw_tail` when it fails with nothing in the
+  engine, then `script_version.txt`), never an SDK found in the project.
+  It keeps Ren'Py parse errors (`File "...", line N:`), passes on
+  `timed_out` and a bounded `raw_tail` when it fails with nothing in the
   mod, and reports an unknown mod instead of linting the whole project.
 - `renforge_mod` `write`, `remove`, and `package` return
   `files_touched`/`files_deleted`, so the activity journal records them
@@ -564,7 +569,8 @@ versioning.
   `renforge_find_references`, and the dashboard's script list, story map and
   translation strings) no longer walk into a folder under `game/` that is a
   Windows junction and read the scripts in the tree it points to; symlinked
-  folders were already skipped.
+  folders were already skipped. Stopping a session likewise lists a
+  junction in its session root without walking the tree it points to.
 
 ## [0.7.6] - 2026-11-18
 
