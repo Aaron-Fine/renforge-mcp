@@ -360,7 +360,9 @@ def _resolve_staged_path(raw_path: str, base_paths: dict[str, str]) -> str:
     pure = _staged_path_candidate(raw_path)
     project_relative = pure.as_posix()
     game_relative = "game/" + project_relative
-    if pure.parts[0] == "game":
+    # Compare the prefix the way the inventory compares names, so Game/ on a
+    # case-insensitive filesystem reads as the project's game/ folder.
+    if _path_key(pure.parts[0]) == _path_key("game"):
         if _path_key(project_relative) in base_paths:
             return base_paths[_path_key(project_relative)]
         if _path_key(game_relative) in base_paths:

@@ -2208,6 +2208,22 @@ def test_editor_gate_uses_lenient_lint_by_default(monkeypatch, tmp_path: Path) -
     assert seen == [False, True]
 
 
+def test_shadow_staged_game_prefix_follows_filesystem_case_rules(monkeypatch) -> None:
+    import renforge.editor.shadow as shadow
+
+    # Simulate a case-insensitive filesystem (Windows normcase folds case).
+    monkeypatch.setattr(shadow, "_path_key", lambda path: path.casefold())
+    base_paths = {
+        key.casefold(): key for key in ("game/gui.rpy", "game/game/gui.rpy", "game/game/only.rpy")
+    }
+
+    # Game/gui.rpy names the same file as game/gui.rpy there, not the nested one.
+    assert shadow._resolve_staged_path("Game/gui.rpy", base_paths) == "game/gui.rpy"
+    assert shadow._resolve_staged_path("game/gui.rpy", base_paths) == "game/gui.rpy"
+    # The nested reading still applies when the project-relative file is absent.
+    assert shadow._resolve_staged_path("Game/only.rpy", base_paths) == "game/game/only.rpy"
+
+
 def test_editor_shadow_stages_project_relative_key(monkeypatch, tmp_path: Path) -> None:
     import renforge.editor.coordinator as coordinator_module
     from renforge.editor.shadow import ShadowLintResult

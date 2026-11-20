@@ -659,6 +659,8 @@ versioning.
 - A linked directory under `game/` holding an orphan `.rpyc`/`.rpymc` or a
   `*_ren.py` script makes the shadow incomplete (`linked_directory_with_source`)
   instead of being skipped or replaced by an empty placeholder.
+- On Windows a `renforge_validate` `staged` key spelled `Game/...` names the
+  project's `game/` file, as `game/...` does, not a nested `game/game/` one.
 
 ## [0.7.6] - 2026-11-18
 
