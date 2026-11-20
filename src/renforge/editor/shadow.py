@@ -809,12 +809,15 @@ def _build_shadow_from_plan(plan: ShadowPlan, *, shadow_root: Path) -> tuple[int
                 )
             except OSError as exc:
                 if exc.errno == errno.EFBIG:
+                    # The file grew after planning; the copy stopped one byte
+                    # past the room left, which is all that was measured.
+                    observed = max(entry.size, plan.limits.max_bytes - byte_count + 1)
                     _raise_quota_error(
                         files=file_count + 1,
-                        byte_count=byte_count + entry.size,
+                        byte_count=byte_count + observed,
                         limits=plan.limits,
                         offending_path=entry.relative_path,
-                        offending_size=entry.size,
+                        offending_size=observed,
                         largest=plan.largest,
                         directories=len(plan.directories),
                     )

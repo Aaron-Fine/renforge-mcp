@@ -1219,6 +1219,32 @@ def test_shadow_build_never_deletes_an_existing_root(tmp_path: Path) -> None:
     assert keep.read_text(encoding="utf-8") == "not ours\n"
 
 
+def test_shadow_copy_time_quota_breach_reports_bytes_past_the_limit(
+    tmp_path: Path,
+) -> None:
+    import renforge.editor.shadow as shadow
+
+    project, source = _make_project(tmp_path)
+    (project.root / "extra.bin").write_bytes(b"x" * 8)
+    planned = source.stat().st_size
+    limits = shadow.ShadowLimits(max_files=10, max_bytes=8 + planned)
+    plan = shadow.plan_shadow_project(project, limits=limits)
+    # The source grows between planning and copying.
+    with source.open("ab") as handle:
+        handle.write(b"#grow\n")
+
+    with pytest.raises(EditorError) as excinfo:
+        shadow._build_shadow_from_plan(plan, shadow_root=tmp_path / "shadow-grown")
+
+    details = excinfo.value.details
+    assert excinfo.value.code == "SHADOW_QUOTA_EXCEEDED"
+    assert details["offending_path"] == "game/script.rpy"
+    # Only a lower bound is known: the copy stopped one byte past the room left.
+    assert details["offending_size"] == planned + 1
+    assert details["bytes"] == 8 + planned + 1
+    assert details["bytes"] > details["max_bytes"]
+
+
 def test_shadow_quota_error_reports_measurements(monkeypatch, tmp_path: Path) -> None:
     import renforge.editor.shadow as shadow
 
