@@ -2742,7 +2742,8 @@ def _editor_saved_paths(raw: dict[str, Any]) -> list[str]:
 
     Editor transaction records store ``source_relative_path`` relative to the
     ``game/`` directory (for example ``screens.rpy``). Every receipt is
-    project-relative, so add the ``game/`` base unless it is already present.
+    project-relative, so always add the ``game/`` base: ``game/hud.rpy`` is
+    the file ``game/game/hud.rpy``.
     A record that is absolute or escapes its own base is not a shape this
     contract can describe, so no receipt is emitted rather than a guessed one.
     """
@@ -2758,8 +2759,6 @@ def _editor_saved_paths(raw: dict[str, Any]) -> list[str]:
     parts = normalized.split("/")
     if not normalized or normalized.startswith("/") or ":" in parts[0] or ".." in parts:
         return []
-    if normalized.startswith("game/"):
-        return [normalized]
     return ["game/" + normalized]
 
 
