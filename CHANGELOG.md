@@ -640,6 +640,10 @@ versioning.
 - `renforge_run_scenario`'s `files_touched` names the save folder a `save`
   step wrote to, beside its captures, so a report that fails after a save
   no longer leaves the save out.
+- On Windows a read through a drive or share root that allows traversal but
+  denies listing (save listing, source reads) no longer fails at the root:
+  the read-only chain asks the root for list access only when it is the
+  folder being listed.
 
 ## [0.7.6] - 2026-11-18
 

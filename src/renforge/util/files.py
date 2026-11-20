@@ -1983,7 +1983,13 @@ def _open_directory_nofollow_windows(
     *,
     action: str = "atomic-write",
     writable: bool = False,
+    access: int | None = None,
 ) -> int:
+    """Open a directory by path without following a reparse point.
+
+    *access* replaces the default list, traverse and read-attributes rights
+    (a read-only chain asks for list access only where it lists).
+    """
     import ctypes
     from ctypes import wintypes
 
@@ -1999,12 +2005,13 @@ def _open_directory_nofollow_windows(
         ctypes.c_void_p,
     ]
     create_file.restype = wintypes.HANDLE
-    access = (
-        _WIN_FILE_LIST_DIRECTORY
-        | _WIN_FILE_TRAVERSE
-        | _WIN_FILE_READ_ATTRIBUTES
-        | _WIN_SYNCHRONIZE
-    )
+    if access is None:
+        access = (
+            _WIN_FILE_LIST_DIRECTORY
+            | _WIN_FILE_TRAVERSE
+            | _WIN_FILE_READ_ATTRIBUTES
+            | _WIN_SYNCHRONIZE
+        )
     if writable:
         access |= _WIN_FILE_ADD_FILE | _WIN_FILE_ADD_SUBDIRECTORY
     handle = create_file(
@@ -2054,9 +2061,14 @@ def _open_directory_chain_nofollow_windows(
     )
     read_access = _WIN_FILE_TRAVERSE | _WIN_FILE_READ_ATTRIBUTES | _WIN_SYNCHRONIZE
     parts = target.parts[1:]
-    handles: list[tuple[int, Path]] = [
-        (_open_directory_nofollow_windows(anchor, action=action), anchor)
-    ]
+    if writable:
+        anchor_handle = _open_directory_nofollow_windows(anchor, action=action)
+    else:
+        # A drive or share root may allow traversal but deny listing: ask
+        # for list access only when the anchor is the folder being listed.
+        anchor_access = read_access | (_WIN_FILE_LIST_DIRECTORY if listable and not parts else 0)
+        anchor_handle = _open_directory_nofollow_windows(anchor, action=action, access=anchor_access)
+    handles: list[tuple[int, Path]] = [(anchor_handle, anchor)]
 
     def reopen_last_writable() -> None:
         old_handle, current_path = handles[-1]
