@@ -1089,12 +1089,15 @@ empty files. Media placeholders count as files but not bytes. Other files are
 copied and count normally. Set `RENFORGE_SHADOW_MEDIA=copy` when a caller needs
 a faithful shadow: media bytes are then copied and count toward the byte quota.
 The result reports `placeholders`, the number of files materialized by name
-only. Override the limits with positive integers:
+only. Override the limits with positive integers in the server's environment,
+for example by exporting them in the shell that then runs `renforge serve` (or
+in the MCP client's `env` for the server):
 
 ```bash
-RENFORGE_SHADOW_MAX_FILES=25000
-RENFORGE_SHADOW_MAX_BYTES=2147483648  # 2 GiB
-RENFORGE_SHADOW_MAX_DIRS=100000
+export RENFORGE_SHADOW_MAX_FILES=25000
+export RENFORGE_SHADOW_MAX_BYTES=2147483648  # 2 GiB
+export RENFORGE_SHADOW_MAX_DIRS=100000
+renforge serve
 ```
 
 Invalid values fail closed with `SHADOW_QUOTA_INVALID` rather than silently
