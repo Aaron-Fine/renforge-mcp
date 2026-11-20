@@ -616,6 +616,10 @@ versioning.
   `home` omitted gets a temporary HOME and needs no `authorize`. The
   `savedir` parameter, the launch policy and `authorize` texts, and the
   server instructions said otherwise.
+- A dashboard stays discoverable after its project folder is renamed only
+  in case on a case-insensitive volume: a client started after the rename
+  accepts the record's earlier spelling of the same folder. Relative paths
+  and paths that lead to another folder are still refused.
 
 ## [0.7.6] - 2026-11-18
 
