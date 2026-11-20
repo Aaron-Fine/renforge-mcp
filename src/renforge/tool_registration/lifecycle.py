@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -223,7 +224,13 @@ def build_wrappers(context):
         return delegated if delegated is not None else live.launch_status(project_path)
 
 
-    def _start_launch(project_path: str, **kwargs: Any) -> dict:
+    def _start_launch(project_path: str, *, require_isolated: bool = False, **kwargs: Any) -> dict:
+        """Start (or join) a launch in the background; ``kwargs`` go to the launch.
+
+        ``require_isolated`` refuses, before anything starts, a launch whose
+        saves or HOME would resolve outside RenForge's own folders: a launch
+        the policy let through on the promise that it is isolated.
+        """
         requested_editor = bool(kwargs.get("editor", True))
         kwargs["editor"] = requested_editor
 
@@ -237,6 +244,12 @@ def build_wrappers(context):
         requirements = live.launch_requirements(
             project_path,
             **{field: kwargs.get(field) for field in ("warp", "savedir", "home", "persistent", "preferences")})
+        if require_isolated and not requirements["isolated"]:
+            message = ("This launch would keep its saves or HOME outside RenForge's own folders (for example, "
+                       "the state folder's saves folder is a link to another folder), so it would not be "
+                       "isolated. Remove the link and launch again.")
+            return {"ok": False, "ready": False, "code": "SESSION_NOT_ISOLATED",
+                    "phase": "validating_session_mode", "message": message, "error": message}
         return live.start_launch(
             project_path,
             _launch,
@@ -486,13 +499,31 @@ def build_wrappers(context):
             if label is not None and not (isinstance(label, str) and label.strip()):
                 return {"ok": False, "error": "label must be a label name"}
             if action == "launch":
+                # One spelling from here on: ``~/project`` must take the same
+                # no-follow create below as the absolute path it names.
+                launch_path = os.path.expanduser(project_path)
                 # Saves stay apart from the player's own but survive relaunches.
-                saves = live.session_saves_dir(project_path)
+                saves = live.session_saves_dir(launch_path)
+                if Path(launch_path).is_dir():
+                    from ..state import ensure_project_state_dir
+                    from ..util.files import PrivatePathError
+
+                    # Made without following links, as import makes it: a link
+                    # anywhere on the way (even to another folder in the state
+                    # tree) must not choose where this launch saves.
+                    try:
+                        ensure_project_state_dir(launch_path, saves.name)
+                    except PrivatePathError as exc:
+                        message = (f"The session's saves folder in the RenForge state folder is a link or not a "
+                                   f"folder ({exc}), so the launch would not be isolated. Remove it and launch "
+                                   f"again.")
+                        return {"ok": False, "ready": False, "code": "SESSION_NOT_ISOLATED",
+                                "phase": "validating_session_mode", "message": message, "error": message}
                 # HOME is always the session's own, even when the server's
                 # RENFORGE_ISOLATION=existing would default it to the player's:
                 # the policy classifies this launch as isolated.
-                result = _start_launch(project_path, editor=False, savedir=str(saves), home="temporary",
-                                       start_label=label.strip() if label else None)
+                result = _start_launch(launch_path, editor=False, savedir=str(saves), home="temporary",
+                                       start_label=label.strip() if label else None, require_isolated=True)
                 # Only a game this call starts goes to the label: a reused one
                 # stays where it is, and a refused launch starts nothing.
                 if label and isinstance(result, dict) and result.get("ok") and not result.get("already_running"):
@@ -547,13 +578,22 @@ def build_wrappers(context):
             """Copy one of the player's slots into the saves a load will read; the player's file is only read.
 
             That is the running game's save folder when it reports one, else
-            the session's saves folder, which the next launch uses.
+            the session's saves folder, which the next launch uses. A game
+            that does not answer (busy, still starting) gets a retryable
+            error and nothing is copied.
             """
+            from ..bridge.client import BridgeError
             from ..save_isolation import import_host_slots
             from ..state import ensure_project_state_dir
 
             saves = live.session_saves_dir(project_path)
-            running = live.running_game_savedir(project_path)
+            try:
+                running = live.running_game_savedir(project_path)
+            except BridgeError as exc:
+                # Busy or still starting: where it saves is unknown, so nothing
+                # is copied anywhere a load might not read; the call may be retried.
+                return {"ok": False, "files_touched": [],
+                        "error": f"the running game did not say where it keeps its saves ({exc}); retry"}
             elsewhere = running is not None and not _same_folder(Path(running), saves)
             if elsewhere and not live.owns_session(project_path):
                 return _saves_elsewhere(running)

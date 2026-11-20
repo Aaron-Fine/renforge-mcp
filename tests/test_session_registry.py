@@ -87,3 +87,31 @@ def test_dashboard_project_switch_updates_the_shared_context(tmp_path: Path, mon
         )
         assert response.status_code == 200
         assert active_dashboard()["project"] == str(second.resolve())
+
+
+def test_dashboard_matches_every_spelling_of_its_project_on_a_case_insensitive_volume(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The dashboard's project and a request's spelling of it share a state folder, so they match."""
+    monkeypatch.setenv("RENFORGE_RUNTIME_DIR", str(tmp_path / "runtime"))
+    from renforge import dashboard_client, state
+    from renforge.session_registry import dashboard_connection, publish_dashboard
+
+    project = tmp_path / "Game"
+    (project / "game").mkdir(parents=True)
+    other_spelling = tmp_path / "game"
+    monkeypatch.setattr(state, "_same_file", lambda a, b: str(a).casefold() == str(b).casefold())
+    publish_dashboard(project, url="http://127.0.0.1:8765/", token="secret_token_22chars__")
+
+    connection = dashboard_connection(other_spelling)
+    assert connection is not None and connection["project"] == str(project.resolve())
+
+    # The request goes to that dashboard (here it cannot be reached), not to a local launch.
+    from urllib.error import URLError
+
+    def unreachable(request, timeout):
+        raise URLError("unreachable")
+
+    monkeypatch.setattr(dashboard_client, "urlopen", unreachable)
+    result = dashboard_client._request(str(other_spelling), "status", operation="status", method="GET")
+    assert result is not None and result["code"] == "DASHBOARD_REQUEST_FAILED"

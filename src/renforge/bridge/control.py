@@ -17,6 +17,7 @@ from renforge.util.files import (
     ensure_private_directory,
     read_regular_file_nofollow,
 )
+from renforge.session_registry import canonical_project_path
 from renforge.state import control_dir
 
 _BRIDGE_INFO_NAME: Final[str] = "bridge.json"
@@ -160,7 +161,9 @@ def _control_directory_error(exc: PrivatePathError) -> LaunchError:
 
 def _canonical_project_root(project_root: Path) -> Path:
     try:
-        canonical = Path(project_root).expanduser().resolve(strict=True)
+        # Spelled as the disk lists it, like the state folder that holds the
+        # metadata, so every spelling of one folder reads the same bridge.
+        canonical = Path(canonical_project_path(project_root)).resolve(strict=True)
     except OSError as exc:
         raise LaunchError(
             "BRIDGE_CONTROL_DIRECTORY_UNSAFE",

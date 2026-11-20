@@ -87,6 +87,34 @@ def test_registry_key_applies_normcase(tmp_path: Path, monkeypatch) -> None:
     assert live._key(project) == f"normalized:{project.resolve()}"
 
 
+def test_registry_key_follows_the_state_folder_on_a_case_insensitive_volume(tmp_path: Path, monkeypatch) -> None:
+    """Two spellings of one folder share a state folder and bridge lock, so they share the owned session too."""
+    from renforge import state
+
+    project = tmp_path / "Game"
+    (project / "game").mkdir(parents=True)
+    other_spelling = tmp_path / "game"
+    # A case-insensitive volume (macOS by default): both spellings are one folder.
+    monkeypatch.setattr(state, "_same_file", lambda a, b: str(a).casefold() == str(b).casefold())
+    assert project_state_dir(other_spelling) == project_state_dir(project)
+
+    session = SimpleNamespace(closed=False)
+    monkeypatch.setitem(live._SESSIONS, live._key(project), session)
+
+    assert live._key(other_spelling) == live._key(project)
+    assert live.owns_session(str(other_spelling)) is True
+
+    # The shared bridge metadata names the project as the disk spells it, so
+    # either spelling reads it instead of rejecting it as another project's.
+    from renforge.bridge.control import read_bridge_info, write_starting_bridge_info
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    write_starting_bridge_info(other_spelling, session_id="a" * 32, token="b" * 64)
+    info = read_bridge_info(project, require_ready=False)
+    assert info.project_root == str(project.resolve())
+    assert read_bridge_info(other_spelling, require_ready=False) == info
+
+
 class _QuitClient:
     def __init__(self) -> None:
         self.control_calls: list[str] = []
@@ -626,6 +654,50 @@ def test_an_isolated_launch_never_reuses_a_session_authorized_onto_a_foreign_fol
         assert live.launch_game(str(project), savedir=str(foreign))["already_running"] is True
     finally:
         live._SESSIONS.pop(key, None)
+
+
+def test_a_launch_isolating_only_its_saves_never_reuses_a_session_on_a_foreign_savedir(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """savedir=temporary with home=existing still asks for saves in RenForge's own folders.
+
+    The savedir is checked on its own, as for a fully isolated launch: the
+    HOME the request leaves to the player says nothing about where it wants
+    its saves.
+    """
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    foreign = tmp_path / "Documents" / "game-saves"
+    live._SESSIONS[key] = _OwnedRunningSession(
+        editor=True, isolation=_isolation("path", home_mode="existing", savedir=foreign))
+    try:
+        refused = live.launch_game(str(project), savedir="temporary", home="existing")
+        assert refused["code"] == "SESSION_ISOLATION_MISMATCH", refused
+        assert live.launch_game(str(project), savedir=str(foreign), home="existing")["already_running"] is True
+    finally:
+        live._SESSIONS.pop(key, None)
+
+    # The same rule for a launch still starting.
+    release = threading.Event()
+
+    def slow_launch(_root, _cancel):
+        release.wait(5)
+        return {"ok": False, "ready": False, "error": "stopped by the test"}
+
+    try:
+        live.start_launch(str(project), slow_launch, wait_timeout=0,
+                          requirements=live.launch_requirements(project, savedir=str(foreign), home="existing"))
+        refused = live.start_launch(str(project), slow_launch, wait_timeout=0,
+                                    requirements=live.launch_requirements(project, savedir="temporary",
+                                                                          home="existing"))
+        assert refused["code"] == "SESSION_ISOLATION_MISMATCH", refused
+    finally:
+        release.set()
+        task = live._LAUNCHES.get(key)
+        if task is not None:
+            task.done_event.wait(5)
+        live._LAUNCHES.pop(key, None)
 
 
 def test_a_launch_that_arrives_while_another_starts_must_match_it(tmp_path: Path, monkeypatch) -> None:

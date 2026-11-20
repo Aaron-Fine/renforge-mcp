@@ -32,7 +32,7 @@ from ..launch_env import (
     resolve_display_strategy,
 )
 from ..project import RenpyProject
-from ..save_isolation import LaunchIsolation, resolve_launch_isolation
+from ..save_isolation import LaunchIsolation, classify_savedir, resolve_launch_isolation
 from ..sdk import RenpySdk, require_supported_runtime
 from .artifacts import (
     ArtifactOwnershipError,
@@ -45,8 +45,9 @@ from .artifacts import (
 from .client import BridgeClient, BridgeConfig, BridgeProtocolError
 from .control import read_bridge_info, write_starting_bridge_info
 from ..editor import BridgeRuntimeProbe, EditorCoordinator, EditorEndpoint
-from ..util.files import PrivatePathError, ensure_private_directory
-from ..state import control_dir
+from ..util.files import PrivatePathError, ensure_nofollow_directory, ensure_private_directory, is_link
+from ..session_registry import canonical_project_path
+from ..state import control_dir, state_root
 
 _BRIDGE_RESOURCE: Path = Path(__file__).parent / "bridge.rpy"
 _EDITOR_RESOURCE: Path = Path(__file__).parent / "editor.rpy"
@@ -513,15 +514,31 @@ def _editor_environment(
 
 
 def _existing_paths(root: Path) -> list[Path]:
-    """Every existing path under ``root``, so a partial delete can be reported."""
+    """Every existing path under ``root``, so a partial delete can be reported.
+
+    A linked folder is listed but never walked: rmtree removes the link, not
+    what it points to. That includes a Windows junction, which os.walk would
+    otherwise descend into (a whole user profile, say) on every stop.
+    """
     if not root.exists():
         return []
     paths: list[Path] = []
-    for current, _directories, filenames in os.walk(root):
+    for current, directories, filenames in os.walk(root):
         base = Path(current)
         paths.append(base)
         paths.extend(base / name for name in filenames)
+        linked = [name for name in directories if _is_link_or_unreadable(base / name)]
+        paths.extend(base / name for name in linked)
+        directories[:] = [name for name in directories if name not in linked]
     return paths
+
+
+def _is_link_or_unreadable(path: Path) -> bool:
+    """A link or junction, or a path whose attributes cannot be read: not walked."""
+    try:
+        return is_link(path)
+    except PrivatePathError:
+        return True
 
 
 def _deletion_receipt(project_root: Path, path: Path) -> str:
@@ -1025,6 +1042,36 @@ def normalize_language(language: str | None) -> str | None:
     return value
 
 
+def _make_state_savedir(savedir: str | None) -> str | None:
+    """Make a savedir in RenForge's state folder without following links; return the savedir to use.
+
+    A link planted on the way (even to another folder of the state tree)
+    must not choose where the launch saves, so such a folder is made here
+    before :func:`resolve_launch_isolation` resolves it. A savedir anywhere
+    else is returned unchanged: one the caller chose may sit behind a link.
+    Ren'Py still opens its save files by path later, so this narrows, but
+    cannot close, the window in which a link swapped in redirects them.
+    """
+    if savedir is None or classify_savedir(savedir) != "path":
+        return savedir
+    target = Path(os.path.normpath(Path(savedir).expanduser().absolute()))
+    try:
+        target.relative_to(state_root())
+    except ValueError:
+        return savedir
+    try:
+        ensure_nofollow_directory(target)
+    except PrivatePathError as exc:
+        raise LaunchError(
+            "SESSION_NOT_ISOLATED",
+            f"The saves folder in the RenForge state folder is a link or not a folder ({exc.message}), "
+            "so the launch would not be isolated.",
+            phase="preparing_isolation",
+            suggested_fix="Remove the link from the RenForge state folder and launch again.",
+        ) from exc
+    return str(target)
+
+
 def _launch_after_project_lock(
     sdk: RenpySdk,
     project: RenpyProject,
@@ -1089,7 +1136,7 @@ def _launch_after_project_lock(
 
     headless = display_mode == "xvfb"
     isolation = resolve_launch_isolation(
-        savedir,
+        _make_state_savedir(savedir),
         home=home,
         persistent=persistent,
         preferences=preferences,
@@ -1182,7 +1229,8 @@ def _launch_after_project_lock(
 
         env["RENFORGE_BRIDGE_TOKEN"] = token
         env["RENFORGE_BRIDGE_SESSION_ID"] = session_id
-        env["RENFORGE_BRIDGE_PROJECT_ROOT"] = str(project.root)
+        # The bridge checks this against the metadata, which spells the root as the disk lists it.
+        env["RENFORGE_BRIDGE_PROJECT_ROOT"] = canonical_project_path(project.root)
         env["RENFORGE_BRIDGE_CONTROL_DIR"] = str(control_dir(project.root))
         env["RENFORGE_BRIDGE_PORT"] = str(port)
         # Transitions only slow an agent down and leave half-drawn frames to wait

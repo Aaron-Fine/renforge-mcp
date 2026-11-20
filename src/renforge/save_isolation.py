@@ -13,8 +13,9 @@ compile, translate) run under :func:`renpy_tool_environment`. This module
 never bind-mounts the user tree.
 
 Under ``RENFORGE_POLICY=enforce`` a launch that leaves RenForge's own folders
-needs authorization; :func:`launch_request_is_renforge_owned` is the rule the
-policy gate and session reuse share.
+needs authorization; :func:`launch_owned_components` is the rule the policy
+gate (both components, :func:`launch_request_is_renforge_owned`) and session
+reuse (component by component) share.
 
 This is application-layer isolation, not an OS sandbox: the game still runs
 as the user and can reach any path it names explicitly.
@@ -62,6 +63,7 @@ HOME_DIRNAME: str = "home"
 # Storage components a launch either isolates or leaves on the player's own.
 SAVEDIR_COMPONENT: str = "savedir"
 HOME_COMPONENT: str = "home"
+ALL_COMPONENTS: frozenset[str] = frozenset({SAVEDIR_COMPONENT, HOME_COMPONENT})
 SAVE_DIRECTORY_RE: re.Pattern[str] = re.compile(
     r"^[ \t]*define[ \t]+config\.save_directory[ \t]*=[ \t]*[\"']([^\"'\r\n]+)[\"']",
     re.MULTILINE,
@@ -560,21 +562,29 @@ def location_is_renforge_owned(path: str | Path) -> bool:
     return path_in_session_root(resolved)
 
 
-def isolation_is_renforge_owned(
+def isolation_owned_components(
     isolation: LaunchIsolation, project_path: str | Path | None = None
-) -> bool:
-    """Whether a running session keeps its saves and HOME in RenForge's own folders.
+) -> frozenset[str]:
+    """Which of a running session's ``savedir`` / ``home`` are in RenForge's own folders.
 
     The state folder and session roots count; a location there that still
     reaches the player's storage (through a link) does not.
     """
-    if isolation.savedir_mode == "existing" or isolation.home_mode == "existing":
-        return False
-    if isolation.savedir is None or isolation.home is None:
-        return False
-    if isolation.exposes_user_saves(project_path):
-        return False
-    return location_is_renforge_owned(isolation.savedir) and location_is_renforge_owned(isolation.home)
+    exposed = isolation.exposed_components(project_path)
+    owned: set[str] = set()
+    for component, mode, location in ((SAVEDIR_COMPONENT, isolation.savedir_mode, isolation.savedir),
+                                      (HOME_COMPONENT, isolation.home_mode, isolation.home)):
+        if (mode != "existing" and location is not None and component not in exposed
+                and location_is_renforge_owned(location)):
+            owned.add(component)
+    return frozenset(owned)
+
+
+def isolation_is_renforge_owned(
+    isolation: LaunchIsolation, project_path: str | Path | None = None
+) -> bool:
+    """Whether a running session keeps its saves and HOME in RenForge's own folders."""
+    return isolation_owned_components(isolation, project_path) == ALL_COMPONENTS
 
 
 def storage_is_renforge_owned(
@@ -593,6 +603,46 @@ def storage_is_renforge_owned(
     return not path_exposes_user_saves(path, project_path=project_path)
 
 
+def launch_owned_components(
+    *,
+    savedir: str | None = None,
+    home: str | None = None,
+    persistent: str | None = None,
+    preferences: str | None = None,
+    project_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> frozenset[str]:
+    """Which of ``savedir`` / ``home`` a launch keeps in RenForge's own folders.
+
+    A temporary component is in a session root; an explicit path counts only
+    under the state folder (the temp dir is shared); neither may reach the
+    player's storage anyway. Session reuse asks this per component, so a
+    request is never handed a game keeping a component elsewhere that the
+    request keeps in RenForge's folders.
+    """
+    from .state import state_root
+
+    exposed = launch_exposed_components(savedir=savedir, home=home, persistent=persistent,
+                                        preferences=preferences, project_path=project_path, environ=environ)
+    resolved = apply_launch_isolation_defaults(savedir=savedir, home=home, environ=environ)
+    savedir_mode, home_mode = _location_modes(resolved)
+    owned: set[str] = set()
+    for component, mode, value in ((SAVEDIR_COMPONENT, savedir_mode, resolved["savedir"]),
+                                   (HOME_COMPONENT, home_mode, resolved["home"])):
+        if component in exposed or mode == "existing":
+            continue
+        if mode == "path":
+            try:
+                path = Path(value).expanduser().resolve()
+                root = state_root().expanduser().resolve()
+            except (OSError, RuntimeError, ValueError, TypeError):
+                continue
+            if path == root or not path.is_relative_to(root):
+                continue
+        owned.add(component)
+    return frozenset(owned)
+
+
 def launch_request_is_renforge_owned(
     *,
     savedir: str | None = None,
@@ -606,19 +656,10 @@ def launch_request_is_renforge_owned(
 
     The policy gate and session reuse both ask this, so a request that would
     need authorize can never be satisfied by handing back a running session.
-    Explicit paths count only under the state folder: the temp dir is shared.
+    It holds when :func:`launch_owned_components` covers both components.
     """
-    from .state import state_root
-
-    if launch_exposes_user_saves(savedir=savedir, home=home, persistent=persistent,
-                                 preferences=preferences, project_path=project_path, environ=environ):
-        return False
-    try:
-        paths = launch_explicit_paths(savedir=savedir, home=home, environ=environ)
-        root = state_root().expanduser().resolve()
-    except (OSError, RuntimeError, ValueError):
-        return False
-    return all(path != root and path.is_relative_to(root) for path in paths)
+    return launch_owned_components(savedir=savedir, home=home, persistent=persistent, preferences=preferences,
+                                   project_path=project_path, environ=environ) == ALL_COMPONENTS
 
 
 def path_in_session_root(value: str | Path) -> bool:
@@ -865,6 +906,23 @@ def selector_error(*, slot: Any = None, slots: Any = None, pattern: Any = None) 
         if len(value) > SELECTOR_MAX_CHARS:
             return "slot names must be at most %d characters" % SELECTOR_MAX_CHARS
     return _slot_pattern_error(pattern)
+
+
+def slot_name_error(slot: str) -> str | None:
+    """Why *slot* cannot name a save slot in the running game's save folder, or None.
+
+    Ren'Py builds a save file's path as ``os.path.join(directory, slot +
+    suffix)``, so a slot that is a path (absolute, with a drive, with either
+    separator, or ``.``/``..``) would read or write a file outside the
+    game's save folder, the player's own saves included. Such a slot is
+    refused on every OS, whatever separators the host uses.
+    """
+    # Both separators on every OS (os.sep and os.altsep are among them), and
+    # a Windows drive such as "C:", which os.path.join honours there.
+    if (any(char in slot for char in ("/", "\\", "\x00")) or slot.strip() in {".", ".."}
+            or PureWindowsPath(slot).drive):
+        return "slot must be a save slot name such as 1-1 or quick-1, not a path"
+    return None
 
 
 def _slot_pattern_error(pattern: Any) -> str | None:

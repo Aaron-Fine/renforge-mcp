@@ -220,6 +220,43 @@ def test_launch_with_bridge_builds_run_command(monkeypatch, tmp_path: Path, warp
     session.close(timeout=0.1)
 
 
+def test_launch_tells_the_bridge_the_project_root_its_metadata_names(monkeypatch, tmp_path: Path) -> None:
+    """The bridge refuses an env project root that differs from the starting metadata's.
+
+    On a case-insensitive volume a project root can be spelled other than
+    the disk lists it (``/users/me/game`` for ``/Users/me/Game``), while
+    the metadata names the on-disk spelling. A linked alias stands in for
+    such a spelling here: a root that reaches the project but is not how
+    the disk spells it.
+    """
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    alias = tmp_path / "Project"
+    try:
+        alias.symlink_to(project_root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    # As resolve() leaves a case alias on macOS: the caller's spelling, unchanged.
+    object.__setattr__(project, "root", alias)
+    captured: dict[str, object] = {}
+
+    def fake_popen(command, env=None, stdout=None, stderr=None, start_new_session=False):
+        starting = json.loads((control_dir(project_root) / "bridge.json").read_text(encoding="utf-8"))
+        captured["metadata_root"] = starting["project_root"]
+        captured["env_root"] = env["RENFORGE_BRIDGE_PROJECT_ROOT"]
+        _write_bridge_info(project_root, env)
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
+
+    session = launch_with_bridge(sdk, project, savedir="temporary")
+    try:
+        assert captured["env_root"] == captured["metadata_root"] == str(project_root.resolve())
+    finally:
+        session.close(timeout=0.1)
+
+
 def test_launch_with_bridge_isolates_saves_via_native_savedir(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -603,6 +640,29 @@ def test_partial_savedir_cleanup_still_reports_the_paths_it_removed(
     assert "temporary_savedir" in result["failed"]
     assert result["files_deleted"] == [removed_file.resolve().as_posix()]
     assert surviving_file.exists()
+
+
+def test_cleanup_listing_never_walks_into_a_junction_in_the_session(monkeypatch, tmp_path: Path) -> None:
+    """rmtree removes a junction without following it, so the listing for a partial-delete receipt must not walk it.
+
+    Windows os.walk does not treat a junction as a link; it stands in here
+    for one, as util.files.is_link reports it.
+    """
+    from renforge.bridge import launcher as launcher_module
+
+    session_root = tmp_path / "renforge-session-x"
+    junction = session_root / "home" / "profile-link"
+    (junction / "Documents").mkdir(parents=True)
+    (junction / "Documents" / "private.txt").write_text("not the session's", encoding="utf-8")
+    (session_root / "saves").mkdir()
+    (session_root / "saves" / "1-1-LT1.save").write_text("save", encoding="utf-8")
+    monkeypatch.setattr(launcher_module, "is_link", lambda path: Path(path) == junction, raising=False)
+
+    listed = set(launcher_module._existing_paths(session_root))
+
+    assert junction in listed
+    assert session_root / "saves" / "1-1-LT1.save" in listed
+    assert not any(path.is_relative_to(junction) and path != junction for path in listed)
 
 
 def test_close_waits_for_a_writer_holding_the_session_open(tmp_path: Path) -> None:
@@ -2758,3 +2818,58 @@ def test_a_collision_whose_cleanup_fails_is_not_retried(monkeypatch, tmp_path: P
             editor_asset_files=None,
         )
     assert attempts == [1]
+
+
+def _launch_until_token_check(sdk, project, monkeypatch, savedir: str) -> LaunchError:
+    """Launch with an invalid token, so the launch stops just after it made its saves folder."""
+
+    def fail_popen(*_args, **_kwargs):
+        raise AssertionError("Popen must not be reached")
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fail_popen)
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, token="not-a-token", savedir=savedir)
+    return excinfo.value
+
+
+def test_a_savedir_in_the_state_folder_is_made_without_following_links(monkeypatch, tmp_path: Path) -> None:
+    """A link planted in the state folder must not choose where the launch saves, whichever tool asked for it."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project, sdk, project_root = _make_project(tmp_path)
+    other = tmp_path / "state" / "projects" / "another-project" / "saves"
+    other.mkdir(parents=True)
+    saves = project_state_dir(project_root) / "saves"
+    saves.parent.mkdir(parents=True)
+    try:
+        os.symlink(other, saves, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+
+    refused = _launch_until_token_check(sdk, project, monkeypatch, str(saves))
+
+    assert refused.code == "SESSION_NOT_ISOLATED", refused.message
+    assert list(other.iterdir()) == []
+
+    # The state folder's own saves folder is made as a real folder.
+    saves.unlink()
+    assert _launch_until_token_check(sdk, project, monkeypatch, str(saves)).code == "BRIDGE_TOKEN_INVALID"
+    assert saves.is_dir() and not saves.is_symlink()
+
+
+def test_a_savedir_outside_the_state_folder_may_sit_behind_a_link(monkeypatch, tmp_path: Path) -> None:
+    """Only the state folder is made no-follow: a chosen savedir elsewhere behind a symlink still works."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project, sdk, _root = _make_project(tmp_path)
+    real = tmp_path / "real"
+    real.mkdir()
+    try:
+        os.symlink(real, tmp_path / "linked", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+
+    error = _launch_until_token_check(sdk, project, monkeypatch, str(tmp_path / "linked" / "saves"))
+
+    assert error.code == "BRIDGE_TOKEN_INVALID"
+    assert (real / "saves").is_dir()
