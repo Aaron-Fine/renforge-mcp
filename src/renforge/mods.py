@@ -135,17 +135,18 @@ def _validate_relpath(path: Any) -> str:
 
 
 def _resolve_target(project_root: str | Path, name: str, rel: str) -> Path:
-    """Resolve ``rel`` under the mod dir, refusing symlinks under ``game/``."""
-    game = _game_dir(project_root)
+    """Resolve ``rel`` under the mod dir, refusing symlinks under ``game/``.
+
+    ``game``, ``game/mods`` and the mod folder are checked by
+    :func:`_refuse_linked_mod_dir`; each component of ``rel`` is checked here.
+    """
+    _refuse_linked_mod_dir(project_root, name)
     mod_dir = _mod_dir(project_root, name)
-    chain = [game, game / "mods", mod_dir]
     current = mod_dir
     for part in rel.split("/"):
         current = current / part
-        chain.append(current)
-    for component in chain:
-        if _is_link(component):
-            raise ValueError(f"refusing to use symlink under game/: {component.name}")
+        if _is_link(current):
+            raise ValueError(f"refusing to use symlink under game/: {current.name}")
     target = mod_dir / rel
     if not target.resolve().is_relative_to(mod_dir.resolve()):
         raise ValueError("resolved path escapes the mod directory")
