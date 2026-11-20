@@ -591,6 +591,10 @@ versioning.
 - The play loop's stuck-pause click is timed from the pause's first frame:
   a long transition before a short pause no longer makes that pause look
   stuck and clicked the moment it appears.
+- `renforge_session` `import` refuses a running game whose bridge cannot
+  report its save folder with `SESSION_SAVES_UNKNOWN`, before copying
+  anything. It used to treat that game as no game, copy the slot into the
+  session's saves folder, and say to load it, which that game could not.
 
 ## [0.7.6] - 2026-11-18
 

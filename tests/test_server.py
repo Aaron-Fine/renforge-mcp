@@ -536,6 +536,50 @@ def test_session_saves_never_act_on_a_game_using_the_players_saves(tmp_path, mon
     assert client.calls == ["list", "save"]
 
 
+
+def test_session_import_refuses_a_running_game_that_cannot_say_where_it_saves(tmp_path, monkeypatch) -> None:
+    """A bridge without session_info is a running game, not 'no game': a load could not read the copy."""
+    import tempfile
+
+    from renforge.bridge.client import BridgeNotRunningError
+    from renforge.save_isolation import host_renpy_root
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    player = host_renpy_root(home=home) / "a-game"
+    player.mkdir(parents=True)
+    (player / "1-1-LT1.save").write_bytes(b"PLAYER")
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    (project / "game" / "options.rpy").write_text('define config.save_directory = "a-game"\n', encoding="utf-8")
+    old = _UnansweringSessionClient("unknown_command: session_info")
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: old))
+    app = _ToolRegistry()
+    _register_tools(app)
+    session_tool = app.tools["renforge_session"]
+    state_saves = project_state_dir(project) / "saves"
+
+    refused = session_tool(str(project), "import", slot="1-1")
+    assert refused["ok"] is False and refused["code"] == "SESSION_SAVES_UNKNOWN", refused
+    assert refused["files_touched"] == []
+    assert "stop" in refused["error"]
+    assert not state_saves.exists()
+
+    # With no game running at all, the slot goes to the saves the next launch uses.
+    def no_game(cls, root, **_k):
+        raise BridgeNotRunningError("no game is running", code="NO_RUNNING_GAME")
+
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(no_game))
+    imported = session_tool(str(project), "import", slot="1-1")
+    assert imported["ok"] is True, imported
+    assert (state_saves / "1-1-LT1.save").read_bytes() == b"PLAYER"
+
+
 class _UnansweringSessionClient(_SessionSavesClient):
     """A bridge whose session_info fails: busy main thread, or a bridge without the command."""
 

@@ -477,7 +477,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "on the player's saves, or in a folder outside RenForge's, is refused with "
             "code=SESSION_NOT_ISOLATED, so these actions never touch the player's saves. import goes where the "
             "running game keeps its saves; a running game whose saves are in a folder this server did not create "
-            "is refused with code=SESSION_SAVES_ELSEWHERE (stop it, launch with action=launch, then import). "
+            "is refused with code=SESSION_SAVES_ELSEWHERE (stop it, launch with action=launch, then import), and "
+            "one whose bridge cannot report its save folder with code=SESSION_SAVES_UNKNOWN (the same remedy). "
             "load and import require authorize=true when RENFORGE_POLICY=enforce, and list shows player_slots "
             "only with it."
         ),

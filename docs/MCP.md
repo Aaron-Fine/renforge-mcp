@@ -746,7 +746,11 @@ session's saves (the player's file is only read); then `action="load"` it.
 The import goes where the running game keeps its saves (a game this server
 launched with `savedir='temporary'` takes it in its own folder); a game whose
 saves are elsewhere and that this server cannot write into is refused with
-`code="SESSION_SAVES_ELSEWHERE"`.
+`code="SESSION_SAVES_ELSEWHERE"`. A running game whose bridge is too old to
+report its save folder is refused with `code="SESSION_SAVES_UNKNOWN"` before
+anything is copied: stop it and launch with `action="launch"`, then import.
+Only when no game is running does the slot go to the session's saves folder,
+which the next launch uses.
 A running game whose bridge does not answer (busy, or still starting) gets
 the ordinary, retryable error, and nothing is copied.
 Under `RENFORGE_POLICY=enforce` both need `authorize=true`, since they read

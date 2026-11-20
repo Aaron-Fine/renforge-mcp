@@ -2358,15 +2358,21 @@ def session_saves_dir(project_path: str | Path) -> Path:
     return project_state_dir(project_path) / "saves"
 
 
+class SavedirUnknownError(BridgeError):
+    """A game is running, but its bridge predates ``session_info`` and cannot say where it saves."""
+
+
 def running_game_savedir(project_path: str | Path) -> str | None:
     """The save folder the project's running game uses, or ``None``.
 
     For a game this process runs it is the folder this process gave it;
-    any other game is asked. ``None`` means no game is running, or one
-    whose bridge predates ``session_info`` cannot say. Any other failure
-    (a busy or still-starting game, a dropped connection) proves nothing
-    about where the game saves, so it raises :class:`BridgeError` for the
-    caller to report as retryable instead of guessing a folder.
+    any other game is asked. ``None`` means no game is running (or one
+    that reports no folder). A running game whose bridge predates
+    ``session_info`` raises :class:`SavedirUnknownError`: a game is there,
+    so a folder chosen without it may be one it never loads. Any other
+    failure (a busy or still-starting game, a dropped connection) proves
+    nothing about where the game saves, so it raises :class:`BridgeError`
+    for the caller to report as retryable instead of guessing a folder.
     """
     known = _known_savedir(project_path)
     if known is not None:
@@ -2379,7 +2385,7 @@ def running_game_savedir(project_path: str | Path) -> str | None:
         raise
     except BridgeError as exc:
         if "unknown_command" in str(exc) or "unknown command" in str(exc):
-            return None
+            raise SavedirUnknownError(str(exc)) from exc
         raise
     except Exception as exc:
         raise BridgeError(f"{type(exc).__name__}: {exc}") from exc
