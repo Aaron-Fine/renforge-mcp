@@ -962,3 +962,74 @@ def test_reload_returns_a_compact_observation_like_the_play_tools(tmp_path, monk
 )
 def test_lint_keeps_diagnostics_in_the_mod_whatever_the_separator(file: str, inside: bool) -> None:
     assert mods._diagnostic_in_mod({"file": file}, "demo") is inside
+
+
+def _fail_content_writes(monkeypatch) -> None:
+    real = mods._atomic_write_bytes
+
+    def write(target, data):
+        if target.name != "renforge-mod.json":
+            raise ValueError("refusing unsafe write to %s: disk full" % target.name)
+        real(target, data)
+
+    monkeypatch.setattr(mods, "_atomic_write_bytes", write)
+
+
+def test_a_file_that_appears_at_a_failed_write_path_is_not_taken_over(tmp_path, monkeypatch) -> None:
+    # A failed write leaves the path recorded; a file a mod loader then puts
+    # there is not RenForge's, so neither a retry nor remove() may touch it.
+    root = _project(tmp_path)
+    mods.write_file(root, "demo", "kept.rpy", "label kept:\n    return\n")
+    with monkeypatch.context() as patch:
+        _fail_content_writes(patch)
+        with pytest.raises(ValueError):
+            mods.write_file(root, "demo", "intro.rpy", "label demo:\n    return\n")
+    foreign = root / "game" / "mods" / "demo" / "intro.rpy"
+    foreign.write_text("label shipped:\n    return\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="did not write"):
+        mods.write_file(root, "demo", "intro.rpy", "label demo:\n    return\n")
+    assert foreign.read_text(encoding="utf-8") == "label shipped:\n    return\n"
+
+    removed = mods.remove(root, "demo")
+    assert removed["removed"] == ["kept.rpy"]
+    assert "intro.rpy" in removed["kept"]
+    assert foreign.read_text(encoding="utf-8") == "label shipped:\n    return\n"
+
+
+def test_a_published_file_stays_accounted_for_when_the_last_manifest_write_fails(tmp_path, monkeypatch) -> None:
+    root = _project(tmp_path)
+    real = mods._write_manifest
+    calls = {"n": 0}
+
+    def second_write_fails(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("refusing unsafe write to renforge-mod.json: disk full")
+        return real(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(mods, "_write_manifest", second_write_fails)
+        with pytest.raises(ValueError):
+            mods.write_file(root, "demo", "intro.rpy", "label demo:\n    return\n")
+    script = root / "game" / "mods" / "demo" / "intro.rpy"
+    assert script.is_file()
+    listed = mods.list_mods(root)["mods"][0]
+    assert listed["pending"] == ["intro.rpy"]
+    assert listed["unlisted"] == []
+
+    # A retry with new content finishes the write.
+    retried = mods.write_file(root, "demo", "intro.rpy", "label demo2:\n    return\n")
+    assert retried["files"] == ["intro.rpy"]
+    assert "pending" not in _manifest(root, "demo")
+
+    # And remove() deletes a published file even if the manifest was never finished.
+    with monkeypatch.context() as patch:
+        calls["n"] = 0
+        patch.setattr(mods, "_write_manifest", second_write_fails)
+        with pytest.raises(ValueError):
+            mods.write_file(root, "demo", "extra.rpy", "label extra:\n    return\n")
+    (root / "game" / "mods" / "demo" / "extra.rpyc").write_bytes(b"compiled")
+    removed = mods.remove(root, "demo")
+    assert removed["removed"] == ["extra.rpy", "extra.rpyc", "intro.rpy"]
+    assert not (root / "game" / "mods" / "demo").exists()

@@ -935,7 +935,12 @@ renforge_mod(project_path=project, action="remove", name="demo")        # listed
 ```
 
 `package` zips the mod into `<state>/mods/<name>.zip`. `list` shows each
-mod's files plus any `missing` (listed but gone) or `unlisted` files. Paths must
+mod's files plus any `missing` (listed but gone) or `unlisted` files, and
+`pending` files: written by a `write` whose final manifest update failed. A
+retry of that `write` finishes it, and `remove` deletes such a file. A new path
+is recorded with a digest of its content before it is written, so a file that
+appears there after a failed write, holding other bytes, is refused by a retry
+and kept by `remove`. Paths must
 be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 1,000,000 UTF-8 bytes. Symlinks under `game/` are refused. `write` will not take
 over files it did not create: a `game/mods/<name>/` folder without a manifest

@@ -126,6 +126,16 @@ def read_text_nofollow(path: Path, *, encoding: str = "utf-8", errors: str = "st
         return handle.read()
 
 
+def read_bytes_nofollow(path: Path, *, max_bytes: int) -> bytes:
+    """Read a regular file's bytes, refusing symlinks; ``ValueError`` past ``max_bytes``."""
+    fd, _opened = _open_regular_nofollow(Path(path))
+    with open(fd, "rb") as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError("file exceeds %d bytes: %s" % (max_bytes, path))
+    return data
+
+
 def copy_regular_file_nofollow(
     source: Path,
     destination: Path,

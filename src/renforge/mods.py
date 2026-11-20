@@ -7,6 +7,7 @@ and nothing else. Game files outside ``game/mods/`` are never touched.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -21,6 +22,7 @@ from .util.files import (
     PrivatePathError,
     ensure_nofollow_directory,
     is_link,
+    read_bytes_nofollow,
     read_text_nofollow,
     receipt_path,
     walk_nofollow,
@@ -184,6 +186,11 @@ def _load_manifest(mod_dir: Path) -> dict[str, Any] | None:
     files = data.get("files") if isinstance(data, dict) else None
     if not isinstance(files, list) or not all(isinstance(item, str) for item in files):
         raise ValueError(f"{MANIFEST_NAME} has no valid 'files' list")
+    pending = data.setdefault("pending", {})
+    if not isinstance(pending, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in pending.items()
+    ):
+        raise ValueError(f"{MANIFEST_NAME} has an invalid 'pending' map")
     return data
 
 
@@ -196,9 +203,14 @@ def _atomic_write_bytes(target: Path, data: bytes) -> None:
         raise ValueError(f"refusing unsafe write to {target.name}: {exc}") from exc
 
 
-def _write_manifest(mod_dir: Path, name: str, files: list[str]) -> None:
+def _write_manifest(
+    mod_dir: Path, name: str, files: list[str], pending: dict[str, str] | None = None
+) -> None:
+    """Publish the manifest. ``pending`` maps a path being written to its content digest."""
     updated = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    payload = {"name": name, "files": files, "updated": updated}
+    payload: dict[str, Any] = {"name": name, "files": files, "updated": updated}
+    if pending:
+        payload["pending"] = dict(sorted(pending.items()))
     data = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
     _atomic_write_bytes(mod_dir / MANIFEST_NAME, data)
 
@@ -221,6 +233,27 @@ def _unlisted(mod_dir: Path, listed: set[str]) -> list[str]:
     return [rel for rel in _files_on_disk(mod_dir) if rel != MANIFEST_NAME and rel not in listed]
 
 
+def _digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _published_pending(mod_dir: Path, rel: str, digest: str) -> bool:
+    """True when the file at a pending path holds exactly what RenForge wrote there.
+
+    A pending path was recorded before its content write. A file there that
+    holds other bytes appeared from elsewhere, so it is not RenForge's.
+    """
+    if not _is_safe_relpath(rel):
+        return False
+    target = mod_dir / rel
+    if _is_link(target) or not target.is_file():
+        return False
+    try:
+        return _digest(read_bytes_nofollow(target, max_bytes=MAX_CONTENT_BYTES)) == digest
+    except (OSError, ValueError):
+        return False
+
+
 def _compiled_sibling(rel: str) -> str | None:
     return rel[: -len(".rpy")] + ".rpyc" if rel.endswith(".rpy") else None
 
@@ -240,6 +273,10 @@ def _refuse_foreign_files(mod_dir: Path, name: str, rel: str, manifest: dict[str
         return
     if rel in manifest["files"]:
         return
+    pending = manifest["pending"].get(rel)
+    if pending is not None and _published_pending(mod_dir, rel, pending):
+        # An earlier write published this file but not the final manifest.
+        return
     compiled = _compiled_sibling(rel)
     for candidate in (rel, compiled):
         if candidate is not None and os.path.lexists(mod_dir / candidate):
@@ -253,7 +290,8 @@ def write_file(project_root: str | Path, name: str, path: str, content: str) -> 
     """Write ``content`` to ``game/mods/<name>/<path>`` and record it in the manifest.
 
     Refuses to overwrite or list a file the mod's manifest does not already
-    list. ``files_touched`` names the file and the manifest, project-relative.
+    list, including one that appeared at a path whose earlier write failed.
+    ``files_touched`` names the file and the manifest, project-relative.
     ``path`` and the receipt are resolved (``util.files.receipt_path``), so on
     a case-insensitive filesystem they spell an existing file as it is on
     disk, which may differ in case from ``path`` as given and from ``files``.
@@ -273,14 +311,25 @@ def write_file(project_root: str | Path, name: str, path: str, content: str) -> 
     manifest = _load_manifest(mod_dir)
     _refuse_foreign_files(mod_dir, name, rel, manifest)
     listed = set(manifest["files"]) if manifest else set()
-    listed.add(rel)
-
+    pending = dict(manifest["pending"]) if manifest else {}
+    if rel in listed:
+        _write_manifest(mod_dir, name, sorted(listed), pending)
+        _atomic_write_bytes(target, data)
+    else:
+        # A new path is recorded as pending, with the digest of the content,
+        # before the content write. The other order could leave an unlisted
+        # .rpy that the game loads and remove() never deletes. A pending entry
+        # is not ownership: a retry or remove() acts on the file only while it
+        # holds exactly these bytes, so a file that appears there after a
+        # failed write is refused. Once the content is on disk, the path moves
+        # to ``files``.
+        pending[rel] = _digest(data)
+        _write_manifest(mod_dir, name, sorted(listed), pending)
+        _atomic_write_bytes(target, data)
+        del pending[rel]
+        listed.add(rel)
+        _write_manifest(mod_dir, name, sorted(listed), pending)
     files = sorted(listed)
-    # Manifest first: if the file write then fails, the manifest lists a
-    # missing file, which list reports. The other order could leave an
-    # unlisted .rpy that the game loads and remove() never deletes.
-    _write_manifest(mod_dir, name, files)
-    _atomic_write_bytes(target, data)
     written = receipt_path(project_root, target)
     return {
         "ok": True,
@@ -306,12 +355,21 @@ def list_mods(project_root: str | Path) -> dict[str, Any]:
             files = sorted(manifest["files"])
             # The manifest may come with the game: check only paths inside the mod.
             missing = [rel for rel in files if not _is_safe_relpath(rel) or not (child / rel).is_file()]
-            unlisted = [
-                rel for rel in _unlisted(child, set(files)) if not rel.endswith(".rpyc")
-            ]
-            mods.append(
-                {"name": child.name, "files": files, "missing": missing, "unlisted": unlisted}
+            pending = sorted(
+                rel for rel, digest in manifest["pending"].items()
+                if _published_pending(child, rel, digest)
             )
+            unlisted = [
+                rel for rel in _unlisted(child, set(files) | set(pending))
+                if not rel.endswith(".rpyc")
+            ]
+            entry: dict[str, Any] = {
+                "name": child.name, "files": files, "missing": missing, "unlisted": unlisted
+            }
+            if pending:
+                # Published by a write whose final manifest update failed.
+                entry["pending"] = pending
+            mods.append(entry)
     return {"ok": True, "mods": mods}
 
 
@@ -330,7 +388,12 @@ def remove(project_root: str | Path, name: str) -> dict[str, Any]:
     if manifest is None:
         return {"ok": False, "error": f"unknown mod: {name}"}
 
-    files = sorted(manifest["files"])
+    # A pending path counts only while it holds the bytes RenForge wrote.
+    published = {
+        rel for rel, digest in manifest["pending"].items()
+        if _published_pending(mod_dir, rel, digest)
+    }
+    files = sorted(set(manifest["files"]) | published)
     removed: list[str] = []
     kept: list[str] = []
     for rel in files:

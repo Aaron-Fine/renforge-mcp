@@ -580,6 +580,14 @@ versioning.
   Windows junction and read the scripts in the tree it points to; symlinked
   folders were already skipped. Stopping a session likewise lists a
   junction in its session root without walking the tree it points to.
+- Autopilot's `autopilot.json` progress report is written without
+  following a link at the file itself; one planted there is refused.
+- `renforge_mod` `write` records a new path as pending, with a digest of
+  its content, before writing it, and lists it once the content is on
+  disk. A file that appears at that path after a failed write is no longer
+  taken over by a retry or deleted by `remove`; a file published before the
+  last manifest update failed is listed as `pending`, finished by a retry,
+  and deleted by `remove`.
 
 ## [0.7.6] - 2026-11-18
 
