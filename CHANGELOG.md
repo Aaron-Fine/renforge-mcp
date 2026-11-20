@@ -7,6 +7,8 @@ versioning.
 
 ### Changed
 
+- Under `RENFORGE_POLICY=enforce`, `renforge_validate` with `staged` bytes
+  needs `authorize=true`: lint runs their init code, like `renforge_eval`.
 - Under `RENFORGE_POLICY=enforce`, reading the player's own saves needs
   `authorize=true`: `renforge_saves` `list_user` and `import` and
   `renforge_session` `import` are destructive, and `renforge_session list`
@@ -568,8 +570,6 @@ versioning.
   the engine widget.
 - Autopilot ends a run when the bridge refuses a choice and lists it under
   `choice_errors`, instead of counting the menu as explored.
-- Under `RENFORGE_POLICY=enforce`, `renforge_validate` with `staged` bytes
-  needs `authorize=true`: lint runs their init code, like `renforge_eval`.
 - A running game that reports a relative save location or HOME is never
   treated as isolated: the game resolves it from its own working directory.
 - A stop whose cleanup fails no longer lists a dangling link it left behind

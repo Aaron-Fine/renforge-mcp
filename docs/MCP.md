@@ -64,7 +64,8 @@ The command is the same for every client. Example JSON configuration:
 }
 ```
 
-High-risk live tools are classified at invocation time. The default is
+High-risk live tools, and `renforge_validate` with `staged` bytes, are
+classified at invocation time. The default is
 `RENFORGE_POLICY=off` (record only). To enforce denials, set
 `RENFORGE_POLICY=enforce` in the MCP server environment and pass
 `authorize=true` on destructive or open-world calls, or see
@@ -1078,7 +1079,10 @@ describes this clean tree, not a live session.
 `staged` overlays UTF-8 text into the shadow without touching the project. Keys
 may be project-relative (`game/script.rpy`) or game-relative (`script.rpy`);
 absolute paths, `..`, and duplicate normalized paths are rejected. Staged bytes
-count against the shadow quotas.
+count against the shadow quotas. Lint runs their `init` code with the server's
+privileges, so under `RENFORGE_POLICY=enforce` a non-empty `staged` needs
+`authorize=true` or an allowlist entry for `renforge_validate.staged`, as
+`renforge_eval` does.
 
 Shadow quotas default to **10,000 files**, **500 MiB**, and **50,000
 directories**. Media files
