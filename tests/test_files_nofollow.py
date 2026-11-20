@@ -608,6 +608,43 @@ def test_windows_read_chains_need_only_traverse_on_the_way(
         assert access & files_module._WIN_FILE_READ_ATTRIBUTES
 
 
+
+@pytest.mark.parametrize(("target", "writable", "listable", "anchor_lists"), [
+    ("/Program Files/game/saves", False, False, False),
+    ("/Program Files/game/saves", False, True, False),
+    ("/", False, True, True),       # the anchor is the folder being listed
+    ("/", False, False, False),
+    ("/Program Files/game/saves", True, False, True),
+])
+def test_windows_read_chains_open_the_anchor_without_list_access(
+    monkeypatch: pytest.MonkeyPatch, target: str, writable: bool, listable: bool, anchor_lists: bool
+) -> None:
+    # A drive or share root that allows traversal but denies listing failed
+    # the whole read at its first open.
+    anchors: list[int | None] = []
+
+    def open_anchor(_path, *, action="atomic-write", writable=False, access=None):
+        anchors.append(access)
+        return 1
+
+    class _Info:
+        dwFileAttributes = files_module._WIN_FILE_ATTRIBUTE_DIRECTORY
+
+    monkeypatch.setattr(files_module, "_open_directory_nofollow_windows", open_anchor)
+    monkeypatch.setattr(files_module, "_win_nt_create", lambda **_k: 101)
+    monkeypatch.setattr(files_module, "_win_reject_reparse_handle", lambda *_a, **_k: _Info)
+    monkeypatch.setattr(files_module, "_win_close", lambda _handle: None)
+
+    files_module._open_directory_chain_nofollow_windows(Path(target), writable=writable, listable=listable)
+
+    access = anchors[0]
+    if access is None:  # the opener's default: list access included
+        assert anchor_lists
+    else:
+        assert bool(access & files_module._WIN_FILE_LIST_DIRECTORY) is anchor_lists
+        assert access & files_module._WIN_FILE_TRAVERSE and access & files_module._WIN_FILE_READ_ATTRIBUTES
+
+
 def test_windows_nt_failures_keep_the_errors_callers_tell_apart() -> None:
     missing = files_module._win_nt_status_error(-0x3FFFFFCC, "NtCreateFile failed", "a.save")
     assert isinstance(missing, FileNotFoundError)

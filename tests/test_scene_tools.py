@@ -110,6 +110,8 @@ def test_capture_screenshot_reports_a_project_relative_receipt(tmp_path):
     assert [Path(item) for item in out["files_touched"]] == [expected]
     assert Path(out["relative_path"]) == expected
     assert out["relative_path"] == out["files_touched"][0]
+    # The receipt names the file that holds the screenshot, not just a path.
+    assert expected.read_bytes() == png
 
 
 def test_scene_tree_truncates_to_max_items(monkeypatch):

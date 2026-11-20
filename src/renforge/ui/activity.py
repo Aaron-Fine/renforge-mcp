@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .ws import WebSocketHub, build_ws_envelope
-from ..state import project_state_dir
+from ..state import prior_project_state_dir, project_state_dir
 
 
 def _coerce_timestamp(value: Any) -> int | None:
@@ -20,12 +20,25 @@ def _coerce_timestamp(value: Any) -> int | None:
 
 
 def read_recent_activity(project_root: Path, limit: int = 20) -> list[dict[str, Any]]:
-    path = project_state_dir(project_root) / "activity.jsonl"
-    if limit <= 0 or not path.exists():
+    # History an earlier build kept under the caller's spelling comes first:
+    # it is older than anything written to the current folder.
+    current = project_state_dir(project_root) / "activity.jsonl"
+    prior = prior_project_state_dir(project_root)
+    paths = [path for path in ((prior / "activity.jsonl") if prior else None, current)
+             if path is not None and path.exists()]
+    if limit <= 0 or not paths:
         return []
 
     events: deque[dict[str, Any]] = deque(maxlen=limit)
 
+    for path in paths:
+        # An unreadable earlier file is skipped: it must not hide current history.
+        if not _read_activity_file(path, events) and path == current:
+            return []
+    return list(events)
+
+
+def _read_activity_file(path: Path, events: deque[dict[str, Any]]) -> bool:
     try:
         with path.open("r", encoding="utf-8") as fp:
             for raw in fp:
@@ -49,9 +62,8 @@ def read_recent_activity(project_root: Path, limit: int = 20) -> list[dict[str, 
                     )
                 )
     except Exception:
-        return []
-
-    return list(events)
+        return False
+    return True
 
 
 async def tail_activity(project_root: Path, hub: WebSocketHub, stop_event: asyncio.Event) -> None:

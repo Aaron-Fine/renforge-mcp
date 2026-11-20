@@ -76,6 +76,52 @@ def test_an_inline_load_still_reports_the_restart_once(running_bridge, monkeypat
     assert emitted == [("load.completed", {"slot": "teams", "restored_label": None})]
 
 
+
+
+def test_a_failed_bridge_setup_stops_the_listener_and_pump_and_keeps_the_cause(request, monkeypatch):
+    """The fixture raises before its yield; its cleanup must still run, and say why it failed."""
+    import threading
+    import time
+
+    import renforge.bridge.control as control
+
+    def refuse(*_args, **_kwargs):
+        raise ValueError("not ready")
+
+    before = {thread.ident for thread in threading.enumerate()}
+    monkeypatch.setattr(control, "read_bridge_info", refuse)
+    with pytest.raises(AssertionError) as raised:
+        request.getfixturevalue("running_bridge")
+    assert isinstance(raised.value.__cause__, ValueError)
+
+    def leaked():
+        return [thread.name for thread in threading.enumerate()
+                if thread.ident not in before and thread.is_alive()
+                and (thread.name == "renforge.bridge.listener" or "pump" in thread.name)]
+
+    deadline = time.monotonic() + 3.0
+    while leaked() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert leaked() == []
+
+
+def test_the_drain_keeps_running_after_an_inline_restart(running_bridge, monkeypatch):
+    """Ren'Py's context loop catches the restart and drains again; so does the test pump."""
+    renpy = running_bridge.renpy
+    RestartTopContext = type("RestartTopContext", (Exception,), {})
+    renpy.game = types.SimpleNamespace(RestartTopContext=RestartTopContext)
+    renpy.can_load = lambda slot: True
+
+    def load(slot):
+        raise RestartTopContext()
+
+    renpy.load = load
+    monkeypatch.delattr(renpy, "invoke_in_main_thread", raising=False)
+    assert running_bridge.client.load_slot("teams")["restarting"] is True
+    # A later request is still drained.
+    assert running_bridge.client.ping().get("ok") is True
+
+
 # --- custom click attributes ----------------------------------------------
 
 

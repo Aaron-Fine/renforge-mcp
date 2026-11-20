@@ -57,8 +57,10 @@ def _ann(
 _ISOLATION_PARAMETERS = {
     "savedir": (
         "Save location. `temporary` isolates the session: saves, persistent data, "
-        "preferences, and HOME go to a disposable folder, so the game cannot read "
-        "or write the user's normal Ren'Py saves. Omitted, empty, or `auto` follows "
+        "and preferences go to a disposable folder, so the game cannot read "
+        "or write the user's normal Ren'Py saves, and so does HOME unless `home` is `existing` or a path "
+        "(`home=existing` keeps the user's HOME, which needs `authorize` under enforce; `auto` and "
+        "`temporary` stay isolated). Omitted, empty, or `auto` follows "
         "`RENFORGE_ISOLATION` (`temporary` to isolate every launch; otherwise the "
         "game's normal save directory, as `existing` or `default` selects). Any other "
         "non-empty value is an arbitrary save directory path that is created if "
@@ -93,8 +95,9 @@ _LAUNCH_POLICY = (
     "RenForge's own folders once `RENFORGE_ISOLATION` fills in omitted options: `savedir=temporary` with `home` "
     "omitted or `temporary`, or `savedir`/`home` paths inside the RenForge state folder. Omitted (or `auto`) options "
     "mean the user's saves and HOME unless `RENFORGE_ISOLATION=temporary`, so by default a call with no isolation "
-    "options needs `authorize=true`, and so does a `savedir` path with `home` omitted (it keeps the user's HOME). "
-    "Pass `savedir=temporary` to stay isolated without `authorize`. "
+    "options needs `authorize=true`, and so does a `savedir` path with `home` omitted (it keeps the user's HOME); "
+    "with `RENFORGE_ISOLATION=temporary` an omitted `home` is a temporary HOME, so neither does. "
+    "Pass `savedir=temporary` with `home` omitted to stay isolated without `authorize`. "
 )
 
 _RELAUNCH_POLICY = _LAUNCH_POLICY + (
@@ -104,8 +107,9 @@ _RELAUNCH_POLICY = _LAUNCH_POLICY + (
 
 _LAUNCH_AUTHORIZE = (
     "Pass `authorize=true` when `RENFORGE_POLICY=enforce` and the game would keep its saves or HOME outside RenForge's "
-    "own folders: no isolation options (unless `RENFORGE_ISOLATION=temporary`), `savedir` or `home` set to "
-    "`existing`, a `savedir` path with `home` omitted, a host save or HOME path, or any other path outside the "
+    "own folders: no isolation options or a `savedir` path with `home` omitted (both unless "
+    "`RENFORGE_ISOLATION=temporary`, which makes an omitted `home` temporary), `savedir` or `home` set to "
+    "`existing`, a host save or HOME path, or any other path outside the "
     "RenForge state folder, the shared temp dir included. Isolated launches (`savedir=temporary` with `home` omitted "
     "or `temporary`) do not need this; prefer them."
 )
@@ -296,12 +300,13 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             ),
             "keep_shadow": "Keep the temporary shadow after validation and return `shadow_path`; cleanup then belongs to the caller.",
             "timeout": (
-                "Lint timeout in seconds. `0` derives `min(180, max(1, attestation_timeout*3))` (90 seconds by "
-                "default); explicit values are clamped to 1-600."
+                "Lint timeout in seconds, from 0-600. `0` derives `min(180, max(1, attestation_timeout*3))` "
+                "(90 seconds by default); a value below 1 second is raised to 1."
             ),
         },
         parameter_schemas={
-            "checks": {"items": _enum("lint")},
+            # Applies to the array branch only: omitted and null stay valid.
+            "checks": {"items": _enum("lint"), "minItems": 1, "maxItems": 1},
             "staged": {"type": "object", "additionalProperties": {"type": "string"}},
             "timeout": _limits(0, 600),
         },
@@ -462,7 +467,9 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "(saves and preferences in the project's RenForge state folder, apart from the player's and kept "
             "across launches; isolated HOME; no Live Editor; transitions and vsync off) and returns "
             "status=starting or ready; poll action=status until ready or failed. save and load take a slot "
-            "name; load returns the restored game's observation, ready for renforge_act; list shows the session's slots "
+            "name; load returns the restored game's observation, ready for renforge_act, once it is stable (if it has "
+            "not settled when the wait ends, load returns next instead: observe, and do not load again); "
+            "list shows the session's slots "
             "and the player's own (player_slots); import copies one player slot into the session's saves (the "
             "player's file is only read), so the agent can load and play or test a mod from the player's real "
             "progress; stop ends the game and cleans up. launch with label starts "
@@ -477,7 +484,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "on the player's saves, or in a folder outside RenForge's, is refused with "
             "code=SESSION_NOT_ISOLATED, so these actions never touch the player's saves. import goes where the "
             "running game keeps its saves; a running game whose saves are in a folder this server did not create "
-            "is refused with code=SESSION_SAVES_ELSEWHERE (stop it, launch with action=launch, then import). "
+            "is refused with code=SESSION_SAVES_ELSEWHERE (stop it, launch with action=launch, then import), and "
+            "one whose bridge cannot report its save folder with code=SESSION_SAVES_UNKNOWN (the same remedy). "
             "load and import require authorize=true when RENFORGE_POLICY=enforce, and list shows player_slots "
             "only with it."
         ),
@@ -851,9 +859,11 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         description=(
             "Write, test, and remove mods under `game/mods/<name>/` with a `renforge-mod.json` manifest. Never modifies "
             "game files outside that directory. `write` takes `path` and `content` (`.rpy`, `.txt`, `.json`, or `.md`); "
-            "it refuses a folder RenForge did not create and any file the manifest does not list, so pick another name "
-            "when the game ships its own `game/mods/<name>/`. "
-            "`list` reports listed, missing, and unlisted files. `lint` lints a temporary shadow copy of the project, "
+            "it creates a new path and lists it in the manifest, refuses an existing file (or a `.rpy`'s `.rpyc`) "
+            "the manifest does not list, and refuses a folder that already holds files RenForge did not write, so "
+            "pick another name when the game ships its own `game/mods/<name>/`. "
+            "`list` reports listed, missing, and unlisted files, and `pending` ones a write published before its "
+            "last manifest update failed (a retry finishes it). `lint` lints a temporary shadow copy of the project, "
             "as `renforge_validate` does (the project's init code runs there), and returns the diagnostics that point "
             "into the mod, including parse errors; a failed lint with none returns `raw_tail`. It uses the game's own "
             "engine version. "
@@ -861,7 +871,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "unlisted files are kept and reported, and it refuses a mod folder that is a link. `package` zips the mod into `<state>/mods/`. `write`, `remove`, "
             "and `package` return `files_touched`/`files_deleted` receipts. `reload` (no name: it "
             "reloads every script, wherever the mod lives) hot-reloads the running game and returns errors and a "
-            "fresh compact observation. `guide` returns modding idioms. Mod actions are "
+            "fresh compact observation; settled=false with next when the screen had not settled (observe again, "
+            "do not reload again). `guide` returns modding idioms. Mod actions are "
             "classified per action by the runtime policy."
         ),
         annotations=_ann(

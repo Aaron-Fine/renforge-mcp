@@ -53,11 +53,70 @@ def test_walk_nofollow_prunes_linked_folders(project: Path) -> None:
 def test_walk_nofollow_prunes_a_folder_whose_attributes_cannot_be_read(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "unreadable").mkdir()
 
-    def refuse(_path):
-        raise PrivatePathError("PATH_UNVERIFIABLE", "cannot read attributes")
+    real = files.is_link
+
+    def refuse(path):
+        if Path(path).name == "unreadable":
+            raise PrivatePathError("PATH_UNVERIFIABLE", "cannot read attributes")
+        return real(path)
 
     monkeypatch.setattr(files, "is_link", refuse)
     assert [dirs for _root, dirs, _files in files.walk_nofollow(tmp_path)] == [[]]
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "geteuid") or __import__("os").geteuid() == 0,
+                    reason="needs POSIX permissions that root bypasses")
+def test_walk_nofollow_prunes_a_folder_it_may_list_but_not_search(tmp_path: Path) -> None:
+    """Read without search permission: the child's name is listed but lstat fails; the scan goes on."""
+    (tmp_path / "a_readable").mkdir()
+    (tmp_path / "a_readable" / "kept.rpy").write_text("", encoding="utf-8")
+    listed_only = tmp_path / "listed_only"
+    (listed_only / "child").mkdir(parents=True)
+    listed_only.chmod(0o600)
+    try:
+        walked = {Path(root).name: sorted(names) for root, _dirs, names in files.walk_nofollow(tmp_path)}
+    finally:
+        listed_only.chmod(0o700)
+    assert walked["a_readable"] == ["kept.rpy"]
+    assert "child" not in walked
+
+
+def _linked_game(tmp_path: Path, target: Path) -> Path:
+    """A project whose game/ is a link to *target*, which holds script.rpy."""
+    target.mkdir(parents=True)
+    (target / "script.rpy").write_text("label start:\n    return\n", encoding="utf-8")
+    root = tmp_path / "project"
+    root.mkdir(exist_ok=True)
+    try:
+        (root / "game").symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+    return root
+
+
+def test_a_game_folder_linked_inside_the_project_scans_normally(tmp_path: Path) -> None:
+    """resolves_inside lets a game/ link that stays in the project through; every scan must agree."""
+    from renforge.ui.graph import _story_map_signature
+    from renforge.ui.server import _list_script_files
+
+    root = _linked_game(tmp_path, tmp_path / "project" / "src_game")
+
+    assert [item["file"] for item in scan_project(str(root))["files"]] == ["game/script.rpy"]
+    assert len(find_references(root, "start")["occurrences"]) == 1
+    assert _list_script_files(root)["files"] == ["game/script.rpy"]
+    assert [Path(entry[0]).as_posix() for entry in _story_map_signature(root)[0]] == ["game/script.rpy"]
+
+
+def test_a_game_folder_linked_outside_the_project_is_refused_by_every_scan(tmp_path: Path) -> None:
+    from renforge.ui.graph import _story_map_signature
+    from renforge.ui.server import _list_script_files
+
+    root = _linked_game(tmp_path, tmp_path / "outside")
+
+    assert scan_project(str(root))["files"] == []
+    assert find_references(root, "start")["occurrences"] == []
+    assert _list_script_files(root)["files"] == []
+    assert _story_map_signature(root)[0] == ()
 
 
 def test_scan_does_not_walk_into_a_junction(project: Path) -> None:

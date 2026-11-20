@@ -16,6 +16,12 @@ def test_default_lists_every_tool():
     assert allowed_tools(TOOL_DEFINITIONS, {"RENFORGE_TOOLSETS": "all"}) == set(TOOL_DEFINITIONS)
 
 
+def test_all_selects_every_group_alongside_valid_names():
+    every = set(TOOL_DEFINITIONS)
+    assert allowed_tools(TOOL_DEFINITIONS, {"RENFORGE_TOOLSETS": "all,play"}) == every
+    assert allowed_tools(TOOL_DEFINITIONS, {"RENFORGE_TOOLSETS": " play , all "}) == every
+
+
 def test_groups_combine_and_unknown_names_fail():
     env = {"RENFORGE_TOOLSETS": "play, docs"}
     assert allowed_tools(TOOL_DEFINITIONS, env) == set(TOOLSETS["play"]) | set(TOOLSETS["docs"])
@@ -138,7 +144,7 @@ def test_renforge_info_is_listed_without_the_play_group(toolsets):
     assert "renforge_session" not in listed
 
 
-@pytest.mark.parametrize("value", [",", " , ", "Play", "play,plya"])
+@pytest.mark.parametrize("value", [",", " , ", "Play", "play,plya", "all,projecct", "projecct,all"])
 def test_every_reader_of_the_variable_rejects_the_same_values(value):
     from renforge.toolsets import bridge_eval_allowed, enabled_toolsets
 

@@ -33,6 +33,19 @@ def _no_ambient_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
 
 
+_ENGINE_RESTARTS = ("RestartContext", "RestartTopContext", "FullRestartException", "UtterRestartException")
+
+
+def _engine_restart(renpy, exc: BaseException) -> bool:
+    """Whether *exc* is one of the restarts Ren'Py's context loop handles."""
+    game = getattr(renpy, "game", None)
+    for name in _ENGINE_RESTARTS:
+        signal = getattr(game, name, None)
+        if isinstance(signal, type) and isinstance(exc, signal):
+            return True
+    return False
+
+
 @pytest.fixture
 def running_bridge(tmp_path, monkeypatch):
     """Run the real bridge.rpy body against a fake ``renpy`` and connect a client.
@@ -127,66 +140,81 @@ def running_bridge(tmp_path, monkeypatch):
 
     # Stand in for Ren'Py's main thread: keep draining the request queue.
     stop = threading.Event()
+    pump_errors: list[BaseException] = []
 
     def pump():
         while not stop.is_set():
-            globs["renforge_drain_bridge"]()
+            try:
+                globs["renforge_drain_bridge"]()
+            except BaseException as exc:
+                # Before 8.2 a load raises the engine's restart out of the
+                # drain; Ren'Py's context loop catches it and drains again.
+                if not _engine_restart(renpy, exc):
+                    pump_errors.append(exc)
+                    return
             time.sleep(0.005)
 
     pump_thread = threading.Thread(target=pump, daemon=True)
     pump_thread.start()
+    try:
+        # Wait for the listener to publish ready metadata under the private control path.
+        info_path = control_dir(project_root) / "bridge.json"
+        ready_info = None
+        last_error: BaseException | None = None
+        for _ in range(300):
+            try:
+                ready_info = read_bridge_info(
+                    project_root,
+                    require_ready=True,
+                    expected_session_id=session_id,
+                )
+                break
+            except Exception as exc:
+                last_error = exc
+            time.sleep(0.01)
+        if ready_info is None:
+            raise AssertionError("bridge did not publish valid ready metadata") from last_error
+        assert ready_info.session_id == session_id
+        assert ready_info.token == token
+        assert ready_info.project_root == str(project_root)
+        assert ready_info.host == "127.0.0.1"
+        assert 1 <= ready_info.port <= 65535
+        # POSIX private mode is 0600. Windows st_mode is not a real Unix mode
+        # (often 0o666); ownership is enforced via the protected DACL instead.
+        import os
 
-    # Wait for the listener to publish ready metadata under the private control path.
-    info_path = control_dir(project_root) / "bridge.json"
-    ready_info = None
-    for _ in range(300):
-        try:
-            ready_info = read_bridge_info(
-                project_root,
-                require_ready=True,
-                expected_session_id=session_id,
+        if os.name != "nt":
+            mode = stat.S_IMODE(info_path.lstat().st_mode)
+            assert mode == 0o600
+        else:
+            from renforge.util.files import _win_validate_protected_dacl
+
+            _win_validate_protected_dacl(info_path)
+        assert not info_path.is_symlink()
+        assert not (project_state_dir(project_root) / "bridge.json").exists()
+
+        client = BridgeClient(
+            BridgeConfig(
+                host=ready_info.host,
+                port=ready_info.port,
+                token=ready_info.token,
             )
-            break
-        except Exception:
-            pass
-        time.sleep(0.01)
-    assert ready_info is not None, "bridge did not publish valid ready metadata"
-    assert ready_info.session_id == session_id
-    assert ready_info.token == token
-    assert ready_info.project_root == str(project_root)
-    assert ready_info.host == "127.0.0.1"
-    assert 1 <= ready_info.port <= 65535
-    # POSIX private mode is 0600. Windows st_mode is not a real Unix mode
-    # (often 0o666); ownership is enforced via the protected DACL instead.
-    import os
-
-    if os.name != "nt":
-        mode = stat.S_IMODE(info_path.lstat().st_mode)
-        assert mode == 0o600
-    else:
-        from renforge.util.files import _win_validate_protected_dacl
-
-        _win_validate_protected_dacl(info_path)
-    assert not info_path.is_symlink()
-    assert not (project_state_dir(project_root) / "bridge.json").exists()
-
-    client = BridgeClient(
-        BridgeConfig(
-            host=ready_info.host,
-            port=ready_info.port,
-            token=ready_info.token,
         )
-    )
-    env = types.SimpleNamespace(
-        client=client,
-        store=store,
-        renpy=renpy,
-        globs=globs,
-        project_root=project_root,
-        session_id=session_id,
-        token=token,
-    )
-    yield env
-
-    stop.set()
-    bridge.stop.set()
+        env = types.SimpleNamespace(
+            client=client,
+            store=store,
+            renpy=renpy,
+            globs=globs,
+            project_root=project_root,
+            session_id=session_id,
+            token=token,
+        )
+        yield env
+    finally:
+        # Also when setup fails: stop the listener and the pump, and let the
+        # pump finish before monkeypatch restores the modules it uses.
+        stop.set()
+        bridge.stop.set()
+        pump_thread.join(timeout=5)
+    if pump_errors:
+        raise pump_errors[0]

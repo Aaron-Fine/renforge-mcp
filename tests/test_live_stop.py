@@ -619,6 +619,22 @@ def test_launch_reuses_owned_session_only_when_editor_mode_matches(tmp_path: Pat
     live._SESSIONS.pop(key, None)
 
 
+
+@pytest.mark.parametrize("display", ["none", " None "])
+def test_a_reused_session_refuses_display_none_as_a_fresh_launch_does(tmp_path: Path, display: str) -> None:
+    """Ren'Py needs a display surface; reuse must not report success for a launch that could never start."""
+    project = _make_project(tmp_path)
+    key = live._key(project)
+    session = _OwnedRunningSession(editor=True, isolation=_isolation())
+    live._SESSIONS[key] = session
+    try:
+        refused = live.launch_game(str(project), editor=True, display=display)
+        assert refused["ok"] is False and refused["code"] == "DISPLAY_UNAVAILABLE", refused
+        assert live._SESSIONS[key] is session and session.close_calls == 0
+    finally:
+        live._SESSIONS.pop(key, None)
+
+
 def test_an_isolated_launch_never_reuses_a_session_on_the_players_saves(tmp_path: Path) -> None:
     """An isolated launch is mutating; handing back a savedir=existing session would skip authorize."""
     project = _make_project(tmp_path)

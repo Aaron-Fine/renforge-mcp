@@ -129,3 +129,45 @@ def test_autopilot_does_not_follow_a_linked_state_folder(tmp_path, monkeypatch) 
     with pytest.raises(PrivatePathError):
         autopilot_module.autopilot(object(), project, max_runs=1)
     assert list(elsewhere.iterdir()) == []
+
+
+def test_autopilot_progress_does_not_follow_a_link_at_the_leaf(tmp_path, monkeypatch) -> None:
+    """A link planted at autopilot.json is refused, never written through."""
+    import os
+
+    import pytest
+
+    import renforge.autopilot as autopilot_module
+    from renforge.project import RenpyProject
+    from renforge.state import ensure_project_state_dir
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project = RenpyProject(_DEMO)
+    outside = tmp_path / "outside.json"
+    outside.write_text("keep", encoding="utf-8")
+    leaf = ensure_project_state_dir(project.root) / "autopilot.json"
+    try:
+        os.symlink(outside, leaf)
+    except OSError:
+        pytest.skip("symlinks are not available")
+
+    class _EmptyClient:
+        def poll_events(self, since=0):
+            return {"events": [], "cursor": since}
+
+        def list_menu_choices(self):
+            return []
+
+        def advance(self):
+            return None
+
+    class _Session:
+        client = _EmptyClient()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(autopilot_module, "launch_with_bridge", lambda *_a, **_k: _Session())
+    report = autopilot_module.autopilot(object(), project, max_runs=1, max_steps=2, settle=0)
+    assert report["runs"] == 1
+    assert outside.read_text(encoding="utf-8") == "keep"

@@ -126,6 +126,16 @@ def read_text_nofollow(path: Path, *, encoding: str = "utf-8", errors: str = "st
         return handle.read()
 
 
+def read_bytes_nofollow(path: Path, *, max_bytes: int) -> bytes:
+    """Read a regular file's bytes, refusing symlinks; ``ValueError`` past ``max_bytes``."""
+    fd, _opened = _open_regular_nofollow(Path(path))
+    with open(fd, "rb") as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError("file exceeds %d bytes: %s" % (max_bytes, path))
+    return data
+
+
 def copy_regular_file_nofollow(
     source: Path,
     destination: Path,
@@ -972,8 +982,11 @@ def walk_nofollow(top: str | Path) -> Iterator[tuple[str, list[str], list[str]]]
     ``os.walk`` skips a symlinked folder, but on Windows a junction is not a
     symlink, so a scan of ``game/`` would read whatever tree it points to.
     Each folder :func:`is_link` reports, or whose attributes cannot be read,
-    is pruned. Files are still listed as found: a caller that opens one
-    checks it itself (for example with :func:`read_text_nofollow`).
+    is pruned. ``top`` itself is walked even when it is a link (a project's
+    ``game`` folder may be one that stays inside the project): a caller
+    checks where it leads first, with :func:`resolves_inside`. Files are
+    still listed as found: a caller that opens one checks it itself (for
+    example with :func:`read_text_nofollow`).
     """
     for root, dirs, filenames in os.walk(top):
         dirs[:] = [name for name in dirs if not _linked_folder(Path(root) / name)]
@@ -983,8 +996,10 @@ def walk_nofollow(top: str | Path) -> Iterator[tuple[str, list[str], list[str]]]
 def _linked_folder(path: Path) -> bool:
     try:
         return is_link(path)
-    except PrivatePathError:
-        return True  # fail closed: an unreadable reparse state may be a junction
+    except (PrivatePathError, OSError):
+        # Fail closed: an unreadable reparse state may be a junction, and a
+        # POSIX folder listed without search permission cannot be inspected.
+        return True
 
 
 def _reject_link_components(path: Path, *, code: str, include_leaf: bool) -> Path:
@@ -1967,7 +1982,13 @@ def _open_directory_nofollow_windows(
     *,
     action: str = "atomic-write",
     writable: bool = False,
+    access: int | None = None,
 ) -> int:
+    """Open a directory by path without following a reparse point.
+
+    *access* replaces the default list, traverse and read-attributes rights
+    (a read-only chain asks for list access only where it lists).
+    """
     import ctypes
     from ctypes import wintypes
 
@@ -1983,12 +2004,13 @@ def _open_directory_nofollow_windows(
         ctypes.c_void_p,
     ]
     create_file.restype = wintypes.HANDLE
-    access = (
-        _WIN_FILE_LIST_DIRECTORY
-        | _WIN_FILE_TRAVERSE
-        | _WIN_FILE_READ_ATTRIBUTES
-        | _WIN_SYNCHRONIZE
-    )
+    if access is None:
+        access = (
+            _WIN_FILE_LIST_DIRECTORY
+            | _WIN_FILE_TRAVERSE
+            | _WIN_FILE_READ_ATTRIBUTES
+            | _WIN_SYNCHRONIZE
+        )
     if writable:
         access |= _WIN_FILE_ADD_FILE | _WIN_FILE_ADD_SUBDIRECTORY
     handle = create_file(
@@ -2038,9 +2060,14 @@ def _open_directory_chain_nofollow_windows(
     )
     read_access = _WIN_FILE_TRAVERSE | _WIN_FILE_READ_ATTRIBUTES | _WIN_SYNCHRONIZE
     parts = target.parts[1:]
-    handles: list[tuple[int, Path]] = [
-        (_open_directory_nofollow_windows(anchor, action=action), anchor)
-    ]
+    if writable:
+        anchor_handle = _open_directory_nofollow_windows(anchor, action=action)
+    else:
+        # A drive or share root may allow traversal but deny listing: ask
+        # for list access only when the anchor is the folder being listed.
+        anchor_access = read_access | (_WIN_FILE_LIST_DIRECTORY if listable and not parts else 0)
+        anchor_handle = _open_directory_nofollow_windows(anchor, action=action, access=anchor_access)
+    handles: list[tuple[int, Path]] = [(anchor_handle, anchor)]
 
     def reopen_last_writable() -> None:
         old_handle, current_path = handles[-1]

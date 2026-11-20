@@ -53,6 +53,64 @@ def test_continue_reports_a_timeout_when_no_budget_is_left(monkeypatch) -> None:
     assert result["progress"]["stop"] == "timeout"
 
 
+
+def test_continue_holds_observation_and_dismissal_to_its_deadline(monkeypatch) -> None:
+    """With a short timeout the first observe, the click past the line, and the wait after it share one deadline."""
+    clock = _Clock()
+    monkeypatch.setattr(live.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(live.time, "sleep", lambda seconds: None)
+    line = {"observation_id": "o1", "interaction": 3, "forward": "choose", "say_dismiss": "dismiss"}
+    observed: list[float | None] = []
+    dismissed: list[float | None] = []
+
+    def fake_observe(_path, *, screenshot=True, deadline=None):
+        observed.append(deadline)
+        clock.now += 0.3
+        return dict(line)
+
+    class _Client:
+        def dismiss_if(self, *, deadline=None, **_kwargs):
+            dismissed.append(deadline)
+            clock.now += 0.1
+            return {"ok": True}
+
+    budgets: list[float] = []
+
+    def fake_advance_until(*_args, timeout, **_kwargs):
+        budgets.append(timeout)
+        return {"ok": True, "stop": "choose", "steps": 1, "observation": dict(line), "observation_status": "ready"}
+
+    monkeypatch.setattr(live, "observe", fake_observe)
+    monkeypatch.setattr(live, "_with_client", lambda _path, fn: fn(_Client()))
+    monkeypatch.setattr(live, "advance_until", fake_advance_until)
+
+    result = live.play("/tmp/renforge-play-deadline", "o1", timeout=1.0)
+
+    end = 1000.0 + 1.0
+    assert dismissed == [end]
+    assert observed and all(deadline == end for deadline in observed), observed
+    # The wait after the click stops at the deadline, not timeout/2 after the click.
+    assert clock.now <= end + 0.3 + 1e-9
+    # The accepted click is still reported when nothing is left for progression.
+    assert result["clicked_past_line"] is True
+    assert budgets == [] and result["progress"]["stop"] == "timeout"
+
+
+def test_observe_passes_its_deadline_to_the_bridge(monkeypatch) -> None:
+    seen = []
+
+    class _Client:
+        def observe(self, *, screenshot=False, deadline=None):
+            seen.append(deadline)
+            return {"ok": True, "interaction": 1, "stable": True}
+
+    monkeypatch.setattr(live, "_client", lambda _path: _Client())
+    monkeypatch.setattr(live, "_mark_crossed", lambda *_a, **_k: None)
+    live.observe("/tmp/renforge-observe-deadline", screenshot=False, deadline=1234.5)
+    live.observe("/tmp/renforge-observe-deadline", screenshot=False)
+    assert seen == [1234.5, None]
+
+
 def test_progression_reports_a_screenshot_that_does_not_decode(monkeypatch) -> None:
     """PIL raises OSError for a corrupt image; the run's transcript must still come back."""
     frame = {

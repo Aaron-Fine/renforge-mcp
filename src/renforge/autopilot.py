@@ -18,7 +18,6 @@ Ren'Py menu screens: https://www.renpy.org/doc/html/menus.html#menu-arguments
 
 from __future__ import annotations
 
-import json
 import time
 from collections import deque
 from pathlib import Path
@@ -29,6 +28,7 @@ from .project import RenpyProject
 from .scanner import scan_project
 from .sdk import RenpySdk
 from .state import ensure_project_state_dir
+from .util.files import PrivatePathError, write_json_atomic
 
 
 def _story_labels(project_path: str | Path) -> set[str]:
@@ -100,8 +100,9 @@ def autopilot(
     def _emit(done: bool) -> None:
         report = _report(done)
         try:
-            progress_path.write_text(json.dumps(report), encoding="utf-8")
-        except OSError:
+            # No-follow: a link planted at the leaf is refused, never written through.
+            write_json_atomic(progress_path, report, follow_symlinks=False)
+        except (OSError, ValueError, PrivatePathError):
             pass
         if progress_callback is not None:
             try:

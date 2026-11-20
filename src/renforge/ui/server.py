@@ -30,7 +30,7 @@ from ..save_isolation import STATE_MODE_TOKENS, launch_state_mode_error
 from ..state import project_state_dir
 from ..tools import live
 from ..tools import project_ops
-from ..util.files import walk_nofollow
+from ..util.files import resolves_inside, walk_nofollow
 from .activity import read_recent_activity, tail_activity
 from .graph import build_story_map, resolve_game_file_path, resolve_warp_target
 from .errors import error_response
@@ -210,7 +210,8 @@ def _browse_project_directories(project_root: Path, root_id: str | None, raw_pat
 
 def _list_script_files(project_root: Path) -> dict[str, Any]:
     game_root = project_root / "game"
-    if not game_root.is_dir():
+    # A game/ link that leads out of the project would list another tree.
+    if not game_root.is_dir() or not resolves_inside(game_root, project_root):
         return {"ok": True, "files": []}
     try:
         files = sorted(

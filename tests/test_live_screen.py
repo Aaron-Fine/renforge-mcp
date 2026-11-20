@@ -265,6 +265,31 @@ def test_launch_game_echoes_language_from_a_fresh_session(tmp_path, monkeypatch)
     live._SESSIONS.pop(live._key(tmp_path), None)
 
 
+
+def test_a_fresh_session_pins_its_project_spelling_while_it_runs(tmp_path, monkeypatch):
+    """The session's lock and metadata keys must outlive a full spelling cache (see test_state)."""
+    import gc
+
+    from renforge import state
+
+    (tmp_path / "game").mkdir()
+
+    class _Session(types.SimpleNamespace):
+        pass
+
+    session = _Session(**vars(_fresh_session({"current_label": "start"})))
+    monkeypatch.setattr(live, "get_or_install_sdk", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(live, "launch_with_bridge", lambda *_args, **_kwargs: session)
+
+    live.launch_game(str(tmp_path), savedir="temporary")
+    key = str(tmp_path.resolve())
+    assert key in state._PINNED
+    live._SESSIONS.pop(live._key(tmp_path), None)
+    del session
+    gc.collect()
+    assert key not in state._PINNED
+
+
 def test_launch_game_keeps_language_unknown_when_the_bridge_does_not_report_it(tmp_path, monkeypatch):
     (tmp_path / "game").mkdir()
     session = _fresh_session({"current_label": "start"})

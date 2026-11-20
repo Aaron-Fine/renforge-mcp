@@ -283,13 +283,15 @@ Without `savedir="temporary"` the game reads and writes the user's normal saves,
 as launches always have (unless `RENFORGE_ISOLATION=temporary`). That reaches
 the user's save tree, so under `RENFORGE_POLICY=enforce` it is destructive and
 needs `authorize=true`; so does a `savedir` path with `home` omitted (it keeps
-the user's HOME), and a `savedir` or `home` path outside the RenForge state
+the user's HOME, unless `RENFORGE_ISOLATION=temporary` makes it temporary), and a `savedir` or `home` path outside the RenForge state
 folder (the shared temp dir included), since the game writes saves,
 persistent data, and config there. The same isolation knobs, and the same
 rule, apply to `renforge_jump` and `renforge_new_game`: the policy judges the
 request, so a jump or new game with no isolation options needs
 `authorize=true` even when it would inherit an isolated game's isolation.
-Pass `savedir="temporary"` to stay isolated without `authorize`.
+Pass `savedir="temporary"` with `home` omitted to stay isolated without
+`authorize`; an explicit `home`, such as `home="existing"`, overrides the
+private HOME it would select and must itself stay in RenForge's folders.
 
 A running game is handed to a launch only when it matches: it may not use the
 user's saves or HOME where the launch isolates them (checked per component),
@@ -323,9 +325,13 @@ $RENFORGE_STATE_DIR/projects/<name>-<hash>/       # when set
 separate folders. An optional `<project>/.renforge/policy.json` is still read
 from the project, because the project owner writes it. A Live Editor save,
 undo or rollback of a game on another filesystem than `<state>` (a second
-drive) stages its files in `<project>/.renforge/editor-exchange/<transaction>/`
-instead, because the atomic exchange cannot cross filesystems. They are
-removed when the exchange settles; a conflict keeps them as evidence.
+drive) stages its files in `.renforge/editor-exchange/<transaction>/` on the
+game folder's own filesystem instead, because the atomic exchange cannot cross
+filesystems: under the project, `<project>/.renforge/editor-exchange/`, when
+the project is on that filesystem, or under the highest project folder that is
+(for a game folder mounted from elsewhere, under that mounted folder). The
+journal stays in `<state>`. The files are removed when the exchange settles; a
+conflict keeps them as evidence.
 
 ## Toolsets
 
@@ -349,8 +355,8 @@ clients, scripts, and the Live Editor:
 | `docs` | Ren'Py documentation search |
 
 `RENFORGE_TOOLSETS` (comma-separated, default `all`) chooses which groups the
-server lists. Unknown names, or a value that names no group (`,`), stop the
-server at startup.
+server lists. Unknown names, even beside `all` (`all,projecct`), or a value
+that names no group (`,`), stop the server at startup.
 
 ```bash
 RENFORGE_TOOLSETS=play renforge serve          # the agent loop only; no code runs in the game
@@ -746,7 +752,11 @@ session's saves (the player's file is only read); then `action="load"` it.
 The import goes where the running game keeps its saves (a game this server
 launched with `savedir='temporary'` takes it in its own folder); a game whose
 saves are elsewhere and that this server cannot write into is refused with
-`code="SESSION_SAVES_ELSEWHERE"`.
+`code="SESSION_SAVES_ELSEWHERE"`. A running game whose bridge is too old to
+report its save folder is refused with `code="SESSION_SAVES_UNKNOWN"` before
+anything is copied: stop it and launch with `action="launch"`, then import.
+Only when no game is running does the slot go to the session's saves folder,
+which the next launch uses.
 A running game whose bridge does not answer (busy, or still starting) gets
 the ordinary, retryable error, and nothing is copied.
 Under `RENFORGE_POLICY=enforce` both need `authorize=true`, since they read
@@ -935,7 +945,12 @@ renforge_mod(project_path=project, action="remove", name="demo")        # listed
 ```
 
 `package` zips the mod into `<state>/mods/<name>.zip`. `list` shows each
-mod's files plus any `missing` (listed but gone) or `unlisted` files. Paths must
+mod's files plus any `missing` (listed but gone) or `unlisted` files, and
+`pending` files: written by a `write` whose final manifest update failed. A
+retry of that `write` finishes it, and `remove` deletes such a file. A new path
+is recorded with a digest of its content before it is written, so a file that
+appears there after a failed write, holding other bytes, is refused by a retry
+and kept by `remove`. Paths must
 be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 1,000,000 UTF-8 bytes. Symlinks under `game/` are refused. `write` will not take
 over files it did not create: a `game/mods/<name>/` folder without a manifest
@@ -970,8 +985,8 @@ with nothing in the mod, `raw_tail` holds the end of Ren'Py's output. `guide` re
 
 | Tool | Purpose |
 | --- | --- |
-| `renforge_session` | The play-session lifecycle (`play` toolset): `launch` with agent-mode defaults (isolated saves and preferences, no Live Editor), `status`, `save`/`load`/`list` named slots (`load` returns the restored game's observation; `list` also shows the player's `player_slots`), `import` to copy one of the player's slots in, and `stop`. `save`/`load`/`list` refuse a running game whose saves or HOME are outside RenForge's own folders with `SESSION_NOT_ISOLATED`, so they never touch the player's saves. The tools below remain for existing workflows. |
-| `renforge_launch` | Start or reuse a game with the **Live Editor enabled by default** and inject the temporary bridge. After launch, poll `renforge_launch_status`, observe with `renforge_screenshot` / `renforge_scene_tree`, then use guarded clicks — see [LIVE_EDITOR.md](LIVE_EDITOR.md). The call waits at most 20 seconds, then returns `status=starting` while startup continues in the background. A competing launch returns `code=LAUNCH_IN_PROGRESS` instead of discarding its parameters. `warp` accepts `file:line`; `display`/`audio` default to `auto`. Pass `savedir=temporary` (or set `RENFORGE_ISOLATION=temporary`) to **isolate saves, preferences, and HOME** in a disposable folder so the session does not read or write the user's normal Ren'Py state (`~/.renpy` / `game/saves` / host preferences); without it, launches use them as before. Under `RENFORGE_POLICY=enforce`, a launch needs `authorize=true` unless its saves and HOME both stay in RenForge's own folders (`savedir=temporary` with `home` omitted or `temporary`, or state-folder paths for both): that includes the default with no isolation options (unless `RENFORGE_ISOLATION=temporary`), a `savedir` path with `home` omitted, and any `savedir`/`home` path outside the RenForge state folder (the shared temp dir included). A `savedir` path in the state folder with a link on the way to it fails with `SESSION_NOT_ISOLATED` (phase `preparing_isolation`), as do `renforge_jump` and `renforge_new_game`. Ready payloads include `session_id` and an `isolation` object; a reused game started by another process (another RenForge server or the dashboard) has no `session_id`, and its `isolation` is what its bridge reports. A launch that would be handed a running (or starting) game it may not have is refused instead: `SESSION_ISOLATION_MISMATCH` when that game uses the user's saves or HOME where the launch isolates them, or when that game keeps its saves or HOME outside RenForge's own folders where the launch keeps that component in them (checked per component, so `savedir=temporary` with `home=existing` still needs a game whose saves are in RenForge's folders); `SESSION_EVAL_MISMATCH` when this server's toolsets allow no code but that game's bridge runs it. Use `renforge_saves(action="import")` to copy selected host slots into an isolated session. `language` sets `RENPY_LANGUAGE` for a fresh game process (Ren'Py persists it as `preferences.language`, so it changes the stored preference rather than one session; isolate with `savedir=temporary` or restore the language afterward; it cannot change a running session, and only this tool forwards it, so a later jump/new-game/Warp relaunch uses the stored preference). Isolation is different: a jump/new-game/Warp relaunch, or a `renforge_launch` with `warp`, with every isolation knob omitted or `auto` that replaces a game this server (or its dashboard) owns keeps that game's saves and HOME isolation, resolved by the process that owns the game (unless this server's `RENFORGE_ISOLATION=temporary` already isolates it, in which case this server resolves it); it gets a fresh session, so slots imported into the old one are not carried over. Pass the knobs explicitly to choose otherwise. `timeout` controls the background startup deadline. |
+| `renforge_session` | The play-session lifecycle (`play` toolset): `launch` with agent-mode defaults (isolated saves and preferences, no Live Editor), `status`, `save`/`load`/`list` named slots (`load` returns the restored game's observation once it is stable, else `next` says to observe and not load again; `list` also shows the player's `player_slots`), `import` to copy one of the player's slots in, and `stop`. `save`/`load`/`list` refuse a running game whose saves or HOME are outside RenForge's own folders with `SESSION_NOT_ISOLATED`, so they never touch the player's saves. The tools below remain for existing workflows. |
+| `renforge_launch` | Start or reuse a game with the **Live Editor enabled by default** and inject the temporary bridge. After launch, poll `renforge_launch_status`, observe with `renforge_screenshot` / `renforge_scene_tree`, then use guarded clicks — see [LIVE_EDITOR.md](LIVE_EDITOR.md). The call waits at most 20 seconds, then returns `status=starting` while startup continues in the background. A competing launch returns `code=LAUNCH_IN_PROGRESS` instead of discarding its parameters. `warp` accepts `file:line`; `display`/`audio` default to `auto`. Pass `savedir=temporary` (or set `RENFORGE_ISOLATION=temporary`) to **isolate saves, preferences, and HOME** (HOME unless `home` is `existing` or a path) in a disposable folder so the session does not read or write the user's normal Ren'Py state (`~/.renpy` / `game/saves` / host preferences); without it, launches use them as before. Under `RENFORGE_POLICY=enforce`, a launch needs `authorize=true` unless its saves and HOME both stay in RenForge's own folders (`savedir=temporary` with `home` omitted or `temporary`, or state-folder paths for both): that includes the default with no isolation options (unless `RENFORGE_ISOLATION=temporary`), a `savedir` path with `home` omitted, and any `savedir`/`home` path outside the RenForge state folder (the shared temp dir included). A `savedir` path in the state folder with a link on the way to it fails with `SESSION_NOT_ISOLATED` (phase `preparing_isolation`), as do `renforge_jump` and `renforge_new_game`. Ready payloads include `session_id` and an `isolation` object; a reused game started by another process (another RenForge server or the dashboard) has no `session_id`, and its `isolation` is what its bridge reports. A launch that would be handed a running (or starting) game it may not have is refused instead: `SESSION_ISOLATION_MISMATCH` when that game uses the user's saves or HOME where the launch isolates them, or when that game keeps its saves or HOME outside RenForge's own folders where the launch keeps that component in them (checked per component, so `savedir=temporary` with `home=existing` still needs a game whose saves are in RenForge's folders); `SESSION_EVAL_MISMATCH` when this server's toolsets allow no code but that game's bridge runs it. Use `renforge_saves(action="import")` to copy selected host slots into an isolated session. `language` sets `RENPY_LANGUAGE` for a fresh game process (Ren'Py persists it as `preferences.language`, so it changes the stored preference rather than one session; isolate with `savedir=temporary` or restore the language afterward; it cannot change a running session, and only this tool forwards it, so a later jump/new-game/Warp relaunch uses the stored preference). Isolation is different: a jump/new-game/Warp relaunch, or a `renforge_launch` with `warp`, with every isolation knob omitted or `auto` that replaces a game this server (or its dashboard) owns keeps that game's saves and HOME isolation, resolved by the process that owns the game (unless this server's `RENFORGE_ISOLATION=temporary` already isolates it, in which case this server resolves it); it gets a fresh session, so slots imported into the old one are not carried over. Pass the knobs explicitly to choose otherwise. `timeout` controls the background startup deadline. |
 | `renforge_launch_status` | Report `starting`, `ready`, `failed`, `closing`, `closed`, or `idle` for the latest launch. While cancellation is pending it keeps `status=starting` and sets `cancel_requested=true`. Ready payloads repeat `session_id` and `isolation` (only `isolation` for a game started by another process), and report `isolated` and `eval_enabled`. |
 | `renforge_jump` | Restart at a label or `file:line`; it uses the same non-blocking launch lifecycle and the same isolation knobs as `renforge_launch`. With every knob left `auto`, it keeps the saves and HOME isolation of the game it replaces, unless this server's `RENFORGE_ISOLATION=temporary` isolates more (a fresh session: imported slots are not carried over). The policy judges the request, not the game it replaces: under `RENFORGE_POLICY=enforce` a jump needs `authorize=true` unless its saves and HOME both stay in RenForge's own folders (`savedir=temporary` with `home` omitted or `temporary`, or state-folder paths for both), so a jump with no isolation options needs it unless `RENFORGE_ISOLATION=temporary`, even when it would inherit an isolated game's isolation. |
 | `renforge_new_game` | Start a fresh process at the `start` label through the same non-blocking lifecycle and isolation knobs as `renforge_launch`. With every knob left `auto`, it keeps the saves and HOME isolation of the game it replaces, unless this server's `RENFORGE_ISOLATION=temporary` isolates more (a fresh session: imported slots are not carried over). Under `RENFORGE_POLICY=enforce` it needs `authorize=true` by the same rule as `renforge_jump`: unless its saves and HOME both stay in RenForge's own folders, which a call with no isolation options does only when `RENFORGE_ISOLATION=temporary`. |
@@ -983,14 +998,14 @@ with nothing in the mod, `raw_tail` holds the end of Ren'Py's output. `guide` re
 | `renforge_act` | The play step (`play` toolset): act on a control id, `key/<name>`, or nothing with the `observation_id` it was chosen from, plus an optional `value`; then progress to the next decision and return `progress` and the next compact observation. |
 | `renforge_control` | Run one action: `advance`, `rollback`, `toggle_skip`, `toggle_auto`, `toggle_afm`, `game_menu`, `hide_windows`, `quick_save`, `quick_load`, `reload_script`, `restart_interaction`, or `quit`. Emits correlated business events; `wait_for_effect=true` waits for the matching event. |
 | `renforge_send_input` | Send exactly one `text`, named `key`, or logical-coordinate `scroll` operation. Text replaces the contents of a focused Ren'Py `Input` (falling back to character events when needed); `submit=true` presses Enter. Supported keys include `enter`, `esc`, arrows, `pageup`, `pagedown`, `backspace`, `delete`, `home`, `end`, `space`, `tab`, and `f1`-`f12`. Scroll uses `{"x": ..., "y": ..., "direction": "up"|"down", "amount": 1}`. |
-| `renforge_saves` | Run `save`, `load`, `list`, `list_user`, or `import` for named slots. `list` reads the running session; `list_user` observes host slots without a running game; `import` copies selected host slots (`slot`, `slots`, or a glob `pattern`) into a session launched with `savedir=temporary` (any other session, including `savedir=<path>`, is refused with `SAVE_IMPORT_NOT_ISOLATED`), so it never copies the player's saves into a folder the caller chose. `list_user` and `import` read the player's own saves, so under `RENFORGE_POLICY=enforce` they need `authorize=true`, like `load`. `import` returns `imported` (`name`, `files`, `directory` per slot), `missing` (requested names with no host slot), and `refused` (`name`, `file`, `reason`) for each slot file it would not copy: `reason` is `link`, `not_regular`, `too_large`, or `unreadable`, and `file` is null when the slot's whole host folder was refused because it was swapped for a link. A slot counts as imported only when its save file was copied (its `.save.json` sidecar is copied only with it), and `ok` is false with `NO_MATCHING_SAVE_SLOTS` when nothing was. Save/load require `slot`, a slot name such as `1-1` or `quick-1`: one that is a path (absolute, with a drive, a `/` or `\` separator, or `.`/`..`) is refused with `SAVE_SLOT_INVALID` before the game is asked, since Ren'Py would join it onto its save folder; save accepts optional `extra_info`; load returns `restored_label`; `list` accepts an optional `regexp` (applied by Ren'Py) and `list_user` an optional glob `pattern`; both return `name`, `extra_info`, and `mtime` without screenshots. |
+| `renforge_saves` | Run `save`, `load`, `list`, `list_user`, or `import` for named slots. `list` reads the running session; `list_user` observes host slots without a running game; `import` copies selected host slots (`slot`, `slots`, or a glob `pattern`) into a session launched with `savedir=temporary` (any other session, including `savedir=<path>`, is refused with `SAVE_IMPORT_NOT_ISOLATED`), so it never copies the player's saves into a folder the caller chose. `list_user` and `import` read the player's own saves, so under `RENFORGE_POLICY=enforce` they need `authorize=true`, like `load`. `import` returns `imported` (`name`, `files`, `directory` per slot), `missing` (requested names with no host slot), and `refused` (`name`, `file`, `reason`) for each slot file it would not copy: `reason` is `link`, `not_regular`, `too_large`, or `unreadable`, and `file` is null when the slot's whole host folder was refused because it was swapped for a link. A slot counts as imported only when its save file was copied (its `.save.json` sidecar is copied only with it), and `ok` is false with `NO_MATCHING_SAVE_SLOTS` when nothing was. Save/load require `slot`, a slot name such as `1-1` or `quick-1`: one that is a path (absolute, with a drive, a `/` or `\` separator, a `:` (Windows stream syntax), or `.`/`..`) is refused with `SAVE_SLOT_INVALID` before the game is asked, since Ren'Py would join it onto its save folder; save accepts optional `extra_info`; load returns `restored_label`; `list` accepts an optional `regexp` (applied by Ren'Py) and `list_user` an optional glob `pattern`; both return `name`, `extra_info`, and `mtime` without screenshots. |
 | `renforge_screenshot` | Capture a frame; width, height, crop, scale, and `grid`/`rulers`/`crosshair` overlays are optional. Passing only one of `width`/`height` keeps the game's aspect ratio. |
 
 ### Mods
 
 | Tool | Purpose |
 | --- | --- |
-| `renforge_mod` | Write, test, and remove a mod under `game/mods/<name>/`. `action` is `write` (`path`, `content`), `list`, `lint`, `reload`, `remove`, `package`, or `guide`; every action except `list`, `guide`, and `reload` takes `name`. Game files outside that directory are never modified. `write` refuses a folder RenForge did not create and any file the manifest does not list. `lint` lints a temporary shadow copy (the project's init code runs there) and keeps diagnostics in the mod, parse errors included. `remove` deletes only manifest-listed files plus their `.rpyc` siblings, and reports unlisted files under `kept`. `write`, `remove`, and `package` return `files_touched`/`files_deleted`. `reload` hot-reloads the running game and returns `reload`, a compact `observation`, and `errors`. See [Modding](#modding). |
+| `renforge_mod` | Write, test, and remove a mod under `game/mods/<name>/`. `action` is `write` (`path`, `content`), `list`, `lint`, `reload`, `remove`, `package`, or `guide`; every action except `list`, `guide`, and `reload` takes `name`. Game files outside that directory are never modified. `write` creates a new path and lists it, refuses an existing file (or a `.rpy`'s `.rpyc`) the manifest does not list, and refuses a folder that already holds files RenForge did not write. `lint` lints a temporary shadow copy (the project's init code runs there) and keeps diagnostics in the mod, parse errors included. `remove` deletes only manifest-listed files plus their `.rpyc` siblings, and reports unlisted files under `kept`. `write`, `remove`, and `package` return `files_touched`/`files_deleted`. `reload` hot-reloads the running game and returns `reload`, a compact `observation`, and `errors`, plus `settled: false` and `next` when the screen had not settled by the end of the wait (observe again; do not reload again). See [Modding](#modding). |
 
 ### Choices and user interface
 
@@ -1120,7 +1135,9 @@ eligible because its placeholders let lint validate references.
 such as `8.5.3`; the result reports the resolved `sdk_version`. `timeout=0`
 derives
 `min(180, max(1, attestation_timeout*3))` (90 seconds with the default 30-second
-attestation budget); explicit values are clamped to 1-600 seconds. Lint runs
+attestation budget). The tool accepts 0-600 seconds (601 is refused by the
+schema), and an explicit value below 1 second is raised to 1. `checks` is
+omitted, `null`, or exactly `["lint"]`. Lint runs
 with `--error-code`, so reported lint errors produce a non-zero return code.
 `ok` is false for a timeout. `renforge_validate` also reports `ok=false` for a
 truncated transcript, because it always uses `--error-code` and a report it
@@ -1196,7 +1213,8 @@ folders are denied unless `authorize=true` or an allowlist permits them. For
 launches that means: no isolation options (they use the user's saves and HOME
 unless `RENFORGE_ISOLATION=temporary`, and a jump or new game is judged this
 way whatever game it replaces), `savedir=existing` or `home=existing`, a
-`savedir` path with `home` omitted (it keeps the user's HOME), and any
+`savedir` path with `home` omitted (it keeps the user's HOME unless
+`RENFORGE_ISOLATION=temporary`), and any
 `savedir`/`home` path outside the RenForge state folder. Pass
 `savedir="temporary"` (with `home` omitted or `"temporary"`) to launch an
 isolated game without `authorize`; a denied launch's `policy.next_step` says

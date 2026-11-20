@@ -111,8 +111,10 @@ versioning.
   game launched through one spelling is this server's own through another.
   A Live Editor save, undo or rollback of a game on another filesystem than
   the state folder (a second drive) stages its exchange files in
-  `<project>/.renforge/editor-exchange/` instead, because the atomic
-  exchange cannot cross filesystems, and removes them when it is done; a
+  `.renforge/editor-exchange/` on the game folder's own filesystem instead
+  (under the project, or, for a game folder mounted from elsewhere, under
+  that mounted folder), because the atomic exchange cannot cross
+  filesystems, and removes them when it is done; a
   conflict keeps them as evidence.
   `RenpyProject.cache_dir` is gone; `renforge.state.project_state_dir`
   names the folder.
@@ -567,7 +569,8 @@ versioning.
 - Autopilot ends a run when the bridge refuses a choice and lists it under
   `choice_errors`, instead of counting the menu as explored.
 - A `save` or `load` slot that is a path rather than a slot name (absolute,
-  with a drive, a `/` or `\` separator, or `.`/`..`) is refused with
+  with a drive, a `/` or `\` separator, a `:` (on Windows `page:name`
+  writes a stream of the file `page`), or `.`/`..`) is refused with
   `SAVE_SLOT_INVALID` before the game is asked, in `renforge_saves`,
   `renforge_session`, scenario steps and the dashboard. Ren'Py joins the
   slot onto its save folder, so such a slot reached any folder; a
@@ -580,6 +583,72 @@ versioning.
   Windows junction and read the scripts in the tree it points to; symlinked
   folders were already skipped. Stopping a session likewise lists a
   junction in its session root without walking the tree it points to.
+- Autopilot's `autopilot.json` progress report is written without
+  following a link at the file itself; one planted there is refused.
+- `renforge_mod` `write` records a new path as pending, with a digest of
+  its content, before writing it, and lists it once the content is on
+  disk. A file that appears at that path after a failed write is no longer
+  taken over by a retry or deleted by `remove`; a file published before the
+  last manifest update failed is listed as `pending`, finished by a retry,
+  and deleted by `remove`.
+- The play loop's stuck-pause click is timed from the pause's first frame:
+  a long transition before a short pause no longer makes that pause look
+  stuck and clicked the moment it appears.
+- `renforge_session` `import` refuses a running game whose bridge cannot
+  report its save folder with `SESSION_SAVES_UNKNOWN`, before copying
+  anything. It used to treat that game as no game, copy the slot into the
+  session's saves folder, and say to load it, which that game could not.
+- `renforge_session` `load` attaches the restored game's observation only
+  when it is stable; at the wait's timeout it returns `next` (observe, do
+  not load again) instead of an unstable observation offered for
+  `renforge_act`. `renforge_mod` `reload` reports `settled: false` and
+  `next` when the screen had not settled, keeping the reload's result.
+- Continuing with `renforge_act` and no control holds its first
+  observation, the click past a line, and the wait after that click to
+  the step's own `timeout`, so a short timeout is no longer overrun before
+  progression starts. A click accepted in time is still reported.
+- The dashboard's script list and story map no longer list the scripts of
+  a `game/` folder that is a link leading out of the project, as the other
+  scans already refused; a `game/` link that stays inside the project is
+  still scanned. A folder listed without search permission is skipped
+  instead of aborting the whole scan.
+- The launch guidance describes the HOME a launch resolves to:
+  `savedir=temporary` isolates HOME unless `home` is `existing` or a path
+  (`home=existing` keeps the user's HOME and needs `authorize` under
+  enforce), and under `RENFORGE_ISOLATION=temporary` a `savedir` path with
+  `home` omitted gets a temporary HOME and needs no `authorize`. The
+  `savedir` parameter, the launch policy and `authorize` texts, and the
+  server instructions said otherwise.
+- A dashboard stays discoverable after its project folder is renamed only
+  in case on a case-insensitive volume: a client started after the rename
+  accepts the record's earlier spelling of the same folder. Relative paths
+  and paths that lead to another folder are still refused.
+- A game this server runs keeps its bridge lock, metadata and session key
+  after a case-only rename of its folder even once the bounded spelling
+  cache fills and is cleared: the spelling it started with is pinned while
+  the session lives.
+- A launch with `display="none"` is refused with `DISPLAY_UNAVAILABLE`
+  also when a running game would be reused; only a fresh launch refused it
+  before, and reuse reported success for a launch that could never start.
+- `RENFORGE_TOOLSETS` with an unknown name beside `all` (`all,projecct`)
+  stops the server at startup like any unknown name, instead of listing
+  every group.
+- `renforge_validate`'s schema admits `checks` only as `["lint"]` (or
+  omitted or `null`), as its description says, and its `timeout` text
+  states the accepted 0-600 range instead of promising to clamp values the
+  schema refuses.
+- `renforge_run_scenario`'s `files_touched` names the save folder a `save`
+  step wrote to, beside its captures, so a report that fails after a save
+  no longer leaves the save out.
+- On Windows a read through a drive or share root that allows traversal but
+  denies listing (save listing, source reads) no longer fails at the root:
+  the read-only chain asks the root for list access only when it is the
+  folder being listed.
+- The dashboard's recent activity still shows history a pre-release build
+  recorded under a project spelling that differs from the disk only in
+  case (that build gave such a spelling its own state folder). It is read
+  in place, and an unreadable earlier file is skipped; new activity goes to
+  the shared folder.
 
 ## [0.7.6] - 2026-11-18
 

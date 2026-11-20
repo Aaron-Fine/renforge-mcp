@@ -15,8 +15,9 @@ import hashlib
 import os
 import re
 import unicodedata
+import weakref
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from .util.files import ensure_nofollow_directory
 
@@ -123,12 +124,53 @@ def on_disk_spelling(path: Path) -> Path:
     return out
 
 
+# Spellings a running session's bridge lock, metadata and session key were
+# derived from: resolved path -> [folded key, spelling, owner count]. They
+# survive eviction, so after a case-only rename the session keeps its keys
+# for as long as it runs, however many other paths are spelled meanwhile.
+_PINNED: dict[str, list[Any]] = {}
+
+
 def _keep(key: str, folded_key: str, spelling: Path) -> None:
     if len(_SPELLINGS) >= _SPELLINGS_MAX:
         _SPELLINGS.clear()
         _SPELLINGS_BY_FOLD.clear()
+        # A copy: a finalizer (_unpin) may run during this loop.
+        for pinned_key, (pinned_fold, pinned_spelling, _owners) in list(_PINNED.items()):
+            _SPELLINGS[pinned_key] = pinned_spelling
+            _SPELLINGS_BY_FOLD.setdefault(pinned_fold, pinned_spelling)
     _SPELLINGS[key] = spelling
     _SPELLINGS_BY_FOLD.setdefault(folded_key, spelling)
+
+
+def pin_project_spelling(project_root: str | Path, *, owner: object) -> None:
+    """Keep the project's current spelling through cache eviction while *owner* lives.
+
+    Call it when a session starts: its keys (state folder, bridge lock,
+    session registry) then stay the ones it started with. The pin is dropped
+    when *owner* is garbage-collected; an owner that cannot be weakly
+    referenced pins nothing.
+    """
+    key = str(Path(project_root).expanduser().resolve())
+    spelling = on_disk_spelling(Path(key))
+    try:
+        weakref.finalize(owner, _unpin, key)
+    except TypeError:
+        return
+    entry = _PINNED.get(key)
+    if entry is None:
+        _PINNED[key] = [_fold(key), spelling, 1]
+    else:
+        entry[2] += 1
+
+
+def _unpin(key: str) -> None:
+    entry = _PINNED.get(key)
+    if entry is None:
+        return
+    entry[2] -= 1
+    if entry[2] <= 0:
+        del _PINNED[key]
 
 
 def project_state_dir(project_root: str | Path) -> Path:
@@ -138,10 +180,26 @@ def project_state_dir(project_root: str | Path) -> Path:
     spelled as the disk lists it, keeps two projects with the same name apart
     and gives every spelling of one directory the same folder.
     """
-    root = on_disk_spelling(Path(project_root).expanduser().resolve())
+    return _state_dir_for(on_disk_spelling(Path(project_root).expanduser().resolve()))
+
+
+def _state_dir_for(root: Path) -> Path:
     digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:16]
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", root.name).strip("._")[:48] or "project"
     return state_root() / "projects" / f"{name}-{digest}"
+
+
+def prior_project_state_dir(project_root: str | Path) -> Path | None:
+    """The folder an earlier build keyed by the caller's spelling, when it differs.
+
+    Before the key spelled the path as the disk lists it, a spelling that
+    differed only in case (``games/foo`` for ``Games/Foo``) had a folder of
+    its own. Readers of history (the activity log) look there too; nothing
+    is written there any more. ``None`` when the two keys agree.
+    """
+    resolved = Path(project_root).expanduser().resolve()
+    earlier = _state_dir_for(resolved)
+    return None if earlier == project_state_dir(project_root) else earlier
 
 
 def ensure_project_state_dir(project_root: str | Path, *parts: str) -> Path:

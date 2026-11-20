@@ -488,7 +488,8 @@ def build_wrappers(context):
         own folders (``SESSION_NOT_ISOLATED``). ``import`` copies one of the
         player's slots in, only reading the player's file; it refuses a running
         game that keeps its saves somewhere RenForge does not own
-        (``SESSION_SAVES_ELSEWHERE``).
+        (``SESSION_SAVES_ELSEWHERE``) or cannot say where it keeps them
+        (``SESSION_SAVES_UNKNOWN``).
         """
 
         def _session() -> dict:
@@ -577,10 +578,11 @@ def build_wrappers(context):
         def _import(name: str) -> dict:
             """Copy one of the player's slots into the saves a load will read; the player's file is only read.
 
-            That is the running game's save folder when it reports one, else
-            the session's saves folder, which the next launch uses. A game
-            that does not answer (busy, still starting) gets a retryable
-            error and nothing is copied.
+            That is the running game's save folder when it reports one, else,
+            with no game running, the session's saves folder, which the next
+            launch uses. A game that does not answer (busy, still starting)
+            gets a retryable error, and one whose bridge cannot report its
+            folder is refused; nothing is copied for either.
             """
             from ..bridge.client import BridgeError
             from ..save_isolation import import_host_slots
@@ -589,6 +591,14 @@ def build_wrappers(context):
             saves = live.session_saves_dir(project_path)
             try:
                 running = live.running_game_savedir(project_path)
+            except live.SavedirUnknownError:
+                # A game is running but cannot say where it saves: the next
+                # launch's folder may be one it never loads, so copy nothing.
+                message = ("the running game's bridge cannot report where it keeps its saves, so a load could "
+                           "not be shown to read an imported slot; stop the game and launch with "
+                           "renforge_session(action=\"launch\"), which installs the current bridge, then import")
+                return {"ok": False, "code": "SESSION_SAVES_UNKNOWN", "files_touched": [],
+                        "message": message, "error": message}
             except BridgeError as exc:
                 # Busy or still starting: where it saves is unknown, so nothing
                 # is copied anywhere a load might not read; the call may be retried.
@@ -648,7 +658,9 @@ def build_wrappers(context):
             """Return the restored game's observation, so the next act can use it.
 
             The bridge replies before the engine has restarted into the save, so
-            its ``restored_label`` names the label from before the load.
+            its ``restored_label`` names the label from before the load. Only a
+            stable observation with an id is attached; otherwise ``next`` says
+            to observe again.
             """
             from ..compact import compact_observation
 
@@ -656,8 +668,14 @@ def build_wrappers(context):
             result.pop("restarting", None)
             result.pop("ended_interaction", None)
             observation = live.wait_for_stable_observation(project_path, require_id=True)
-            if isinstance(observation, dict) and observation.get("observation_id"):
+            # At the wait's timeout it returns the last observation as it was,
+            # which may be unstable: never offer that one for renforge_act.
+            if (isinstance(observation, dict) and observation.get("stable") is True
+                    and observation.get("observation_id")):
                 result["observation"] = compact_observation(observation)
+            else:
+                result["next"] = ("the save loaded, but the restored game had not settled when the wait ended; "
+                                  "call renforge_observe before renforge_act, and do not load the save again")
             return result
 
         return _log_tool_call(

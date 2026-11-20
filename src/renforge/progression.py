@@ -126,14 +126,18 @@ def run_native_skip(client: Any, fetch: Fetch, *, max_steps: int, deadline: floa
     drains events): a full observation per poll would compete with skipping
     for the game's main thread. The caller settles the final observation.
 
-    ``nudge(interaction)`` is called once when a line has stayed a pause past
-    ``STUCK_PAUSE_SECONDS``. It must post a guarded dismiss that accepts a
+    ``nudge(interaction)`` is called once when one dismissible pause has
+    lasted ``STUCK_PAUSE_SECONDS``, timed from its first frame. It must post a guarded dismiss that accepts a
     pending pause (``dismiss_if(..., allow_pause=True)``); the plain guard
     refuses every unstable frame.
     """
     operation_id = uuid.uuid4().hex
     attempted = False
-    unstable_since = None
+    # The dismissible pause being timed, and when it first appeared. Any
+    # other frame (a transition, a stable one, another interaction's pause)
+    # ends it, so the time before a pause never counts toward it.
+    pause_interaction: object = None
+    pause_since: float | None = None
     nudged = False
     result = {"ok": True, "stop": "timeout", "steps": 0, "observation": None, "mode": "skip"}
     try:
@@ -163,16 +167,19 @@ def run_native_skip(client: Any, fetch: Fetch, *, max_steps: int, deadline: floa
             if not attempted:
                 if not snapshot["stable"]:
                     now = time.monotonic()
-                    unstable_since = unstable_since if unstable_since is not None else now
-                    # A {w=1.0}{nw} line stayed a "pause"
-                    # for the whole budget, yet one click moved it on.
-                    if (nudge is not None and not nudged and now - unstable_since > STUCK_PAUSE_SECONDS
-                            and snapshot.get("unstable_reason") == "pause" and snapshot.get("say_dismiss") == "dismiss"):
-                        nudged = True
-                        nudge(snapshot["interaction"])
+                    if snapshot.get("unstable_reason") == "pause" and snapshot.get("say_dismiss") == "dismiss":
+                        if pause_since is None or pause_interaction != snapshot["interaction"]:
+                            pause_interaction, pause_since = snapshot["interaction"], now
+                        # A {w=1.0}{nw} line stayed a "pause"
+                        # for the whole budget, yet one click moved it on.
+                        if nudge is not None and not nudged and now - pause_since > STUCK_PAUSE_SECONDS:
+                            nudged = True
+                            nudge(snapshot["interaction"])
+                    else:
+                        pause_interaction, pause_since = None, None
                     time.sleep(POLL_SECONDS)
                     continue
-                unstable_since = None
+                pause_interaction, pause_since = None, None
                 boundary = progression_boundary(snapshot)
                 if boundary is not None:
                     result["stop"] = boundary

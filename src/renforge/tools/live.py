@@ -37,7 +37,7 @@ from ..bridge.launcher import (
 from ..captures import validate_capture_name, write_project_capture
 from ..effect_wait import expected_events_for_action
 from ..effect_wait import wait_for_effect as _wait_for_business_effect
-from ..launch_env import LaunchError
+from ..launch_env import LaunchError, resolve_display_strategy
 from ..project import RenpyProject
 from ..save_isolation import (
     apply_launch_isolation_defaults,
@@ -63,7 +63,7 @@ from ..save_isolation import (
 )
 from ..sdk import get_or_install_sdk, require_supported_runtime
 from ..session_registry import canonical_project_path
-from ..state import ensure_project_state_dir, project_state_dir
+from ..state import ensure_project_state_dir, pin_project_spelling, project_state_dir
 from ..state_compact import (
     apply_serialization_limits,
     compact_state,
@@ -957,6 +957,15 @@ def launch_game(
             "message": state_error,
             "error": state_error,
         }
+    # resolve_display_strategy refuses display='none' on a fresh launch; a
+    # reused game must not report success for it either.
+    # Its own refusal is reused, so the two replies cannot drift; "none" is
+    # refused before any capability is consulted.
+    if isinstance(display, str) and display.strip().casefold() == "none":
+        try:
+            resolve_display_strategy(display, None)  # type: ignore[arg-type]
+        except LaunchError as exc:
+            return {**exc.to_dict(), "ready": False}
     wanted = launch_requirements(project.root, savedir=savedir, home=home, persistent=persistent,
                                  preferences=preferences, bridge_eval=bridge_eval)
     eval_on = wanted["eval"]
@@ -1180,6 +1189,9 @@ def launch_game(
     # Reuse checks this: a play-only request must not get a bridge that runs code.
     session_obj.bridge_eval = eval_on
     _SESSIONS[key] = session_obj
+    # Its lock, metadata and session key keep this spelling while it runs,
+    # even after a case-only rename and a full spelling cache.
+    pin_project_spelling(project.root, owner=session_obj)
     label = None
     active_language = None
     try:
@@ -1674,11 +1686,14 @@ def _observation_from_reply(reply: dict) -> dict:
     return snapshot
 
 
-def observe(project_path: str, *, screenshot: bool = True) -> dict:
-    """Read one interaction snapshot. ``stable`` false is still returned."""
+def observe(project_path: str, *, screenshot: bool = True, deadline: float | None = None) -> dict:
+    """Read one interaction snapshot. ``stable`` false is still returned.
+
+    ``deadline`` (a ``time.monotonic()`` value) bounds the bridge request.
+    """
 
     def _handler(client: BridgeClient) -> dict:
-        reply = client.observe(screenshot=bool(screenshot))
+        reply = client.observe(screenshot=bool(screenshot), deadline=deadline)
         snapshot = _observation_from_reply(reply if isinstance(reply, dict) else {})
         if isinstance(reply, dict) and snapshot.get("ok") is not False:
             _mark_crossed(project_path, client, reply.get("event_seq"))
@@ -1827,8 +1842,10 @@ def play(
     if control_id is None:
         if value is not None:
             return {"ok": False, "error": "value needs a control id"}
+        # One deadline for the whole step: the first observe, the click past
+        # a line, the wait for it to end, and progression.
         deadline = time.monotonic() + timeout
-        current = observe(project_path, screenshot=False)
+        current = observe(project_path, screenshot=False, deadline=deadline)
         if current.get("ok") is False:
             return current
         # Continuing never picks a choice: progression stops at the next
@@ -1842,13 +1859,13 @@ def play(
             def _dismiss(client: BridgeClient) -> dict:
                 return client.dismiss_if(interaction=current["interaction"],
                                          observation_id=current["observation_id"],
-                                         past_optional_controls=True)
+                                         past_optional_controls=True, deadline=deadline)
             clicked_past = _with_client(project_path, _dismiss)
             if clicked_past.get("ok"):
                 # The dismiss is queued; let the line end before progressing.
-                until = time.monotonic() + min(2.0, timeout / 2)
+                until = min(deadline, time.monotonic() + min(2.0, timeout / 2))
                 while time.monotonic() < until:
-                    now = observe(project_path, screenshot=False)
+                    now = observe(project_path, screenshot=False, deadline=deadline)
                     if now.get("ok") is False or now.get("interaction") != current["interaction"]:
                         break
                     time.sleep(0.02)
@@ -2358,15 +2375,21 @@ def session_saves_dir(project_path: str | Path) -> Path:
     return project_state_dir(project_path) / "saves"
 
 
+class SavedirUnknownError(BridgeError):
+    """A game is running, but its bridge predates ``session_info`` and cannot say where it saves."""
+
+
 def running_game_savedir(project_path: str | Path) -> str | None:
     """The save folder the project's running game uses, or ``None``.
 
     For a game this process runs it is the folder this process gave it;
-    any other game is asked. ``None`` means no game is running, or one
-    whose bridge predates ``session_info`` cannot say. Any other failure
-    (a busy or still-starting game, a dropped connection) proves nothing
-    about where the game saves, so it raises :class:`BridgeError` for the
-    caller to report as retryable instead of guessing a folder.
+    any other game is asked. ``None`` means no game is running (or one
+    that reports no folder). A running game whose bridge predates
+    ``session_info`` raises :class:`SavedirUnknownError`: a game is there,
+    so a folder chosen without it may be one it never loads. Any other
+    failure (a busy or still-starting game, a dropped connection) proves
+    nothing about where the game saves, so it raises :class:`BridgeError`
+    for the caller to report as retryable instead of guessing a folder.
     """
     known = _known_savedir(project_path)
     if known is not None:
@@ -2379,7 +2402,7 @@ def running_game_savedir(project_path: str | Path) -> str | None:
         raise
     except BridgeError as exc:
         if "unknown_command" in str(exc) or "unknown command" in str(exc):
-            return None
+            raise SavedirUnknownError(str(exc)) from exc
         raise
     except Exception as exc:
         raise BridgeError(f"{type(exc).__name__}: {exc}") from exc
@@ -3382,6 +3405,8 @@ def run_scenario(
     deadline = started + float(timeout)
     results: list[dict[str, Any]] = []
     capture_paths: list[str] = []
+    # Receipts steps return already formatted (a save's savedir), kept as given.
+    step_receipts: list[str] = []
     last_action: str | None = None
     overall_ok = True
 
@@ -3564,6 +3589,8 @@ def run_scenario(
                 reply = saves(project_path, "save", slot=str(slot))
                 if not reply.get("ok"):
                     raise RuntimeError(reply.get("error") or "save failed")
+                step_receipts.extend(item for item in reply.get("files_touched") or ()
+                                     if isinstance(item, str) and item)
                 step_result["status"] = "passed"
                 last_action = "save(%s)" % slot
             elif action == "load":
@@ -3637,9 +3664,10 @@ def run_scenario(
         "passed": passed,
         "failed": failed,
         "duration_ms": duration_ms,
-        "files_touched": [
-            receipt_path(project_path, path) for path in capture_paths
-        ],
+        "files_touched": list(dict.fromkeys([
+            *step_receipts,
+            *(receipt_path(project_path, path) for path in capture_paths),
+        ])),
         "steps": results,
     }
     if not report["ok"]:

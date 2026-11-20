@@ -121,3 +121,64 @@ def test_a_case_only_rename_keeps_this_process_on_its_folder_when_resolve_respel
     assert state.control_dir(renamed) == first / "control"
     _new_process()
     assert state.project_state_dir(renamed) != first
+
+
+def test_a_running_sessions_spelling_survives_the_cache_filling_up(tmp_path: Path, monkeypatch) -> None:
+    """Eviction must not move a running session off its lock and metadata after a case-only rename."""
+    import gc
+
+    project = tmp_path / "Games" / "Foo"
+    project.mkdir(parents=True)
+    first = state.project_state_dir(project)
+
+    class _Session:
+        pass
+
+    session = _Session()
+    state.pin_project_spelling(project, owner=session)
+    renamed = tmp_path / "Games" / "foo"
+    project.rename(renamed)
+    _pretend_case_insensitive(tmp_path, monkeypatch)
+    for n in range(state._SPELLINGS_MAX + 1):
+        state._keep(f"/unrelated/{n}", f"/unrelated/{n}", Path(f"/unrelated/{n}"))
+
+    assert state.project_state_dir(project) == first
+    assert state.project_state_dir(renamed) == first
+
+    # Once the session is gone its spelling is an ordinary cache entry again.
+    del session
+    gc.collect()
+    for n in range(state._SPELLINGS_MAX + 1):
+        state._keep(f"/other/{n}", f"/other/{n}", Path(f"/other/{n}"))
+    assert state.project_state_dir(renamed) != first
+
+
+def test_activity_recorded_under_the_earlier_state_key_stays_readable(tmp_path: Path, monkeypatch) -> None:
+    """Before the key spelled paths as the disk does, `games/foo` had its own folder for `Games/Foo`."""
+    import json
+
+    from renforge.ui.activity import read_recent_activity
+
+    project = tmp_path / "Games" / "Foo"
+    project.mkdir(parents=True)
+    _pretend_case_insensitive(tmp_path, monkeypatch)
+    spelled = tmp_path / "games" / "foo"
+    resolved = spelled.expanduser().resolve()
+    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:16]
+    earlier = state.state_root() / "projects" / f"foo-{digest}"
+    assert earlier != state.project_state_dir(spelled)
+    earlier.mkdir(parents=True)
+    (earlier / "activity.jsonl").write_text(json.dumps({"ts": 1, "tool": "old"}) + "\n", encoding="utf-8")
+    current = state.project_state_dir(spelled)
+    current.mkdir(parents=True)
+    (current / "activity.jsonl").write_text(json.dumps({"ts": 2, "tool": "new"}) + "\n", encoding="utf-8")
+
+    tools = [event["payload"]["tool"] for event in read_recent_activity(spelled)]
+    assert tools == ["old", "new"]
+    # An earlier file that cannot be read must not hide the current history.
+    (earlier / "activity.jsonl").write_bytes(b"\xff\xfe not utf-8\n")
+    assert [event["payload"]["tool"] for event in read_recent_activity(spelled)] == ["new"]
+
+    # The disk's own spelling had no other folder, so it has nothing earlier to read.
+    assert state.prior_project_state_dir(project) is None
+    assert [event["payload"]["tool"] for event in read_recent_activity(project)] == ["new"]
