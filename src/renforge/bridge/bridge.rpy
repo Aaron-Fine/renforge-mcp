@@ -6858,12 +6858,24 @@ init python:
     def _renforge_explain_snippet(text, needle):
         """Up to 60 characters either side of the first case-insensitive ``needle``.
 
-        The window is found in ``text`` itself: an index into its casefold
-        can point past the match, since folding changes length (sharp s
-        folds to "ss"). A match only folding finds shows the start of the text."""
-        import re as _re
-        found = _re.search(_re.escape(needle), text, _re.IGNORECASE)
-        start, end = (found.start(), found.end()) if found else (0, len(needle))
+        The match is found as the search finds it, by ``casefold``, then
+        mapped back to ``text``: folding changes length (sharp s folds to
+        "ss"), so an index into the folded text is not one into ``text``.
+        """
+        folded_needle = needle.casefold()
+        folded = []
+        owners = []  # owners[i]: the index in ``text`` of folded character i
+        for index, char in enumerate(text):
+            piece = char.casefold()
+            folded.append(piece)
+            owners.extend([index] * len(piece))
+        at = "".join(folded).find(folded_needle) if folded_needle else -1
+        if at < 0:
+            start, end = 0, len(needle)
+        else:
+            start = owners[at]
+            last = at + len(folded_needle) - 1
+            end = owners[last] + 1 if last < len(owners) else len(text)
         return text[max(0, start - 60):end + 60]
 
 

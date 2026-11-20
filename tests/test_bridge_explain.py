@@ -515,3 +515,16 @@ def test_explain_source_on_a_menu_shows_what_each_choice_does(running_bridge):
     assert ("choice", 0, "Agree") in rows and ("choice", 0, "Hesitate") in rows
     assert ("python", 1, "ally.affection += 10") in rows
     assert ("jump", 1, "chapter1_ending") in rows
+
+
+def test_explain_snippet_shows_a_match_only_case_folding_finds(running_bridge):
+    """``STRASSE`` finds ``Straße`` by casefold; the excerpt must include it."""
+    snippet = running_bridge.globs["_renforge_explain_snippet"]
+    text = "x" * 150 + " the Hauptstraße is closed " + "y" * 150
+
+    excerpt = snippet(text, "STRASSE")
+    assert "Hauptstraße" in excerpt
+    assert len(excerpt) <= len("straße") + 120
+
+    plain = snippet("a" * 100 + "Needle" + "b" * 100, "needle")
+    assert plain == "a" * 60 + "Needle" + "b" * 60
