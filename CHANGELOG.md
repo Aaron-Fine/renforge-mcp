@@ -61,7 +61,10 @@ versioning.
   these actions keep their promise of never touching the player's saves.
   `renforge_session(action="launch")` is refused the same way, before
   anything starts, when its saves folder in the state folder, or any folder
-  on the way to it, is a link, even one to another folder there.
+  on the way to it, is a link, even one to another folder there. So are
+  `renforge_launch`, `renforge_jump`, `renforge_new_game`, and the Python
+  launcher for a `savedir` path that lands in the state folder, however it
+  is spelled (phase `preparing_isolation`).
 - `renforge_validate` (0.7.5) is in the `project` toolset.
 - Write receipts (0.7.4) for files in the state folder (captures, scene
   snapshots, the activity log's `files_touched_file` sidecar) are absolute
