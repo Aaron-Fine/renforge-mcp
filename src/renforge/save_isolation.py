@@ -916,11 +916,14 @@ def slot_name_error(slot: str) -> str | None:
     suffix)``, so a slot that is a path (absolute, with a drive, with either
     separator, or ``.``/``..``) would read or write a file outside the
     game's save folder, the player's own saves included. Such a slot is
-    refused on every OS, whatever separators the host uses.
+    refused on every OS, whatever separators the host uses. A colon is
+    refused too: on Windows ``page:name`` is stream syntax, writing a stream
+    of the file ``page`` rather than a save file. The bridge's
+    ``_renforge_slot_name_error`` keeps the same rule.
     """
-    # Both separators on every OS (os.sep and os.altsep are among them), and
-    # a Windows drive such as "C:", which os.path.join honours there.
-    if (any(char in slot for char in ("/", "\\", "\x00")) or slot.strip() in {".", ".."}
+    # Both separators on every OS (os.sep and os.altsep are among them), a
+    # colon, and a Windows drive such as "C:", which os.path.join honours there.
+    if (any(char in slot for char in ("/", "\\", "\x00", ":")) or slot.strip() in {".", ".."}
             or PureWindowsPath(slot).drive):
         return "slot must be a save slot name such as 1-1 or quick-1, not a path"
     return None

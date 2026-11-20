@@ -567,7 +567,8 @@ versioning.
 - Autopilot ends a run when the bridge refuses a choice and lists it under
   `choice_errors`, instead of counting the menu as explored.
 - A `save` or `load` slot that is a path rather than a slot name (absolute,
-  with a drive, a `/` or `\` separator, or `.`/`..`) is refused with
+  with a drive, a `/` or `\` separator, a `:` (on Windows `page:name`
+  writes a stream of the file `page`), or `.`/`..`) is refused with
   `SAVE_SLOT_INVALID` before the game is asked, in `renforge_saves`,
   `renforge_session`, scenario steps and the dashboard. Ren'Py joins the
   slot onto its save folder, so such a slot reached any folder; a

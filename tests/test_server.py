@@ -638,6 +638,8 @@ def test_session_saves_pass_a_busy_bridge_through_as_a_retryable_error(tmp_path,
 @pytest.mark.parametrize("slot", [
     "/home/player/.renpy/a-game/1-1", "../../player/1-1", "sub/1-1", "sub\\1-1", "C:1-1",
     "\\\\server\\share\\1-1", ".", "..", "1-1\x00",
+    # Windows stream syntax: a stream of the file "page", not a save file.
+    "page:stream", "1-1:$DATA",
 ])
 @pytest.mark.parametrize("action", ["save", "load"])
 def test_save_and_load_refuse_a_slot_that_is_a_path(tmp_path, monkeypatch, slot, action) -> None:
