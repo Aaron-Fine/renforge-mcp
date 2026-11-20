@@ -1043,28 +1043,28 @@ def normalize_language(language: str | None) -> str | None:
 
 
 def _state_savedir_spelling(savedir: str) -> Path | None:
-    """Return ``savedir`` spelled from the resolved state folder, or None when it lands elsewhere.
+    """Return ``savedir`` spelled from the resolved state folder, or None when no part of it is there.
 
     The path is judged exactly as :func:`resolve_launch_isolation` will
     resolve it: absolute, ``~`` expanded, and with no ``..`` collapsed by
-    text, since a link is followed before the ``..`` after it. So an alias
-    of the state folder (an unresolved ``RENFORGE_STATE_DIR``, or a linked
-    ``/home``) and a ``..`` after a link both get no pass.
+    text, since a link is followed before the ``..`` after it. Each prefix
+    of it is resolved in turn, so an alias of the state folder (an
+    unresolved ``RENFORGE_STATE_DIR``, or a linked ``/home``) and a ``..``
+    after a link both get no pass.
 
-    A path that lands in the state folder must enter it at its top and then
-    follow no link: every longer prefix must land where its text says. The
-    returned spelling starts at the resolved :func:`state_root`, with the
-    rest of the path collapsed, ready for a no-follow create. Anything else
-    that lands in the state folder is refused with ``SESSION_NOT_ISOLATED``,
-    as is a path whose resolution raises.
+    Only a path none of whose prefixes lands in the state folder is left to
+    the caller (None). Otherwise it must enter the state folder at its top,
+    and every longer prefix must land where its text says: a link inside
+    the tree, whether to elsewhere in it or out of it, is refused, wherever
+    the whole path ends up. The returned spelling starts at the resolved
+    :func:`state_root`, with the rest collapsed, ready for a no-follow
+    create. Refusals, and a path whose resolution raises, are
+    ``SESSION_NOT_ISOLATED``.
     """
     root = state_root()
-    raw = Path(savedir).expanduser().absolute()
-    parts = raw.parts
+    parts = Path(savedir).expanduser().absolute().parts
+    expected: Path | None = None
     try:
-        if not _is_within(raw.resolve(), root):
-            return None
-        expected: Path | None = None
         for depth in range(1, len(parts) + 1):
             landed = Path(*parts[:depth]).resolve()
             if expected is None:
@@ -1079,8 +1079,6 @@ def _state_savedir_spelling(savedir: str) -> Path | None:
                 raise _state_savedir_refusal(f"{savedir!r} follows a link inside it")
     except (OSError, RuntimeError) as exc:
         raise _state_savedir_refusal(f"could not resolve {savedir!r}: {exc}") from exc
-    if expected is None:  # resolve() of the whole landed inside, but no prefix did
-        raise _state_savedir_refusal(f"{savedir!r} enters it through a link below its top")
     return expected
 
 
@@ -1107,14 +1105,14 @@ def _state_savedir_refusal(detail: str) -> LaunchError:
 def _make_state_savedir(savedir: str | None) -> str | None:
     """Make a savedir in RenForge's state folder without following links; return the savedir to use.
 
-    A link planted on the way (even to another folder of the state tree)
-    must not choose where the launch saves, so such a folder is made here
-    before :func:`resolve_launch_isolation` resolves it. Whether a savedir
-    is in the state folder is judged by where the launcher will land it, so
-    a spelling through a link to the state folder, or a ``..`` after a
-    link, is caught too (see :func:`_state_savedir_spelling`). A savedir
-    that lands anywhere else is returned unchanged: one the caller chose
-    may sit behind a link.
+    A link planted on the way (out of the state tree, or to another folder
+    of it) must not choose where the launch saves, so such a folder is made
+    here before :func:`resolve_launch_isolation` resolves it. Whether a
+    savedir passes through the state folder is judged prefix by prefix as
+    the launcher will resolve it, so a spelling through a link to the state
+    folder, or a ``..`` after a link, is caught too (see
+    :func:`_state_savedir_spelling`). A savedir that never passes through
+    it is returned unchanged: one the caller chose may sit behind a link.
     Ren'Py still opens its save files by path later, so this narrows, but
     cannot close, the window in which a link swapped in redirects them.
     """

@@ -2857,94 +2857,6 @@ def test_a_savedir_in_the_state_folder_is_made_without_following_links(monkeypat
     assert saves.is_dir() and not saves.is_symlink()
 
 
-def test_a_savedir_spelled_through_an_alias_of_the_state_folder_is_still_made_without_following_links(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """Where the savedir lands decides, not how it is spelled: an alias of the state folder gets no pass."""
-    monkeypatch.setenv("DISPLAY", ":0")
-    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
-    project, sdk, project_root = _make_project(tmp_path)
-    other = tmp_path / "state" / "projects" / "another-project" / "saves"
-    other.mkdir(parents=True)
-    saves = project_state_dir(project_root) / "saves"
-    saves.parent.mkdir(parents=True)
-    alias = tmp_path / "alias"
-    try:
-        os.symlink(tmp_path / "state", alias, target_is_directory=True)
-        os.symlink(other, saves, target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks unavailable")
-    spelled = alias / saves.relative_to(tmp_path / "state")
-
-    refused = _launch_until_token_check(sdk, project, monkeypatch, str(spelled))
-
-    assert refused.code == "SESSION_NOT_ISOLATED", refused.message
-    assert list(other.iterdir()) == []
-
-    # Without the planted link, the alias spelling is fine and gets a real folder.
-    saves.unlink()
-    assert _launch_until_token_check(sdk, project, monkeypatch, str(spelled)).code == "BRIDGE_TOKEN_INVALID"
-    assert saves.is_dir() and not saves.is_symlink()
-
-
-def test_a_link_from_outside_into_the_middle_of_the_state_folder_is_refused(monkeypatch, tmp_path: Path) -> None:
-    """A savedir that enters the state folder below its top cannot be vouched for, so it fails closed."""
-    monkeypatch.setenv("DISPLAY", ":0")
-    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
-    project, sdk, _root = _make_project(tmp_path)
-    inside = tmp_path / "state" / "projects" / "another-project"
-    inside.mkdir(parents=True)
-    try:
-        os.symlink(inside, tmp_path / "shortcut", target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks unavailable")
-
-    refused = _launch_until_token_check(sdk, project, monkeypatch, str(tmp_path / "shortcut" / "saves"))
-
-    assert refused.code == "SESSION_NOT_ISOLATED", refused.message
-    assert not (inside / "saves").exists()
-
-
-def test_a_dotdot_after_an_outside_link_is_judged_where_the_launcher_lands(monkeypatch, tmp_path: Path) -> None:
-    """``out/M/../saves`` is judged as the launcher resolves it (link first, then ``..``), not as text."""
-    monkeypatch.setenv("DISPLAY", ":0")
-    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
-    project, sdk, project_root = _make_project(tmp_path)
-    other = tmp_path / "state" / "projects" / "another-project" / "saves"
-    other.mkdir(parents=True)
-    saves = project_state_dir(project_root) / "saves"
-    (saves.parent / "sub").mkdir(parents=True)
-    (tmp_path / "out").mkdir()
-    try:
-        os.symlink(saves.parent / "sub", tmp_path / "out" / "M", target_is_directory=True)
-        os.symlink(other, saves, target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks unavailable")
-
-    refused = _launch_until_token_check(sdk, project, monkeypatch, str(tmp_path / "out" / "M" / ".." / "saves"))
-
-    assert refused.code == "SESSION_NOT_ISOLATED", refused.message
-    assert list(other.iterdir()) == []
-    assert not (tmp_path / "out" / "saves").exists()
-
-
-def test_a_dotdot_inside_the_state_folder_is_followed_without_links(monkeypatch, tmp_path: Path) -> None:
-    """Through an alias of the state folder, a ``..`` over a real folder lands where it reads."""
-    monkeypatch.setenv("DISPLAY", ":0")
-    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
-    project, sdk, project_root = _make_project(tmp_path)
-    saves = project_state_dir(project_root) / "saves"
-    (saves.parent / "sub").mkdir(parents=True)
-    try:
-        os.symlink(tmp_path / "state", tmp_path / "alias", target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks unavailable")
-    spelled = tmp_path / "alias" / saves.parent.relative_to(tmp_path / "state") / "sub" / ".." / "saves"
-
-    assert _launch_until_token_check(sdk, project, monkeypatch, str(spelled)).code == "BRIDGE_TOKEN_INVALID"
-    assert saves.is_dir() and not saves.is_symlink()
-
-
 def test_a_savedir_outside_the_state_folder_may_sit_behind_a_link(monkeypatch, tmp_path: Path) -> None:
     """Only the state folder is made no-follow: a chosen savedir elsewhere behind a symlink still works."""
     monkeypatch.setenv("DISPLAY", ":0")
@@ -2961,3 +2873,152 @@ def test_a_savedir_outside_the_state_folder_may_sit_behind_a_link(monkeypatch, t
 
     assert error.code == "BRIDGE_TOKEN_INVALID"
     assert (real / "saves").is_dir()
+
+
+def _link(link: Path, target: Path) -> None:
+    """Make ``link`` a directory symlink to ``target``, or skip the test where links are unavailable."""
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+
+
+# Each row builds its folders under tmp, with RENFORGE_STATE_DIR=<tmp>/state
+# unless it sets another, and returns (savedir, expected, untouched). expected
+# is "refused", "passed" (returned unchanged) or the folder that must be made;
+# a refused row's ``untouched`` folder must stay empty.
+def _plain_inside(tmp, mp):
+    return str(tmp / "state/projects/p/saves"), tmp / "state/projects/p/saves", None
+
+
+def _planted_link_to_outside(tmp, mp):
+    player = tmp / "home/.renpy/a-game"
+    player.mkdir(parents=True)
+    _link(tmp / "state/projects/p/saves", player)
+    return str(tmp / "state/projects/p/saves"), "refused", player
+
+
+def _planted_link_to_outside_below_the_savedir(tmp, mp):
+    player = tmp / "home/.renpy/a-game"
+    player.mkdir(parents=True)
+    _link(tmp / "state/projects/p/saves", player)
+    return str(tmp / "state/projects/p/saves/x"), "refused", player
+
+
+def _planted_link_to_outside_through_an_alias(tmp, mp):
+    player = tmp / "home/.renpy/a-game"
+    player.mkdir(parents=True)
+    _link(tmp / "state/projects/p/saves", player)
+    _link(tmp / "alias", tmp / "state")
+    return str(tmp / "alias/projects/p/saves"), "refused", player
+
+
+def _planted_link_inside(tmp, mp):
+    other = tmp / "state/projects/other/saves"
+    other.mkdir(parents=True)
+    _link(tmp / "state/projects/p/saves", other)
+    return str(tmp / "state/projects/p/saves"), "refused", other
+
+
+def _dotdot_after_an_outside_link(tmp, mp):
+    other = tmp / "state/projects/other/saves"
+    other.mkdir(parents=True)
+    (tmp / "state/projects/p/sub").mkdir(parents=True)
+    _link(tmp / "state/projects/p/saves", other)
+    _link(tmp / "out/M", tmp / "state/projects/p/sub")
+    return str(tmp / "out/M/../saves"), "refused", other
+
+
+def _outside_link_into_the_middle(tmp, mp):
+    middle = tmp / "state/projects/other"
+    middle.mkdir(parents=True)
+    _link(tmp / "out/shortcut", middle)
+    return str(tmp / "out/shortcut/saves"), "refused", middle
+
+
+def _dotdot_over_a_real_folder_inside(tmp, mp):
+    (tmp / "state/projects/p/sub").mkdir(parents=True)
+    return str(tmp / "state/projects/p/sub/../saves"), tmp / "state/projects/p/saves", None
+
+
+def _alias_of_the_state_root(tmp, mp):
+    (tmp / "state").mkdir()
+    _link(tmp / "alias", tmp / "state")
+    return str(tmp / "alias/projects/p/saves"), tmp / "state/projects/p/saves", None
+
+
+def _state_dir_given_through_a_link(tmp, mp):
+    (tmp / "state").mkdir()
+    _link(tmp / "statelink", tmp / "state")
+    mp.setenv("RENFORGE_STATE_DIR", str(tmp / "statelink"))
+    return str(tmp / "statelink/projects/p/saves"), tmp / "state/projects/p/saves", None
+
+
+def _state_dir_given_with_dotdot(tmp, mp):
+    (tmp / "x").mkdir()
+    mp.setenv("RENFORGE_STATE_DIR", str(tmp / "x/../state"))
+    return str(tmp / "x/../state/projects/p/saves"), tmp / "state/projects/p/saves", None
+
+
+def _state_dir_given_with_tilde(tmp, mp):
+    mp.setenv("HOME", str(tmp))
+    mp.setenv("RENFORGE_STATE_DIR", "~/state")
+    return "~/state/projects/p/saves", tmp / "state/projects/p/saves", None
+
+
+def _state_dir_given_relative(tmp, mp):
+    mp.chdir(tmp)
+    mp.setenv("RENFORGE_STATE_DIR", "state")
+    return "state/projects/p/saves", tmp / "state/projects/p/saves", None
+
+
+def _caller_savedir_behind_an_outside_link(tmp, mp):
+    (tmp / "real").mkdir()
+    _link(tmp / "linked", tmp / "real")
+    return str(tmp / "linked/saves"), "passed", None
+
+
+def _not_a_path(tmp, mp):
+    return "temporary", "passed", None
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        _plain_inside,
+        _planted_link_to_outside,
+        _planted_link_to_outside_below_the_savedir,
+        _planted_link_to_outside_through_an_alias,
+        _planted_link_inside,
+        _dotdot_after_an_outside_link,
+        _outside_link_into_the_middle,
+        _dotdot_over_a_real_folder_inside,
+        _alias_of_the_state_root,
+        _state_dir_given_through_a_link,
+        _state_dir_given_with_dotdot,
+        _state_dir_given_with_tilde,
+        _state_dir_given_relative,
+        _caller_savedir_behind_an_outside_link,
+        _not_a_path,
+    ],
+    ids=lambda build: build.__name__.lstrip("_"),
+)
+def test_a_state_folder_savedir_is_judged_by_where_the_launcher_lands_it(build, monkeypatch, tmp_path: Path) -> None:
+    """Every spelling seen so far: a savedir touching the state folder is made there no-follow or refused."""
+    from renforge.bridge.launcher import _make_state_savedir
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    savedir, expected, untouched = build(tmp_path, monkeypatch)
+
+    if expected == "refused":
+        with pytest.raises(LaunchError) as excinfo:
+            _make_state_savedir(savedir)
+        assert excinfo.value.code == "SESSION_NOT_ISOLATED", excinfo.value.message
+        assert excinfo.value.phase == "preparing_isolation"
+        assert list(untouched.iterdir()) == []
+    elif expected == "passed":
+        assert _make_state_savedir(savedir) == savedir
+    else:
+        assert _make_state_savedir(savedir) == str(expected)
+        assert expected.is_dir() and not expected.is_symlink()

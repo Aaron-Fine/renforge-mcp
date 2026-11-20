@@ -208,17 +208,18 @@ subsequent storage initialization and script reload. It excludes the original
 The adapter uses Ren'Py's file storage and scan lifecycle and is tested against
 the supported 8.5.3 SDK. SDK upgrades must pass that real-engine contract.
 
-A `savedir` path that lands in the RenForge state folder is made there
-without following links before isolation is resolved. Where it lands is
-judged as the launcher resolves it, so a spelling through a link to that
-folder, or a `..` after a link, counts. If a folder on the way to it is a
-link (one planted in the state folder, even to another folder there), or the
-path enters the state folder through a link below its top, `renforge_launch`,
-`renforge_jump`, `renforge_new_game`, and the Python launcher refuse with
-`code="SESSION_NOT_ISOLATED"` (phase `preparing_isolation`) before the game
-starts. For the tools this is the launch's failed status, which
-`renforge_launch_status` reports once the call has returned `starting`. A
-`savedir` that lands outside the state folder may still sit behind a link.
+A `savedir` path that passes through the RenForge state folder is made there
+without following links before isolation is resolved. That is judged as the
+launcher resolves the path, step by step, so a spelling through a link to that
+folder, or a `..` after a link, counts. If a folder on the way is a link (one
+planted in the state folder, whether it leads out of it or to another folder
+there), or the path enters the state folder through a link below its top,
+`renforge_launch`, `renforge_jump`, `renforge_new_game`, and the Python
+launcher refuse with `code="SESSION_NOT_ISOLATED"` (phase
+`preparing_isolation`) before the game starts. For the tools this is the
+launch's failed status, which `renforge_launch_status` reports once the call
+has returned `starting`. A `savedir` that never passes through the state folder
+may still sit behind a link.
 
 Persistent data and preferences are isolated through storage selection, not
 through deletion or a late reset. Their `auto` modes follow the save directory:

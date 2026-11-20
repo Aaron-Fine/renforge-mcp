@@ -63,9 +63,9 @@ versioning.
   anything starts, when its saves folder in the state folder, or any folder
   on the way to it, is a link, even one to another folder there. So are
   `renforge_launch`, `renforge_jump`, `renforge_new_game`, and the Python
-  launcher for a `savedir` path that lands in the state folder, judged as
-  the launcher resolves it, so through a link to that folder or a `..`
-  after a link too (phase `preparing_isolation`).
+  launcher for a `savedir` path that passes through the state folder,
+  judged as the launcher resolves it, so through a link to that folder or a
+  `..` after a link too (phase `preparing_isolation`).
 - `renforge_validate` (0.7.5) is in the `project` toolset.
 - Write receipts (0.7.4) for files in the state folder (captures, scene
   snapshots, the activity log's `files_touched_file` sidecar) are absolute
