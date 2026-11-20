@@ -37,7 +37,7 @@ from ..bridge.launcher import (
 from ..captures import validate_capture_name, write_project_capture
 from ..effect_wait import expected_events_for_action
 from ..effect_wait import wait_for_effect as _wait_for_business_effect
-from ..launch_env import LaunchError
+from ..launch_env import LaunchError, resolve_display_strategy
 from ..project import RenpyProject
 from ..save_isolation import (
     apply_launch_isolation_defaults,
@@ -959,11 +959,13 @@ def launch_game(
         }
     # resolve_display_strategy refuses display='none' on a fresh launch; a
     # reused game must not report success for it either.
+    # Its own refusal is reused, so the two replies cannot drift; "none" is
+    # refused before any capability is consulted.
     if isinstance(display, str) and display.strip().casefold() == "none":
-        message = "display='none' is not supported; Ren'Py requires a display surface."
-        return {"ok": False, "ready": False, "code": "DISPLAY_UNAVAILABLE",
-                "phase": "detecting_environment", "message": message, "error": message,
-                "suggested_fix": "Use display='auto' or display='xvfb'."}
+        try:
+            resolve_display_strategy(display, None)  # type: ignore[arg-type]
+        except LaunchError as exc:
+            return {**exc.to_dict(), "ready": False}
     wanted = launch_requirements(project.root, savedir=savedir, home=home, persistent=persistent,
                                  preferences=preferences, bridge_eval=bridge_eval)
     eval_on = wanted["eval"]
