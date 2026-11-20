@@ -1115,8 +1115,11 @@ Each skip is recorded in `skipped_links` with a reason. A linked directory under
 `game/` (matched case-insensitively) is scanned read-only for scripts Ren'Py
 loads (`.rpy`/`.rpym` source, an orphan `.rpyc`/`.rpymc`, or `*_ren.py`): the
 scan never reads file contents, and all linked directories of one shadow share
-a cap of 50,000 entries and a 5-second budget checked between entries. A hung network/UNC operation may still
-block until the OS call returns. If any
+a cap of 50,000 entries and a 5-second budget checked between entries. The cap is
+fixed (the `RENFORGE_SHADOW_MAX_*` quotas do not raise it): a link scanned after
+it runs out reports `linked_directory_uninspectable`, so a project whose linked
+folders hold more cannot pass the source-complete gate. A hung network/UNC
+operation may still block until the OS call returns. If any
 source is found the reason is `linked_directory_with_source` and
 `complete=false` (and `ok=false`). If the target cannot be fully scanned (broken
 link, nested link or special file, unreadable subtree, entry cap, or timeout)
