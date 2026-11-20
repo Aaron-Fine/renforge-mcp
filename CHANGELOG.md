@@ -649,6 +649,9 @@ versioning.
   case (that build gave such a spelling its own state folder). It is read
   in place, and an unreadable earlier file is skipped; new activity goes to
   the shared folder.
+- The activity journal keeps an entry whose receipt holds an undecodable
+  path past the first 32, and pruning never deletes the sidecar just
+  written, even after the clock moved backward.
 
 ## [0.7.6] - 2026-11-18
 

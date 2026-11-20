@@ -515,3 +515,55 @@ def test_receipt_path_names_a_link_loop_without_raising(tmp_path, monkeypatch) -
 
     assert receipt_path(project, loop) == loop.absolute().as_posix()
     assert receipt_path(project, str(loop)) == loop.absolute().as_posix()
+
+
+def test_activity_log_keeps_the_current_sidecar_when_the_clock_went_back(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from renforge import activity_log as logmod
+    from renforge.util.files import ensure_private_directory
+
+    sidecar_dir = ensure_private_directory(project_state_dir(tmp_path) / "activity-files")
+    # Receipts stamped later than "now", as after the clock moved backward.
+    future = 10**15
+    for offset in range(2):
+        (sidecar_dir / f"{future + offset}-{'c' * 16}.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(logmod, "_MAX_ACTIVITY_SIDECARS", 2)
+
+    paths = [f"game/file_{index}.rpy" for index in range(33)]
+    log_tool_call(
+        tmp_path,
+        "renforge_write",
+        {"project_path": str(tmp_path)},
+        1.0,
+        {"ok": True, "files_touched": paths},
+    )
+
+    entry = _read_entry(tmp_path)
+    assert (tmp_path / entry["files_touched_file"]).is_file()
+    remaining = sorted(path.name for path in sidecar_dir.iterdir())
+    assert remaining == sorted(
+        [f"{future + 1}-{'c' * 16}.json", entry["files_touched_file"].rsplit("/", 1)[-1]]
+    )
+
+
+def test_activity_log_keeps_the_compact_entry_when_a_late_path_cannot_be_encoded(
+    tmp_path: Path,
+) -> None:
+    # A POSIX name with an undecodable byte arrives surrogate-escaped. Past the
+    # first 32 paths it never reaches the compact entry, so the entry is kept.
+    paths = [f"game/file_{index}.rpy" for index in range(32)]
+    paths.append("game/bad_\udcff.rpy")
+
+    log_tool_call(
+        tmp_path,
+        "renforge_write",
+        {"project_path": str(tmp_path)},
+        1.0,
+        {"ok": True, "files_touched": paths},
+    )
+
+    entry = _read_entry(tmp_path)
+    assert entry["files_touched"] == paths[:32]
+    assert entry["files_touched_truncated"] is True
+    assert "files_touched_file" not in entry

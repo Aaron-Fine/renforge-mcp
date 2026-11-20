@@ -158,13 +158,15 @@ def summarize_result(result: Any) -> dict[str, Any]:
     }
 
 
-def _prune_files_sidecars(directory: Path) -> None:
+def _prune_files_sidecars(directory: Path, keep: str | None = None) -> None:
     """Keep the newest sidecars within the count and byte budgets.
 
     Sidecars are written only when a path list does not fit in the compact
     journal entry. Without a cap a long session would grow the game folder
-    forever, so old receipts are removed after a successful write. The newest
-    receipt is always kept, even when it alone exceeds the byte budget.
+    forever, so old receipts are removed after a successful write. ``keep``
+    names the sidecar just written; it ranks first, so it survives even when
+    the clock moved backward or it alone exceeds the byte budget. Without it
+    the newest receipt is the one always kept.
     """
     try:
         sidecars = []
@@ -180,7 +182,7 @@ def _prune_files_sidecars(directory: Path) -> None:
                     continue
     except OSError:
         return
-    sidecars.sort(reverse=True)
+    sidecars.sort(key=lambda item: (item[1] == keep, item[0], item[1]), reverse=True)
     kept = 0
     total = 0
     for _, _, size in sidecars:
@@ -216,15 +218,17 @@ def _write_files_sidecar(
         "files_touched": files_touched,
         "files_deleted": files_deleted,
     }
-    digest_source = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    digest = hashlib.sha256(digest_source).hexdigest()[:16]
     try:
+        # A surrogate-escaped path cannot be encoded; that fails only the
+        # sidecar, never the compact entry.
+        digest_source = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        digest = hashlib.sha256(digest_source).hexdigest()[:16]
         directory = ensure_private_directory(activity_dir / "activity-files")
         path = directory / f"{timestamp}-{digest}.json"
         write_json_atomic(path, payload, mode=0o600, follow_symlinks=False)
     except Exception:
         return None
-    _prune_files_sidecars(directory)
+    _prune_files_sidecars(directory, keep=path.name)
     return receipt_path(project_root, path)
 
 
