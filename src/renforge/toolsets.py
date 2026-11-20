@@ -124,15 +124,16 @@ def _selected_toolsets(environ: Mapping[str, str] | None) -> list[str]:
     if raw == "":
         return list(TOOLSETS)
     tokens = [part.strip() for part in raw.split(",") if part.strip()]
-    if "all" in tokens:
-        return list(TOOLSETS)
-    unknown = [token for token in tokens if token not in TOOLSETS]
+    # Every token is checked first, so "all,projecct" fails like "projecct".
+    unknown = [token for token in tokens if token not in TOOLSETS and token != "all"]
     if unknown or not tokens:
         named = ", ".join(unknown) if unknown else repr(raw)
         raise RuntimeError(
             f"Unknown toolset in {TOOLSETS_ENV}: {named}. "
             f"Toolsets: {', '.join(TOOLSETS)}, all."
         )
+    if "all" in tokens:
+        return list(TOOLSETS)
     return [name for name in TOOLSETS if name in tokens]
 
 

@@ -630,6 +630,9 @@ versioning.
 - A launch with `display="none"` is refused with `DISPLAY_UNAVAILABLE`
   also when a running game would be reused; only a fresh launch refused it
   before, and reuse reported success for a launch that could never start.
+- `RENFORGE_TOOLSETS` with an unknown name beside `all` (`all,projecct`)
+  stops the server at startup like any unknown name, instead of listing
+  every group.
 
 ## [0.7.6] - 2026-11-18
 

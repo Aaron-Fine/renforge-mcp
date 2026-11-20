@@ -355,8 +355,8 @@ clients, scripts, and the Live Editor:
 | `docs` | Ren'Py documentation search |
 
 `RENFORGE_TOOLSETS` (comma-separated, default `all`) chooses which groups the
-server lists. Unknown names, or a value that names no group (`,`), stop the
-server at startup.
+server lists. Unknown names, even beside `all` (`all,projecct`), or a value
+that names no group (`,`), stop the server at startup.
 
 ```bash
 RENFORGE_TOOLSETS=play renforge serve          # the agent loop only; no code runs in the game
