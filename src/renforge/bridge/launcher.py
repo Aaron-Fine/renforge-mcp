@@ -1077,6 +1077,8 @@ def _state_savedir_spelling(savedir: str) -> Path | None:
             expected = expected.parent if name == ".." else expected / name
             if not _is_within(expected, root) or landed != expected:
                 raise _state_savedir_refusal(f"{savedir!r} follows a link inside it")
+    except LaunchError:
+        raise  # a refusal above: LaunchError is a RuntimeError, so keep it from being wrapped again
     except (OSError, RuntimeError) as exc:
         raise _state_savedir_refusal(f"could not resolve {savedir!r}: {exc}") from exc
     return expected

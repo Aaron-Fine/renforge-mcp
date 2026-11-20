@@ -2887,7 +2887,7 @@ def _link(link: Path, target: Path) -> None:
 # Each row builds its folders under tmp, with RENFORGE_STATE_DIR=<tmp>/state
 # unless it sets another, and returns (savedir, expected, untouched). expected
 # is "refused", "passed" (returned unchanged) or the folder that must be made;
-# a refused row's ``untouched`` folder must stay empty.
+# a refused row's ``untouched`` folder, if any, must stay empty.
 def _plain_inside(tmp, mp):
     return str(tmp / "state/projects/p/saves"), tmp / "state/projects/p/saves", None
 
@@ -2973,6 +2973,56 @@ def _state_dir_given_relative(tmp, mp):
     return "state/projects/p/saves", tmp / "state/projects/p/saves", None
 
 
+def _several_dotdots_after_an_outside_link(tmp, mp):
+    (tmp / "state/projects/p/sub/deep").mkdir(parents=True)
+    _link(tmp / "out/M", tmp / "state/projects/p/sub/deep")
+    return str(tmp / "out/M/./../../saves"), "refused", None
+
+
+def _several_dotdots_over_real_folders_inside(tmp, mp):
+    (tmp / "state/projects/p/sub/deep").mkdir(parents=True)
+    return str(tmp / "state/projects/p/sub/deep/./../../saves"), tmp / "state/projects/p/saves", None
+
+
+def _link_to_the_state_root_then_dotdot(tmp, mp):
+    (tmp / "state/projects/p/sub").mkdir(parents=True)
+    _link(tmp / "out/R", tmp / "state")
+    return str(tmp / "out/R/projects/p/sub/../saves"), tmp / "state/projects/p/saves", None
+
+
+def _default_state_folder_under_a_linked_home(tmp, mp):
+    if os.name == "nt":
+        pytest.skip("the default state folder on Windows is under LOCALAPPDATA")
+    (tmp / "realhome").mkdir()
+    _link(tmp / "linkhome", tmp / "realhome")
+    mp.delenv("RENFORGE_STATE_DIR")
+    mp.delenv("XDG_STATE_HOME", raising=False)
+    mp.setenv("HOME", str(tmp / "linkhome"))
+    made = tmp / "realhome/.local/state/renforge/projects/p/saves"
+    return "~/.local/state/renforge/projects/p/saves", made, None
+
+
+def _planted_link_under_a_linked_home(tmp, mp):
+    player = tmp / "realhome/.renpy/a-game"
+    _default_state_folder_under_a_linked_home(tmp, mp)
+    player.mkdir(parents=True)
+    _link(tmp / "realhome/.local/state/renforge/projects/p/saves", player)
+    return str(tmp / "linkhome/.local/state/renforge/projects/p/saves"), "refused", player
+
+
+def _planted_link_back_to_the_state_root(tmp, mp):
+    (tmp / "state/projects/p").mkdir(parents=True)
+    _link(tmp / "state/projects/p/saves", tmp / "state")
+    return str(tmp / "state/projects/p/saves"), "refused", None
+
+
+def _link_loop_inside_the_state_folder(tmp, mp):
+    (tmp / "state").mkdir()
+    _link(tmp / "state/la", tmp / "state/lb")
+    _link(tmp / "state/lb", tmp / "state/la")
+    return str(tmp / "state/la/x"), "refused", None
+
+
 def _caller_savedir_behind_an_outside_link(tmp, mp):
     (tmp / "real").mkdir()
     _link(tmp / "linked", tmp / "real")
@@ -2999,6 +3049,13 @@ def _not_a_path(tmp, mp):
         _state_dir_given_with_dotdot,
         _state_dir_given_with_tilde,
         _state_dir_given_relative,
+        _several_dotdots_after_an_outside_link,
+        _several_dotdots_over_real_folders_inside,
+        _link_to_the_state_root_then_dotdot,
+        _default_state_folder_under_a_linked_home,
+        _planted_link_under_a_linked_home,
+        _planted_link_back_to_the_state_root,
+        _link_loop_inside_the_state_folder,
         _caller_savedir_behind_an_outside_link,
         _not_a_path,
     ],
@@ -3014,9 +3071,13 @@ def test_a_state_folder_savedir_is_judged_by_where_the_launcher_lands_it(build, 
     if expected == "refused":
         with pytest.raises(LaunchError) as excinfo:
             _make_state_savedir(savedir)
-        assert excinfo.value.code == "SESSION_NOT_ISOLATED", excinfo.value.message
-        assert excinfo.value.phase == "preparing_isolation"
-        assert list(untouched.iterdir()) == []
+        refused = excinfo.value
+        assert refused.code == "SESSION_NOT_ISOLATED", refused.message
+        assert refused.phase == "preparing_isolation"
+        # One refusal, not one wrapped in another.
+        assert refused.message.startswith("The saves folder in the RenForge state folder is a link or not a folder ("), refused.message
+        assert refused.message.count("so the launch would not be isolated") == 1, refused.message
+        assert untouched is None or list(untouched.iterdir()) == []
     elif expected == "passed":
         assert _make_state_savedir(savedir) == savedir
     else:
