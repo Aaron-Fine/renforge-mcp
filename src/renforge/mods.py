@@ -143,7 +143,7 @@ def _resolve_target(project_root: str | Path, name: str, rel: str) -> Path:
     _refuse_linked_mod_dir(project_root, name)
     mod_dir = _mod_dir(project_root, name)
     current = mod_dir
-    for part in rel.split("/"):
+    for part in PurePosixPath(rel).parts:
         current = current / part
         if _is_link(current):
             raise ValueError(f"refusing to use symlink under game/: {current.name}")
@@ -278,13 +278,14 @@ def write_file(project_root: str | Path, name: str, path: str, content: str) -> 
     # unlisted .rpy that the game loads and remove() never deletes.
     _write_manifest(mod_dir, name, files)
     _atomic_write_bytes(target, data)
+    written = receipt_path(project_root, target)
     return {
         "ok": True,
         "name": name,
-        "path": f"game/mods/{name}/{rel}",
+        "path": written,
         "bytes": len(data),
         "files": files,
-        "files_touched": sorted([f"game/mods/{name}/{rel}", f"game/mods/{name}/{MANIFEST_NAME}"]),
+        "files_touched": sorted([written, receipt_path(project_root, mod_dir / MANIFEST_NAME)]),
     }
 
 
@@ -362,7 +363,7 @@ def remove(project_root: str | Path, name: str) -> dict[str, Any]:
         mod_dir.rmdir()
     except OSError:
         pass
-    deleted = sorted(f"game/mods/{name}/{rel}" for rel in [*removed, MANIFEST_NAME])
+    deleted = sorted(receipt_path(project_root, mod_dir / rel) for rel in [*removed, MANIFEST_NAME])
     return {"ok": True, "removed": removed, "kept": sorted(set(kept)), "files_deleted": deleted}
 
 
@@ -436,8 +437,9 @@ _PARSE_ERROR_RE = re.compile(r'^\s*File "(?P<file>[^"]+)", line (?P<line>\d+):\s
 def _diagnostic_in_mod(diagnostic: Any, name: str) -> bool:
     if not isinstance(diagnostic, dict):
         return False
-    file_path = str(diagnostic.get("file") or "").replace("\\", "/")
-    return re.search(rf"(^|/)mods/{re.escape(name)}/", file_path) is not None
+    # Ren'Py may name the file with either separator; PureWindowsPath splits on both.
+    parts = PureWindowsPath(str(diagnostic.get("file") or "")).parts
+    return any(parts[i:i + 2] == ("mods", name) for i in range(len(parts) - 2))
 
 
 def _parse_errors(raw: str) -> list[dict[str, Any]]:

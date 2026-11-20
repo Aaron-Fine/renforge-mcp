@@ -737,17 +737,17 @@ def path_exposes_user_saves(
     return any(parts[i] == "game" and parts[i + 1] == "saves" for i in range(len(parts) - 1))
 
 
-def _path_key(path: Path) -> str:
-    # Case-folded: on a case-insensitive filesystem (Windows, macOS)
+def _path_key(path: Path) -> tuple[str, ...]:
+    # Case-folded parts: on a case-insensitive filesystem (Windows, macOS)
     # ~/library/renpy is the player's ~/Library/RenPy, and resolve() does not
     # fold case there. Folding everywhere errs toward asking for authorization.
-    return os.path.normcase(str(path)).casefold()
+    return tuple(part.casefold() for part in path.parts)
 
 
 def _inside(path: Path, root: Path) -> bool:
     """*path* is *root* or below it, compared case-insensitively."""
     key, root_key = _path_key(path), _path_key(root)
-    return key == root_key or key.startswith(root_key.rstrip(os.sep) + os.sep)
+    return key[: len(root_key)] == root_key
 
 
 def user_save_roots(

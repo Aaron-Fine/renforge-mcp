@@ -2006,3 +2006,21 @@ def test_a_path_that_only_might_be_the_players_counts_only_in_the_wide_answer(
         knobs = {"savedir": savedir, "home": "temporary", "project_path": str(project)}
         assert launch_exposed_components(**knobs) == wide, savedir
         assert launch_exposed_components(certain=True, **knobs) == certain, savedir
+
+
+@pytest.mark.parametrize(
+    ("path", "root", "inside"),
+    [
+        (PureWindowsPath("C:/Users/P/AppData/Roaming/RenPy/demo"), PureWindowsPath("c:\\users\\p\\appdata\\roaming\\renpy"), True),
+        (PureWindowsPath("C:\\Users\\P\\AppData\\Roaming\\RenPy"), PureWindowsPath("C:/Users/P/AppData/Roaming/RenPy/"), True),
+        (PureWindowsPath("C:\\Users\\P\\AppData\\Roaming\\RenPyOld"), PureWindowsPath("C:\\Users\\P\\AppData\\Roaming\\RenPy"), False),
+        (PureWindowsPath("D:\\Users\\P\\AppData\\Roaming\\RenPy"), PureWindowsPath("C:\\Users\\P\\AppData\\Roaming\\RenPy"), False),
+        (PurePosixPath("/home/p/Library/RenPy/demo"), PurePosixPath("/home/p/library/renpy"), True),
+        (PurePosixPath("/home/p/.renpy-old"), PurePosixPath("/home/p/.renpy"), False),
+        (PurePosixPath("/anything"), PurePosixPath("/"), True),
+    ],
+)
+def test_inside_compares_path_parts_case_insensitively(path, root, inside: bool) -> None:
+    from renforge.save_isolation import _inside
+
+    assert _inside(path, root) is inside

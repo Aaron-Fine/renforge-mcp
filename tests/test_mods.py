@@ -940,3 +940,20 @@ def test_reload_returns_a_compact_observation_like_the_play_tools(tmp_path, monk
     result = mod_tools.mod(str(tmp_path), "reload")
 
     assert result["observation"] == {"ok": True, "stable": True, "observation_id": "o1", "frame": {"width": 1280}}
+
+
+@pytest.mark.parametrize(
+    ("file", "inside"),
+    [
+        ("game/mods/demo/a.rpy", True),
+        ("game\\mods\\demo\\scripts\\a.rpy", True),
+        ("C:\\Games\\Demo\\game\\mods\\demo\\a.rpy", True),
+        ("/srv/demo/game/mods/demo/a.rpy", True),
+        ("game/mods/demo", False),
+        ("game/mods/demo2/a.rpy", False),
+        ("game/xmods/demo/a.rpy", False),
+        ("", False),
+    ],
+)
+def test_lint_keeps_diagnostics_in_the_mod_whatever_the_separator(file: str, inside: bool) -> None:
+    assert mods._diagnostic_in_mod({"file": file}, "demo") is inside
