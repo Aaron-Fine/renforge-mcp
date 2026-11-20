@@ -666,6 +666,19 @@ def test_ensure_control_dir_rejects_symlink_control_path(tmp_path: Path) -> None
     assert excinfo.value.phase == "preparing_control_directory"
 
 
+def test_ensure_control_dir_rejects_a_root_through_a_missing_folder(tmp_path: Path) -> None:
+    """``project/missing/..`` names no folder the OS would open; it is not ``project``."""
+    from renforge.bridge.control import ensure_control_dir
+    from renforge.launch_env import LaunchError
+
+    root = _control_project(tmp_path)
+
+    with pytest.raises(LaunchError) as excinfo:
+        ensure_control_dir(root / "missing" / "..")
+    assert excinfo.value.code == "BRIDGE_CONTROL_DIRECTORY_UNSAFE"
+    assert not project_state_dir(root).exists()
+
+
 def test_write_starting_bridge_info_rejects_bad_identity(tmp_path: Path) -> None:
     from renforge.bridge.control import write_starting_bridge_info
 

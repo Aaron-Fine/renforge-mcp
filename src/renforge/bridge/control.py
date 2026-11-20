@@ -161,9 +161,12 @@ def _control_directory_error(exc: PrivatePathError) -> LaunchError:
 
 def _canonical_project_root(project_root: Path) -> Path:
     try:
-        # Spelled as the disk lists it, like the state folder that holds the
-        # metadata, so every spelling of one folder reads the same bridge.
-        canonical = Path(canonical_project_path(project_root)).resolve(strict=True)
+        # Strictly first, as given: a lenient resolve folds ``missing/..``
+        # away and would accept a path that names no folder.
+        existing = Path(project_root).expanduser().resolve(strict=True)
+        # Then spelled as the disk lists it, like the state folder that holds
+        # the metadata, so every spelling of one folder reads the same bridge.
+        canonical = Path(canonical_project_path(existing)).resolve(strict=True)
     except OSError as exc:
         raise LaunchError(
             "BRIDGE_CONTROL_DIRECTORY_UNSAFE",
