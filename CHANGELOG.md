@@ -580,6 +580,8 @@ versioning.
   the project that a linked `game/*.rpy` points to.
 - `renforge_launch_status` drops a launch's language-mismatch message once
   the game reports the requested language.
+- A ready `renforge_launch_status` for a launch task (an owned game or a
+  reused external one) includes `isolated` and `eval_enabled`, as documented.
 - A `save` or `load` slot that is a path rather than a slot name (absolute,
   with a drive, a `/` or `\` separator, a `:` (on Windows `page:name`
   writes a stream of the file `page`), or `.`/`..`) is refused with

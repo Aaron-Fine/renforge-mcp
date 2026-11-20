@@ -361,6 +361,7 @@ def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
             }
         try:
             state = session.client.get_state()
+            facts = _owned_session_facts(session)
             result = {
                 "ok": True,
                 "ready": True,
@@ -372,6 +373,8 @@ def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
                 "editor": bool(getattr(session, "editor", task.requested_editor)),
                 "elapsed_ms": elapsed_ms,
                 **_isolation_result(session),
+                "isolated": facts["isolated"],
+                "eval_enabled": facts["eval_running"],
                 **_startup_warning(session),
             }
             # A reused session answers through launch_game; keep its verdict
@@ -1099,6 +1102,8 @@ def launch_game(
                 "editor": False,
                 # What the game itself reports; it has no session of this process.
                 "isolation": external_isolation,
+                "isolated": facts["isolated"],
+                "eval_enabled": facts["eval_running"],
                 "requested_language": language,
                 "active_language": active_language,
             }

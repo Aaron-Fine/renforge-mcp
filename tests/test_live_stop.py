@@ -1055,6 +1055,36 @@ def test_an_external_game_in_renforge_folders_is_not_the_players(tmp_path: Path,
     assert status["isolation"]["exposes_user_saves"] is False
 
 
+def test_a_ready_launch_task_status_repeats_isolated_and_eval_enabled(tmp_path: Path, monkeypatch) -> None:
+    """Polling a launch says what the caller drives, for an owned game and a reused external one."""
+    task = live._LaunchTask(tmp_path / "project")
+    task.lifecycle = "ready"
+    task.done_event.set()
+    task.session = _OwnedRunningSession(bridge_eval=False)  # type: ignore[assignment]
+    task.result = {"ok": True, "ready": True}
+    status = live._launch_task_status(task)
+    assert status["isolated"] is True
+    assert status["eval_enabled"] is False
+
+    _host_home(tmp_path, monkeypatch)
+    project = tmp_path / "project"
+    state_saves = project_state_dir(project) / "saves"
+    session_home = tmp_path / "renforge-session-x" / "home"
+    for path in (state_saves, session_home):
+        path.mkdir(parents=True)
+    info = {"eval_enabled": False, "savedir": str(state_saves), "home": str(session_home),
+            "save_locations": [str(state_saves)]}
+    external = _external_reuse(tmp_path, monkeypatch, _InfoClient(info), savedir="temporary")
+    assert external["ok"] is True and external["external"] is True
+
+    task.session = None
+    task.result = external
+    status = live._launch_task_status(task)
+    assert "session_id" not in status
+    assert status["isolated"] is True
+    assert status["eval_enabled"] is False
+
+
 def test_an_external_game_is_the_players_when_a_renforge_folder_links_into_their_saves(
     tmp_path: Path, monkeypatch
 ) -> None:
