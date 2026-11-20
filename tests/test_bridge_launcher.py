@@ -2905,6 +2905,46 @@ def test_a_link_from_outside_into_the_middle_of_the_state_folder_is_refused(monk
     assert not (inside / "saves").exists()
 
 
+def test_a_dotdot_after_an_outside_link_is_judged_where_the_launcher_lands(monkeypatch, tmp_path: Path) -> None:
+    """``out/M/../saves`` is judged as the launcher resolves it (link first, then ``..``), not as text."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project, sdk, project_root = _make_project(tmp_path)
+    other = tmp_path / "state" / "projects" / "another-project" / "saves"
+    other.mkdir(parents=True)
+    saves = project_state_dir(project_root) / "saves"
+    (saves.parent / "sub").mkdir(parents=True)
+    (tmp_path / "out").mkdir()
+    try:
+        os.symlink(saves.parent / "sub", tmp_path / "out" / "M", target_is_directory=True)
+        os.symlink(other, saves, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+
+    refused = _launch_until_token_check(sdk, project, monkeypatch, str(tmp_path / "out" / "M" / ".." / "saves"))
+
+    assert refused.code == "SESSION_NOT_ISOLATED", refused.message
+    assert list(other.iterdir()) == []
+    assert not (tmp_path / "out" / "saves").exists()
+
+
+def test_a_dotdot_inside_the_state_folder_is_followed_without_links(monkeypatch, tmp_path: Path) -> None:
+    """Through an alias of the state folder, a ``..`` over a real folder lands where it reads."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project, sdk, project_root = _make_project(tmp_path)
+    saves = project_state_dir(project_root) / "saves"
+    (saves.parent / "sub").mkdir(parents=True)
+    try:
+        os.symlink(tmp_path / "state", tmp_path / "alias", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    spelled = tmp_path / "alias" / saves.parent.relative_to(tmp_path / "state") / "sub" / ".." / "saves"
+
+    assert _launch_until_token_check(sdk, project, monkeypatch, str(spelled)).code == "BRIDGE_TOKEN_INVALID"
+    assert saves.is_dir() and not saves.is_symlink()
+
+
 def test_a_savedir_outside_the_state_folder_may_sit_behind_a_link(monkeypatch, tmp_path: Path) -> None:
     """Only the state folder is made no-follow: a chosen savedir elsewhere behind a symlink still works."""
     monkeypatch.setenv("DISPLAY", ":0")

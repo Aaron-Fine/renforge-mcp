@@ -188,10 +188,11 @@ folder, even to another folder there), the launch is refused with
 `code="SESSION_NOT_ISOLATED"` before anything starts. Other launches with a
 `savedir` path in the state folder are refused the same way (see below).
 Its `save`, `load`, and `list` act only on a game whose saves and HOME are in
-RenForge's own folders (the state folder or a session root, by what the game's bridge
-reports); a game started some other way on the player's saves, or in a
-folder outside RenForge's, is refused with `code="SESSION_NOT_ISOLATED"`
-before any slot is touched or listed. Use `renforge_saves` for such a game.
+RenForge's own folders (the state folder or a session root, by what the
+game's bridge reports); a game started some other way on the player's saves,
+or in a folder outside RenForge's, is refused with
+`code="SESSION_NOT_ISOLATED"` before any slot is touched or listed. Use
+`renforge_saves` for such a game.
 A game whose bridge does not answer (busy, or the connection dropped) gets
 the ordinary error instead, so the call can be retried, and a failed `list`
 carries no `player_slots` or `player_slots_hidden`.
@@ -207,11 +208,12 @@ subsequent storage initialization and script reload. It excludes the original
 The adapter uses Ren'Py's file storage and scan lifecycle and is tested against
 the supported 8.5.3 SDK. SDK upgrades must pass that real-engine contract.
 
-A `savedir` path that lands in the RenForge state folder, however it is
-spelled (a link to that folder included), is made there without following
-links before isolation is resolved. If a folder on the way to it is a link
-(one planted in the state folder, even to another folder there), or the path
-enters the state folder through a link below its top, `renforge_launch`,
+A `savedir` path that lands in the RenForge state folder is made there
+without following links before isolation is resolved. Where it lands is
+judged as the launcher resolves it, so a spelling through a link to that
+folder, or a `..` after a link, counts. If a folder on the way to it is a
+link (one planted in the state folder, even to another folder there), or the
+path enters the state folder through a link below its top, `renforge_launch`,
 `renforge_jump`, `renforge_new_game`, and the Python launcher refuse with
 `code="SESSION_NOT_ISOLATED"` (phase `preparing_isolation`) before the game
 starts. For the tools this is the launch's failed status, which
