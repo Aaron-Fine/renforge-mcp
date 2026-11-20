@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
 import sys
+import time
+
+import pytest
 
 from renforge.util.subprocess import run_command
 
@@ -63,3 +67,30 @@ def test_run_command_bounded_still_reports_timeouts() -> None:
     assert result.timed_out is True
     assert result.returncode == -1
     assert "timed out" in result.stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="uses sh to leave a descendant holding the pipes")
+def test_run_command_bounded_keeps_output_when_a_descendant_holds_the_pipes(
+    monkeypatch,
+) -> None:
+    import renforge.util.subprocess as subprocess_module
+
+    # raising=False so this test also runs against code without the constant.
+    monkeypatch.setattr(subprocess_module, "_READER_JOIN_GRACE_SECONDS", 1.0, raising=False)
+    started = time.monotonic()
+
+    result = run_command(
+        ["sh", "-c", "sleep 15 & echo hi; echo err >&2"],
+        timeout=10,
+        max_output_bytes=1000,
+    )
+
+    elapsed = time.monotonic() - started
+    # The direct child's output arrives even though the pipes never reach EOF.
+    assert result.stdout == "hi\n"
+    assert result.stderr == "err\n"
+    # The capture is still incomplete, so the verdict stays honest.
+    assert result.stdout_truncated is True
+    assert result.stderr_truncated is True
+    # Both readers share one grace period instead of waiting one after the other.
+    assert elapsed < 1.8

@@ -1089,12 +1089,15 @@ empty files. Media placeholders count as files but not bytes. Other files are
 copied and count normally. Set `RENFORGE_SHADOW_MEDIA=copy` when a caller needs
 a faithful shadow: media bytes are then copied and count toward the byte quota.
 The result reports `placeholders`, the number of files materialized by name
-only. Override the limits with positive integers:
+only. Override the limits with positive integers in the server's environment,
+for example by exporting them in the shell that then runs `renforge serve` (or
+in the MCP client's `env` for the server):
 
 ```bash
-RENFORGE_SHADOW_MAX_FILES=25000
-RENFORGE_SHADOW_MAX_BYTES=2147483648  # 2 GiB
-RENFORGE_SHADOW_MAX_DIRS=100000
+export RENFORGE_SHADOW_MAX_FILES=25000
+export RENFORGE_SHADOW_MAX_BYTES=2147483648  # 2 GiB
+export RENFORGE_SHADOW_MAX_DIRS=100000
+renforge serve
 ```
 
 Invalid values fail closed with `SHADOW_QUOTA_INVALID` rather than silently
@@ -1109,10 +1112,14 @@ and directory verdicts cannot be reduced by a staged replacement.
 
 Linked directories (symlinks/junctions) are **never copied byte-for-byte**.
 Each skip is recorded in `skipped_links` with a reason. A linked directory under
-`game/` (matched case-insensitively) is scanned read-only for `.rpy`/`.rpym`
-source: the scan never reads file contents, is capped at 50,000 entries, and
-checks a 5-second budget between entries. A hung network/UNC operation may still
-block until the OS call returns. If any
+`game/` (matched case-insensitively) is scanned read-only for scripts Ren'Py
+loads (`.rpy`/`.rpym` source, an orphan `.rpyc`/`.rpymc`, or `*_ren.py`): the
+scan never reads file contents, and all linked directories of one shadow share
+a cap of 50,000 entries and a 5-second budget checked between entries. The cap is
+fixed (the `RENFORGE_SHADOW_MAX_*` quotas do not raise it): a link scanned after
+it runs out reports `linked_directory_uninspectable`, so a project whose linked
+folders hold more cannot pass the source-complete gate. A hung network/UNC
+operation may still block until the OS call returns. If any
 source is found the reason is `linked_directory_with_source` and
 `complete=false` (and `ok=false`). If the target cannot be fully scanned (broken
 link, nested link or special file, unreadable subtree, entry cap, or timeout)
@@ -1122,8 +1129,8 @@ directory structure and creates **zero-byte placeholder files** for its regular
 files, so lint still sees the expected image/audio names without copying any
 bytes; the reason is `linked_directory_assets_placeholders`, `complete` stays
 true, and `degraded=true`. Placeholders count as files but contribute zero
-bytes to the quota, and none are created for `.rpy`/`.rpym` or compiled-artifact
-suffixes. Links outside `game/` cannot affect source lint, so they never clear
+bytes to the quota, and none are created for caches (`.rpyb`, `.pyc`, `.pyo`).
+Links outside `game/` cannot affect source lint, so they never clear
 `complete`; their reason is `linked_directory_not_followed`. Linked regular
 files and other special files remain fatal (`SHADOW_SPECIAL_FILE`). The Live
 Editor commit and undo gates refuse a shadow with skipped source directories

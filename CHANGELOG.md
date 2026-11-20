@@ -649,6 +649,24 @@ versioning.
   case (that build gave such a spelling its own state folder). It is read
   in place, and an unreadable earlier file is skipped; new activity goes to
   the shared folder.
+- The activity journal keeps an entry whose receipt holds an undecodable
+  path past the first 32, and pruning never deletes the sidecar just
+  written, even after the clock moved backward.
+- A shadow lint (`renforge_validate`, the Live Editor gate) whose shadow
+  folder already exists fails without deleting that folder.
+- A shadow lint that fails and then cannot remove its shadow reports the
+  lint error, with `cleanup_error` in its details, not `SHADOW_CLEANUP_FAILED`.
+- A linked directory under `game/` holding an orphan `.rpyc`/`.rpymc` or a
+  `*_ren.py` script makes the shadow incomplete (`linked_directory_with_source`)
+  instead of being skipped or replaced by an empty placeholder.
+- On Windows a `renforge_validate` `staged` key spelled `Game/...` names the
+  project's `game/` file, as `game/...` does, not a nested `game/game/` one.
+- The shadow's linked-directory scans share one 50,000-entry, 5-second
+  budget, so many links (even to one folder) no longer multiply the scan
+  time; a link scanned after it runs out is `linked_directory_uninspectable`.
+- A bounded command (shadow lint) whose descendant keeps its pipes open
+  keeps the output already printed, and waits one 5-second grace for both
+  streams instead of 5 seconds each. The capture is still marked truncated.
 
 ## [0.7.6] - 2026-11-18
 

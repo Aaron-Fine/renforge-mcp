@@ -45,6 +45,9 @@ _EXCLUDED_DIRS = {
 }
 _EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".rpyb", ".rpyc", ".rpymc"}
 _SOURCE_SUFFIXES = {".rpy", ".rpym"}
+# Ren'Py also loads these as scripts: an orphan compiled file, and *_ren.py.
+_LOADABLE_SCRIPT_SUFFIXES = _SOURCE_SUFFIXES | {".rpyc", ".rpymc"}
+_REN_PY_SUFFIX = "_ren.py"
 # Lint resolves media names but never reads their bytes, so media files become
 # zero-byte placeholders instead of consuming the shadow's byte quota.
 _MEDIA_SUFFIXES = {
@@ -117,7 +120,8 @@ def _is_directory_link(directory_st: os.stat_result) -> bool:
 class _LinkedDirectoryScan:
     """Read-only inventory of a linked directory's target.
 
-    ``source_found`` is True when Ren'Py source exists, False when the whole
+    ``source_found`` is True when a script Ren'Py loads exists (source, an
+    orphan ``.rpyc``/``.rpymc``, or ``*_ren.py``), False when the whole
     target was scanned and holds none, and None when it cannot be fully
     inspected (broken link, nested link/special entry, unreadable subtree,
     entry cap, or time budget). ``directories`` and ``files`` are relative
@@ -133,8 +137,24 @@ class _LinkedDirectoryScan:
 _UNINSPECTABLE_LINKED_DIRECTORY = _LinkedDirectoryScan(source_found=None)
 
 
-def _scan_linked_directory(link: Path) -> _LinkedDirectoryScan:
+@dataclass
+class _LinkedScanBudget:
+    """Entries and seconds left for every linked-directory scan of one plan.
+
+    Sharing it keeps many links (even to one large target) from multiplying
+    the scan cost; once it runs out, later links are uninspectable.
+    """
+
+    entries: int = field(default_factory=lambda: MAX_LINKED_SOURCE_SCAN_ENTRIES)
+    seconds: float = field(default_factory=lambda: MAX_LINKED_SOURCE_SCAN_SECONDS)
+
+
+def _scan_linked_directory(
+    link: Path, budget: _LinkedScanBudget | None = None
+) -> _LinkedDirectoryScan:
     """Inspect a linked directory's target without reading or copying bytes."""
+    if budget is None:
+        budget = _LinkedScanBudget()
     try:
         target = link.resolve(strict=True)
     except (OSError, RuntimeError):
@@ -142,8 +162,7 @@ def _scan_linked_directory(link: Path) -> _LinkedDirectoryScan:
     if not target.is_dir():
         return _UNINSPECTABLE_LINKED_DIRECTORY
 
-    deadline = time.monotonic() + MAX_LINKED_SOURCE_SCAN_SECONDS
-    inspected = 0
+    last_check = time.monotonic()
     directories: list[str] = []
     files: list[str] = []
     complete = True
@@ -153,10 +172,14 @@ def _scan_linked_directory(link: Path) -> _LinkedDirectoryScan:
         complete = False
 
     def _budget_exceeded() -> bool:
-        return (
-            inspected > MAX_LINKED_SOURCE_SCAN_ENTRIES
-            or time.monotonic() > deadline
-        )
+        # Charge one entry and the time since the last check, so the time
+        # between scans of different links is not counted.
+        nonlocal last_check
+        now = time.monotonic()
+        budget.entries -= 1
+        budget.seconds -= now - last_check
+        last_check = now
+        return budget.entries < 0 or budget.seconds < 0
 
     for current, dirs, filenames in os.walk(
         target, topdown=True, followlinks=False, onerror=_record_error
@@ -165,7 +188,6 @@ def _scan_linked_directory(link: Path) -> _LinkedDirectoryScan:
         relative_current = current_path.relative_to(target)
         kept_dirs: list[str] = []
         for dirname in sorted(dirs):
-            inspected += 1
             if _budget_exceeded():
                 return _UNINSPECTABLE_LINKED_DIRECTORY
             if dirname in _EXCLUDED_DIRS:
@@ -186,7 +208,6 @@ def _scan_linked_directory(link: Path) -> _LinkedDirectoryScan:
         dirs[:] = kept_dirs
 
         for filename in sorted(filenames):
-            inspected += 1
             if _budget_exceeded():
                 return _UNINSPECTABLE_LINKED_DIRECTORY
             file_path = current_path / filename
@@ -202,7 +223,9 @@ def _scan_linked_directory(link: Path) -> _LinkedDirectoryScan:
                 complete = False
                 continue
             suffix = Path(filename).suffix.casefold()
-            if suffix in _SOURCE_SUFFIXES:
+            if suffix in _LOADABLE_SCRIPT_SUFFIXES or filename.casefold().endswith(
+                _REN_PY_SUFFIX
+            ):
                 return _LinkedDirectoryScan(source_found=True)
             if suffix in _EXCLUDED_SUFFIXES:
                 continue
@@ -354,7 +377,9 @@ def _resolve_staged_path(raw_path: str, base_paths: dict[str, str]) -> str:
     pure = _staged_path_candidate(raw_path)
     project_relative = pure.as_posix()
     game_relative = "game/" + project_relative
-    if pure.parts[0] == "game":
+    # Compare the prefix the way the inventory compares names, so Game/ on a
+    # case-insensitive filesystem reads as the project's game/ folder.
+    if _path_key(pure.parts[0]) == _path_key("game"):
         if _path_key(project_relative) in base_paths:
             return base_paths[_path_key(project_relative)]
         if _path_key(game_relative) in base_paths:
@@ -525,6 +550,7 @@ def plan_shadow_project(
     skipped_links: list[dict[str, str]] = []
     complete = True
     staged_file_keys, staged_dir_keys = _staged_retention_keys(staged_replacements)
+    link_scan_budget = _LinkedScanBudget()
 
     def _record_base_entry(
         relative_path: str,
@@ -599,7 +625,7 @@ def plan_shadow_project(
                     relative_dir = _relative_posix(root, directory)
                     reason = "linked_directory_not_followed"
                     if _is_game_relative(relative_dir):
-                        scan = _scan_linked_directory(directory)
+                        scan = _scan_linked_directory(directory, link_scan_budget)
                         if scan.source_found is True:
                             reason = "linked_directory_with_source"
                             complete = False
@@ -769,8 +795,16 @@ def _build_shadow_from_plan(plan: ShadowPlan, *, shadow_root: Path) -> tuple[int
     byte_count = 0
     try:
         # The copy holds staged source, so keep it private even when the caller
-        # puts it somewhere other than a 0700 temp parent.
+        # puts it somewhere other than a 0700 temp parent. Only a root this
+        # call created is cleaned up on failure: an existing one is not ours.
         shadow_root.mkdir(mode=0o700, parents=True, exist_ok=False)
+    except OSError as exc:
+        raise EditorError(
+            "SHADOW_COPY_FAILED",
+            "could not create the shadow project",
+            {"path": str(shadow_root)},
+        ) from exc
+    try:
         for relative_dir in plan.directories:
             destination_dir = shadow_root / relative_dir
             destination_dir.mkdir(parents=True, exist_ok=True)
@@ -801,12 +835,15 @@ def _build_shadow_from_plan(plan: ShadowPlan, *, shadow_root: Path) -> tuple[int
                 )
             except OSError as exc:
                 if exc.errno == errno.EFBIG:
+                    # The file grew after planning; the copy stopped one byte
+                    # past the room left, which is all that was measured.
+                    observed = max(entry.size, plan.limits.max_bytes - byte_count + 1)
                     _raise_quota_error(
                         files=file_count + 1,
-                        byte_count=byte_count + entry.size,
+                        byte_count=byte_count + observed,
                         limits=plan.limits,
                         offending_path=entry.relative_path,
-                        offending_size=entry.size,
+                        offending_size=observed,
                         largest=plan.largest,
                         directories=len(plan.directories),
                     )
@@ -890,6 +927,17 @@ def remove_shadow_project(shadow_root: Path) -> None:
             "SHADOW_CLEANUP_FAILED",
             "could not remove the validation shadow project",
         ) from exc
+
+
+def _remove_shadow_after_failure(shadow_root: Path, failure: BaseException) -> None:
+    """Clean up after a failed lint without letting cleanup replace that error."""
+    try:
+        remove_shadow_project(shadow_root)
+    except EditorError as cleanup:
+        if isinstance(failure, EditorError):
+            failure.details["cleanup_error"] = cleanup.code
+        else:
+            failure.add_note(f"{cleanup.code}: {cleanup.message}")
 
 
 def run_shadow_lint(
@@ -976,20 +1024,21 @@ def validate_shadow_project(
             timeout=timeout,
             error_code=error_code,
         )
-    except EditorError:
+    except EditorError as exc:
         if not keep_shadow:
-            remove_shadow_project(shadow_root)
+            _remove_shadow_after_failure(shadow_root, exc)
         raise
     except (OSError, ValueError) as exc:
-        if not keep_shadow:
-            remove_shadow_project(shadow_root)
-        raise EditorError(
+        error = EditorError(
             "SHADOW_LINT_FAILED",
             "could not run Ren'Py lint in the shadow project",
-        ) from exc
-    except Exception:
+        )
         if not keep_shadow:
-            remove_shadow_project(shadow_root)
+            _remove_shadow_after_failure(shadow_root, error)
+        raise error from exc
+    except Exception as exc:
+        if not keep_shadow:
+            _remove_shadow_after_failure(shadow_root, exc)
         raise
 
     result = replace(
