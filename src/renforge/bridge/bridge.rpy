@@ -4612,8 +4612,8 @@ init python:
         if characters and len(parts) == 1 and namespaces is not None:
             # `define character.e = Character(...)` lives in store.character.
             try:
-                characters = namespaces.get("store.character")
-                value = characters.get(parts[0]) if characters is not None else None
+                character_ns = namespaces.get("store.character")
+                value = character_ns.get(parts[0]) if character_ns is not None else None
             except Exception:
                 value = None
             found = value is not None

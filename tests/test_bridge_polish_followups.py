@@ -298,6 +298,7 @@ def _semantic_hotspot_under(running_bridge, monkeypatch, focus_at_point):
 
 
 def test_hovering_a_semantic_control_avoids_a_point_another_control_takes(running_bridge, monkeypatch):
+    """Another control takes the centre: the hover goes to a probe point it does not take."""
     upper = object()
     element = _semantic_hotspot_under(running_bridge, monkeypatch,
         lambda x, y, _screen: (upper, None, None) if x < 40 else None)
@@ -307,6 +308,7 @@ def test_hovering_a_semantic_control_avoids_a_point_another_control_takes(runnin
 
 
 def test_hovering_a_semantic_control_another_control_covers_is_refused(running_bridge, monkeypatch):
+    """Another control takes every probe point: the hover is refused and the pointer stays put."""
     upper = object()
     element = _semantic_hotspot_under(running_bridge, monkeypatch, lambda x, y, _screen: (upper, None, None))
     assert element["clickable"] is True  # its action can still run

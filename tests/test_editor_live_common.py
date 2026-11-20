@@ -119,6 +119,7 @@ def test_wait_for_transaction_says_whether_it_completed(tmp_path, monkeypatch) -
 def test_wait_for_transaction_keeps_the_source_read_error_apart_from_the_bridge(
     tmp_path, monkeypatch
 ) -> None:
+    """A source that keeps failing to read is reported as that, not as a bridge error."""
     monkeypatch.setattr(live_common.time, "sleep", lambda _s: None)
     missing = tmp_path / "gui.rpy"
     committed = {"status_code": "reload_committed", "save_in_progress": False}
@@ -131,6 +132,7 @@ def test_wait_for_transaction_keeps_the_source_read_error_apart_from_the_bridge(
 
 
 def test_wait_for_transaction_forgets_a_source_read_error_after_a_good_read(tmp_path, monkeypatch) -> None:
+    """A read that fails once and then succeeds leaves no source error behind."""
     monkeypatch.setattr(live_common.time, "sleep", lambda _s: None)
     source = tmp_path / "gui.rpy"
     committed = {"status_code": "reload_committed", "save_in_progress": False}
