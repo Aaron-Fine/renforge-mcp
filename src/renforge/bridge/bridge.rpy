@@ -4534,7 +4534,8 @@ init python:
         except Exception:
             dynamic = False
         if dynamic:
-            found, value = _renforge_store_expression(name)
+            # Character.__call__ py_evals the name in the default store.
+            found, value = _renforge_store_expression(name, characters=False)
             if not found or not isinstance(value, builtins.str):
                 return None
             text = _renforge_render_say_text(value).strip()
@@ -4578,15 +4579,16 @@ init python:
         return "".join(parts)
 
 
-    def _renforge_store_expression(expr):
+    def _renforge_store_expression(expr, characters=True):
         """Resolve a say ``who`` or dynamic-name expression without running game code.
 
         The engine evaluates these with eval_who and py_eval. The bridge only
         reads: a string literal (``"Mysterious voice"``) is its own value; a
         name is looked up in the ``character`` namespace, then in the store,
-        the order eval_who uses; a dotted path follows instance fields and
-        dict keys. Calls, operators and properties are never evaluated.
-        Returns ``(found, value)``.
+        the order eval_who uses for a speaker; with ``characters=False`` (a
+        dynamic name, which py_eval reads) only in the store. A dotted path
+        follows instance fields and dict keys. Calls, operators and
+        properties are never evaluated. Returns ``(found, value)``.
         """
         if not isinstance(expr, builtins.str) or not expr.strip():
             return False, None
@@ -4607,7 +4609,7 @@ init python:
             namespaces = renpy.python.store_dicts
         except Exception:
             namespaces = None
-        if len(parts) == 1 and namespaces is not None:
+        if characters and len(parts) == 1 and namespaces is not None:
             # `define character.e = Character(...)` lives in store.character.
             try:
                 characters = namespaces.get("store.character")

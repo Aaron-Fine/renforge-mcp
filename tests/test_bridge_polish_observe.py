@@ -73,6 +73,20 @@ def test_dynamic_character_name_is_read_from_the_store(running_bridge):
     assert lookup("buddy") == "Ri"
 
 
+def test_dynamic_character_name_ignores_the_character_namespace(running_bridge):
+    """Ren'Py evaluates a dynamic name in the default store (py_eval), not store.character."""
+    renpy = running_bridge.renpy
+    renpy.store.player_name = "Rin"
+    renpy.python = types.SimpleNamespace(store_dicts={
+        "store.character": {"player_name": "a character-namespace value",
+                            "hero": _Character("player_name", dynamic=True)},
+        "store": vars(renpy.store),
+    })
+    lookup = running_bridge.globs["_renforge_character_display_name"]
+
+    assert lookup("hero") == "Rin"
+
+
 def test_dynamic_name_the_bridge_cannot_read_is_not_reported_as_its_source(running_bridge):
     """Calls are never evaluated, and the expression text is not a name."""
     renpy = running_bridge.renpy
