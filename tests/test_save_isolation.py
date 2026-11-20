@@ -2069,3 +2069,19 @@ def test_parse_save_directory_never_reads_a_script_through_a_link(tmp_path: Path
 
     assert parse_save_directory(project) == "Inside"
     assert parse_save_directory(linked_root) == "Inside"
+
+
+def test_import_stops_reading_a_slot_iterable_past_the_limit(tmp_path: Path) -> None:
+    import renforge.save_isolation as save_isolation
+
+    consumed: list[int] = []
+
+    def names():
+        for index in range(save_isolation.SELECTOR_MAX_SLOTS * 5):
+            consumed.append(index)
+            yield f"{index}-1"
+
+    result = save_isolation.select_host_slots(tmp_path, slots=names(), home=tmp_path / "home")
+
+    assert result["code"] == "SAVE_IMPORT_INVALID"
+    assert len(consumed) == save_isolation.SELECTOR_MAX_SLOTS + 1

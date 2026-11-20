@@ -34,6 +34,7 @@ import sys
 import tempfile
 import zipfile
 from collections.abc import Iterator
+from itertools import islice
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
@@ -1028,7 +1029,8 @@ def select_host_slots(
     holding a session open: a slow listing must never delay a stop.
     """
     if slots is not None and not isinstance(slots, (str, bytes)) and isinstance(slots, Iterable):
-        slots = list(slots)
+        # One past the cap is enough for selector_error to refuse it.
+        slots = list(islice(slots, SELECTOR_MAX_SLOTS + 1))
     error = selector_error(slot=slot, slots=slots, pattern=pattern)
     if error is None and slot is None and not slots and pattern is None:
         error = "import requires slot, slots, or pattern"
