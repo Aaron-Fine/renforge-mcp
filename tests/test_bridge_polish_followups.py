@@ -253,3 +253,32 @@ def test_save_accepts_a_plain_slot_name(running_bridge, slot):
     reply = running_bridge.client.request("save_slot", {"slot": slot})
     assert reply.get("ok") is True, reply
     assert saved == [slot]
+
+
+def test_a_custom_click_runs_the_action_discovery_listed_not_a_clicked_flag(running_bridge, monkeypatch):
+    """A game displayable may keep ``action`` and a ``clicked`` press flag."""
+    renpy = running_bridge.renpy
+    runs = []
+
+    class Action:
+        def __call__(self):
+            runs.append(1)
+
+    class Hotspot:
+        def __init__(self):
+            self.action = Action()
+            self.clicked = False
+
+        def event(self, ev, x, y, st):
+            raise AssertionError("a semantic click runs the action, not the event")
+
+    ran = []
+    monkeypatch.setattr(renpy, "ui", types.SimpleNamespace(Action=Action), raising=False)
+    renpy.display.behavior.run = lambda action: ran.append(action) or (action() if callable(action) else None)
+    _custom_widget_scene(running_bridge, [Hotspot()])
+    element = running_bridge.client.list_ui_elements()[0]
+
+    clicked = running_bridge.client.click_element(id=element["id"])
+    assert clicked.get("ok") is True and clicked.get("via") == "action", clicked
+    assert runs == [1]
+    assert all(isinstance(action, Action) for action in ran), ran

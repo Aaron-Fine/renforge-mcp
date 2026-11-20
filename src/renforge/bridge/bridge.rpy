@@ -2480,6 +2480,10 @@ init python:
         menu_action = getattr(focus, "menu_action", None)
         if menu_action is not None:
             return menu_action
+        # A game's own displayable listed by discovery carries the action
+        # discovery validated; its ``clicked`` may be a press flag, not one.
+        if hasattr(focus, "custom_action"):
+            return focus.custom_action
         widget = getattr(focus, "widget", None)
         for owner in (widget, focus):
             if owner is None:
@@ -5084,7 +5088,9 @@ init python:
                 continue
             # As with Ren'Py buttons, no action means insensitive.
             enabled = bool(actions) and _renforge_safe_sensitive(sensitivity, value)
-            yield types.SimpleNamespace(widget=widget, screen=screen), {
+            focus = types.SimpleNamespace(widget=widget, screen=screen,
+                                          custom_action=value if actions else None)
+            yield focus, {
                 "screen": name, "layer": layer, "role": "button",
                 "text": _renforge_focus_text(widget) or None,
                 "enabled": enabled, "clickable": enabled, "covered": False,
