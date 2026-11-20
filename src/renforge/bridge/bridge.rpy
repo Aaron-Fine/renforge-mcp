@@ -7618,7 +7618,9 @@ init python:
 
         ``result`` is act's success reply (operation, id, interaction, screen,
         via); the stored values are added to it and it is returned. A
-        viewport changes no axis unless every requested axis can change.
+        viewport changes no axis unless every requested axis can change; when
+        one axis's change ends the interaction, the reply says which axes
+        never ran (``interrupted``, ``skipped_axes``).
         Refusals: ``value_required`` (no finite number given) and
         ``unsupported`` (the adjustment cannot change)."""
         widget = getattr(focus, "widget", None)
@@ -7633,8 +7635,22 @@ init python:
                     return refuse("value_required")
                 if not callable(getattr(getattr(widget, field, None), "change", None)):
                     return refuse("unsupported")
-            for axis, field in axes:
-                changed, stored = _renforge_change_adjustment(getattr(widget, field, None), payload[axis])
+            for index, (axis, field) in enumerate(axes):
+                adjustment = getattr(widget, field, None)
+                try:
+                    changed, stored = _renforge_change_adjustment(adjustment, payload[axis])
+                except Exception as exc:
+                    if _renforge_is_script_control_flow(exc):
+                        # This axis changed and ended the interaction; any
+                        # later axis never ran. The reply rides on exc.
+                        stored = _renforge_observe_number(getattr(adjustment, "value", None))
+                        if stored is not None:
+                            result[axis] = stored
+                        skipped = [name for name, _field in axes[index + 1:]]
+                        if skipped:
+                            result["interrupted"] = True
+                            result["skipped_axes"] = skipped
+                    raise
                 if not changed:
                     return refuse("unsupported")
                 result[axis] = stored
