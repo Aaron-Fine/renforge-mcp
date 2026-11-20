@@ -600,6 +600,10 @@ versioning.
   not load again) instead of an unstable observation offered for
   `renforge_act`. `renforge_mod` `reload` reports `settled: false` and
   `next` when the screen had not settled, keeping the reload's result.
+- Continuing with `renforge_act` and no control holds its first
+  observation, the click past a line, and the wait after that click to
+  the step's own `timeout`, so a short timeout is no longer overrun before
+  progression starts. A click accepted in time is still reported.
 
 ## [0.7.6] - 2026-11-18
 

@@ -1674,11 +1674,14 @@ def _observation_from_reply(reply: dict) -> dict:
     return snapshot
 
 
-def observe(project_path: str, *, screenshot: bool = True) -> dict:
-    """Read one interaction snapshot. ``stable`` false is still returned."""
+def observe(project_path: str, *, screenshot: bool = True, deadline: float | None = None) -> dict:
+    """Read one interaction snapshot. ``stable`` false is still returned.
+
+    ``deadline`` (a ``time.monotonic()`` value) bounds the bridge request.
+    """
 
     def _handler(client: BridgeClient) -> dict:
-        reply = client.observe(screenshot=bool(screenshot))
+        reply = client.observe(screenshot=bool(screenshot), deadline=deadline)
         snapshot = _observation_from_reply(reply if isinstance(reply, dict) else {})
         if isinstance(reply, dict) and snapshot.get("ok") is not False:
             _mark_crossed(project_path, client, reply.get("event_seq"))
@@ -1827,8 +1830,10 @@ def play(
     if control_id is None:
         if value is not None:
             return {"ok": False, "error": "value needs a control id"}
+        # One deadline for the whole step: the first observe, the click past
+        # a line, the wait for it to end, and progression.
         deadline = time.monotonic() + timeout
-        current = observe(project_path, screenshot=False)
+        current = observe(project_path, screenshot=False, deadline=deadline)
         if current.get("ok") is False:
             return current
         # Continuing never picks a choice: progression stops at the next
@@ -1842,13 +1847,13 @@ def play(
             def _dismiss(client: BridgeClient) -> dict:
                 return client.dismiss_if(interaction=current["interaction"],
                                          observation_id=current["observation_id"],
-                                         past_optional_controls=True)
+                                         past_optional_controls=True, deadline=deadline)
             clicked_past = _with_client(project_path, _dismiss)
             if clicked_past.get("ok"):
                 # The dismiss is queued; let the line end before progressing.
-                until = time.monotonic() + min(2.0, timeout / 2)
+                until = min(deadline, time.monotonic() + min(2.0, timeout / 2))
                 while time.monotonic() < until:
-                    now = observe(project_path, screenshot=False)
+                    now = observe(project_path, screenshot=False, deadline=deadline)
                     if now.get("ok") is False or now.get("interaction") != current["interaction"]:
                         break
                     time.sleep(0.02)
