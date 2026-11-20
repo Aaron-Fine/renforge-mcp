@@ -541,6 +541,17 @@ def _is_link_or_unreadable(path: Path) -> bool:
         return True
 
 
+def _entry_gone(path: Path) -> bool:
+    """Whether the entry itself is gone; a dangling link left behind is not."""
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
 def _deletion_receipt(project_root: Path, path: Path) -> str:
     """Render a removed path for ``files_deleted``.
 
@@ -771,7 +782,7 @@ class BridgeSession:
             except Exception:
                 removed_all = False
                 for path in sorted(known_paths, key=lambda item: len(item.parts), reverse=True):
-                    if not path.exists():
+                    if _entry_gone(path):
                         removed.append(_deletion_receipt(self._project_root, path))
             else:
                 removed.append(_deletion_receipt(self._project_root, cleanup_target))

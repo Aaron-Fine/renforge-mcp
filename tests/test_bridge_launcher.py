@@ -681,6 +681,37 @@ def test_cleanup_listing_never_walks_into_a_junction_in_the_session(monkeypatch,
     assert not any(path.is_relative_to(junction) and path != junction for path in listed)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_partial_savedir_cleanup_never_reports_a_dangling_link_it_left(
+    monkeypatch, tmp_path: Path
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    savedir = tmp_path / "renforge-saves"
+    savedir.mkdir()
+    dangling = savedir / "gone"
+    dangling.symlink_to(tmp_path / "missing")
+
+    from renforge.bridge import launcher as launcher_module
+
+    def failing_rmtree(_path, **_kwargs):
+        raise OSError("locked")
+
+    monkeypatch.setattr(launcher_module.shutil, "rmtree", failing_rmtree)
+    session = BridgeSession(
+        _FakeProcess(),
+        _FakeClient(),
+        project_root,
+        temporary_savedir=savedir,
+        cleanup_savedir=True,
+    )
+
+    result = session.close()
+
+    assert dangling.is_symlink()
+    assert result["files_deleted"] == []
+
+
 def test_close_waits_for_a_writer_holding_the_session_open(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
