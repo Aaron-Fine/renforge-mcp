@@ -2051,3 +2051,21 @@ def test_a_relative_reported_save_location_is_never_renforge_owned(monkeypatch) 
     assert storage_is_renforge_owned(str(inside), home=False) is True
     assert storage_is_renforge_owned("saves", home=False) is False
     assert storage_is_renforge_owned("saves", home=True) is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_parse_save_directory_never_reads_a_script_through_a_link(tmp_path: Path) -> None:
+    # A linked options.rpy must not lend the declaration of a script
+    # outside the project; a linked project root is still read.
+    outside = tmp_path / "outside.rpy"
+    outside.write_text('define config.save_directory = "Outside"\n', encoding="utf-8")
+    project = tmp_path / "project"
+    game = project / "game"
+    game.mkdir(parents=True)
+    (game / "options.rpy").symlink_to(outside)
+    (game / "zz.rpy").write_text('define config.save_directory = "Inside"\n', encoding="utf-8")
+    linked_root = tmp_path / "library"
+    linked_root.symlink_to(project, target_is_directory=True)
+
+    assert parse_save_directory(project) == "Inside"
+    assert parse_save_directory(linked_root) == "Inside"

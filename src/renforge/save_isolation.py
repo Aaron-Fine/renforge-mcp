@@ -793,17 +793,19 @@ def parse_save_directory(project_root: str | Path) -> str | None:
     game_dir = Path(project_root) / "game"
     if not game_dir.is_dir():
         return None
+    # Resolve the folder only (a linked game library is fine); the script
+    # itself is opened without following a link out of the project.
+    try:
+        game_dir = game_dir.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
     candidates = [game_dir / "options.rpy", *sorted(game_dir.glob("*.rpy"))]
     seen: set[Path] = set()
     for path in candidates:
-        try:
-            resolved = path.resolve()
-        except (OSError, RuntimeError, ValueError):
+        if path in seen:
             continue
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        text = _read_script_bounded(resolved)
+        seen.add(path)
+        text = _read_script_bounded(path)
         if text is None:
             continue
         match = SAVE_DIRECTORY_RE.search(text)
