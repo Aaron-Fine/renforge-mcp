@@ -284,3 +284,32 @@ def test_a_custom_click_runs_the_action_discovery_listed_not_a_clicked_flag(runn
     assert clicked.get("ok") is True and clicked.get("via") == "action", clicked
     assert runs == [1]
     assert all(isinstance(action, Action) for action in ran), ran
+
+
+# --- hovering a semantic control needs a pointer that reaches it ------------
+
+
+def _semantic_hotspot_under(running_bridge, monkeypatch, focus_at_point):
+    """A custom semantic control at (0, 100, 60x40) and the engine hit test given."""
+    _acting_hotspot(running_bridge, monkeypatch)
+    running_bridge.renpy.display.render.screen_render.focus_at_point = focus_at_point
+    running_bridge.renpy._moves[:] = []
+    return running_bridge.client.list_ui_elements()[0]
+
+
+def test_hovering_a_semantic_control_avoids_a_point_another_control_takes(running_bridge, monkeypatch):
+    upper = object()
+    element = _semantic_hotspot_under(running_bridge, monkeypatch,
+        lambda x, y, _screen: (upper, None, None) if x < 40 else None)
+    hovered = running_bridge.client.hover_element(id=element["id"])
+    assert hovered.get("ok") is True, hovered
+    assert hovered["x"] >= 40, hovered
+
+
+def test_hovering_a_semantic_control_another_control_covers_is_refused(running_bridge, monkeypatch):
+    upper = object()
+    element = _semantic_hotspot_under(running_bridge, monkeypatch, lambda x, y, _screen: (upper, None, None))
+    assert element["clickable"] is True  # its action can still run
+    hovered = running_bridge.client.hover_element(id=element["id"])
+    assert hovered.get("ok") is False and hovered["error"] == "UI element has no pointer target", hovered
+    assert running_bridge.renpy._moves == []

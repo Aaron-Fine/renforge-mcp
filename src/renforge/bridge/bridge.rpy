@@ -2892,6 +2892,30 @@ init python:
         finally:
             _renforge_reset_testmouse_state()
 
+    def _renforge_semantic_pointer_point(focus, element):
+        """A point where the pointer reaches a semantic control, for a hover.
+
+        Coverage does not probe semantic controls, whose actions bypass the
+        pointer. A probe point is usable unless Ren'Py's hit test gives it to
+        another displayable; a point that hits nothing still reaches a game's
+        own displayable through its ``event``. Returns ``(x, y)``, True when
+        the engine cannot hit test (the usual point stands), or None when
+        another displayable takes every probe point.
+        """
+        if element.get("click_point"):
+            return True
+        widget = getattr(focus, "widget", None)
+        candidates = _renforge_point_candidates(element.get("bounds"))
+        if not candidates:
+            return True
+        for candidate in candidates:
+            hit = _renforge_render_hit(*candidate)
+            if hit == "unavailable":
+                return True
+            if not isinstance(hit, tuple) or hit[1] is widget:
+                return candidate
+        return None
+
     def _renforge_h_hover_element(payload):
         payload = payload or {}
         expected_frame_id = payload.get("expected_frame_id") or payload.get("expected_screenshot")
@@ -2913,8 +2937,16 @@ init python:
         # As for a click: a covered control would hover whatever covers it.
         if element.get("covered") or element.get("clickable") is False:
             return {"ok": False, "error": "UI element has no eligible click", "element": element}
+        target = element
+        if element.get("semantic"):
+            # Clickable means its action can run, not that the pointer gets there.
+            point = _renforge_semantic_pointer_point(focus, element)
+            if point is None:
+                return {"ok": False, "error": "UI element has no pointer target", "element": element}
+            if point is not True:
+                target = dict(element, click_point={"x": point[0], "y": point[1]})
         try:
-            x, y, method = _renforge_move_mouse(focus, element)
+            x, y, method = _renforge_move_mouse(focus, target)
         except RuntimeError as exc:
             return {"ok": False, "error": str(exc), "element": element}
         result = {
