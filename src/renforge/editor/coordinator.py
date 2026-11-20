@@ -2556,15 +2556,45 @@ class EditorCoordinator:
         shadow always stay in the state folder; when the source sits on another
         filesystem (a game on a second drive), the replacement and displaced
         files go to ``<project>/.renforge/editor-exchange/<transaction>`` on the
-        source's side instead, and ``_discard_project_exchange`` removes them
-        once the exchange has succeeded or never happened.
+        source's side instead (see ``_project_exchange_root``), and
+        ``_discard_project_exchange`` removes them once the exchange has
+        succeeded or never happened.
         """
-        if same_filesystem(transaction.source_absolute_path, self._transaction_root):
+        source = Path(transaction.source_absolute_path)
+        if same_filesystem(source, self._transaction_root):
             return ensure_nofollow_directory(self._transaction_root / transaction.transaction_id / "exchange")
-        return ensure_nofollow_directory(self._project_exchange_root() / transaction.transaction_id)
+        return ensure_nofollow_directory(self._project_exchange_root(source) / transaction.transaction_id)
 
-    def _project_exchange_root(self) -> Path:
-        return Path(self._project.root) / RENFORGE_DIRNAME / PROJECT_EXCHANGE_DIRNAME
+    def _project_exchange_root(self, source: Path) -> Path:
+        """``.renforge/editor-exchange`` in the highest project folder on the source's filesystem.
+
+        That is the project root, unless a folder inside it (``game`` mounted
+        from elsewhere) is on another filesystem than the root: then it is the
+        highest such folder above the source. When none matches, the project
+        root is returned and the exchange refuses to cross filesystems.
+        """
+        root = Path(self._project.root)
+        candidates = [root]
+        try:
+            relative = source.parent.resolve().relative_to(root.resolve())
+        except (OSError, ValueError):
+            relative = None
+        if relative is not None:
+            folder = root
+            for part in relative.parts:
+                folder = folder / part
+                candidates.append(folder)
+        chosen = next((folder for folder in candidates if same_filesystem(source, folder)), root)
+        return chosen / RENFORGE_DIRNAME / PROJECT_EXCHANGE_DIRNAME
+
+    def _is_project_exchange_root(self, folder: Path) -> bool:
+        if folder.name != PROJECT_EXCHANGE_DIRNAME or folder.parent.name != RENFORGE_DIRNAME:
+            return False
+        try:
+            folder.resolve().relative_to(Path(self._project.root).resolve())
+        except (OSError, ValueError):
+            return False
+        return True
 
     def _discard_project_exchange(self, exchange_dir: Path, *paths: Path) -> None:
         """Remove exchange files kept in the project, and their folders once empty.
@@ -2572,8 +2602,8 @@ class EditorCoordinator:
         Only called when the files hold no evidence the journal lacks. Files in
         the state folder are left alone; a conflict keeps every file anywhere.
         """
-        project_root = self._project_exchange_root()
-        if exchange_dir.parent != project_root:
+        project_root = exchange_dir.parent
+        if not self._is_project_exchange_root(project_root):
             return
         for path in paths:
             try:

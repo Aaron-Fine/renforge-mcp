@@ -5486,3 +5486,66 @@ def test_a_windows_replacement_that_moved_nothing_stays_a_clean_failure(
         status = coordinator.close()
     assert source.read_bytes() == baseline
     assert list(status["transactions"].values()) == ["failed"]
+
+
+def test_commit_and_rollback_work_when_only_the_game_folder_is_another_filesystem(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``project/game`` mounted elsewhere, with the project root beside the state folder.
+
+    The exchange files must go on the game folder's filesystem, not under the
+    project root, or every publication is refused as crossing filesystems.
+    """
+    from renforge.editor import coordinator as coordinator_module
+    from renforge.editor import paths as paths_module
+
+    project, source = _make_project(tmp_path)
+    game_dir = (project.root / "game").resolve()
+    real_lstat_regular = paths_module._lstat_regular
+
+    def offset(path: Path) -> int:
+        try:
+            Path(path).resolve().relative_to(game_dir)
+        except ValueError:
+            return 0
+        return 2_000_000
+
+    def device(path: Path) -> int:
+        return paths_module._filesystem_dir(Path(path)).stat().st_dev + offset(path)
+
+    def fake_lstat_regular(path: Path) -> Any:
+        st = real_lstat_regular(path)
+        return SimpleNamespace(st_mode=st.st_mode, st_dev=st.st_dev + offset(path))
+
+    def fake_same_filesystem(left: Path, right: Path) -> bool:
+        try:
+            return device(left) == device(right)
+        except OSError:
+            return False
+
+    monkeypatch.setattr(paths_module, "_lstat_regular", fake_lstat_regular)
+    monkeypatch.setattr(paths_module, "same_filesystem", fake_same_filesystem)
+    monkeypatch.setattr(coordinator_module, "same_filesystem", fake_same_filesystem, raising=False)
+
+    observation = _base_observation(script_generation=44)
+    probe = _Probe(
+        observe_reply={**observation, "frame_id": "independent-frame-44", "object_id": "obj-independent-44"}
+    )
+    coordinator = EditorCoordinator(project, _make_sdk(tmp_path), attestation_timeout=0.2)
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    baseline = source.read_bytes()
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analysis = _analyze(sock, auth, observation, request_id="an-game-mount")
+            commit = _commit(sock, auth, analysis, x=79, y=80, request_id="co-game-mount")
+            assert commit["ok"] is True, commit.get("error")
+            assert "xpos 79 ypos 80" in source.read_text(encoding="utf-8")
+            tx = commit["result"]["transaction_id"]
+            _wait_for_commit_state(sock, auth, tx, "rolled_back")
+            assert source.read_bytes() == baseline
+    finally:
+        coordinator.close()
+    assert not (project.root / ".renforge").exists()
+    assert not (game_dir / ".renforge").exists()
