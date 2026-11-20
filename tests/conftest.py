@@ -33,6 +33,14 @@ def _no_ambient_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An exported RENFORGE_POLICY or allowlist must not deny or allow what a
+    # test expects; policy tests set their own.
+    for name in ("RENFORGE_POLICY", "RENFORGE_POLICY_ALLOW", "RENFORGE_POLICY_ALLOW_RISK"):
+        monkeypatch.delenv(name, raising=False)
+
+
 _ENGINE_RESTARTS = ("RestartContext", "RestartTopContext", "FullRestartException", "UtterRestartException")
 
 
