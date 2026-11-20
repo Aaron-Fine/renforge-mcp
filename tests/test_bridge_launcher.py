@@ -2962,7 +2962,10 @@ def _state_dir_given_with_dotdot(tmp, mp):
 
 
 def _state_dir_given_with_tilde(tmp, mp):
+    # Python expands ``~`` from HOME on POSIX but from USERPROFILE on
+    # Windows; state_root() and the savedir check both use expanduser.
     mp.setenv("HOME", str(tmp))
+    mp.setenv("USERPROFILE", str(tmp))
     mp.setenv("RENFORGE_STATE_DIR", "~/state")
     return "~/state/projects/p/saves", tmp / "state/projects/p/saves", None
 

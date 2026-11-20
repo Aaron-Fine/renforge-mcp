@@ -1005,7 +1005,7 @@ with nothing in the mod, `raw_tail` holds the end of Ren'Py's output. `guide` re
 | `renforge_editor` | Public Live Editor: `status`, `select` (overlay hit path), and `save` (reload + attest). `save` with `dry_run` returns a unified source diff without writing, linting, reloading, or creating a transaction; it rejects `x`/`y` and older bridges without dry-run support (`DRY_RUN_UNSUPPORTED`). Locked targets return the lock code. Never call private `editor_task0_*` handlers. |
 | `renforge_click_at` | Click logical or source-capture pixels; pass `expected_frame_id=observation.frame` to map and guard pixels from a delivered gameplay image. Also accepts `expected_state`. |
 | `renforge_hit_test` | Inspect the interactive focus stack at a point (`topmost` + `underneath`) to diagnose overlays that intercept clicks. |
-| `renforge_capture_screenshot` | Persist the current frame as a named PNG under `<state>/captures/` and return `path`, `relative_path`, SHA-256, and dimensions for later diff/translation tools. `relative_path` and the `files_touched` receipt are relative to the project only when the capture is inside it; the state folder is normally outside the project, so they then hold the same absolute path as `path`. |
+| `renforge_capture_screenshot` | Persist the current frame as a named PNG under `<state>/captures/` and return `path`, `relative_path`, SHA-256, and dimensions for later diff/translation tools. `relative_path` and the `files_touched` receipt are relative to the project only when the capture is inside it; the state folder is normally outside the project, so they then hold the same absolute path as `path`, written with `/` (on Windows `path` keeps `\`). |
 | `renforge_estimate_translation` | Estimate `dx`/`dy` between two saved PNGs with Pillow, returning `confidence`, `support`, and explicit unavailability when the measure is ambiguous. Search work is bounded; use a tighter region or lower `max_shift` when needed. |
 | `renforge_find_image_on_screen` | Locate a local PNG template in the current frame and return confidence, bounds, center, and frame guard. |
 | `renforge_get_displayable_bounds` | Report the logical bounds and center where a shown image tag was rendered. |
@@ -1218,7 +1218,12 @@ return `files_deleted`. A cleanup that fails part-way still lists the paths that
 are actually gone, and `failed` names the resource it could not finish. Paths inside the project are project-relative POSIX
 (for example `game/screens.rpy`, `game/tl/french`, or `dialogue.txt`); paths
 outside the project (an external build destination or Ren'Py's savedir) stay
-absolute. A tool that cannot enumerate its outputs — `renforge_launch`, lint
+absolute. Project-relative paths, and absolute ones for a capture, a scene
+snapshot, a packaged mod zip, a build destination, or the activity sidecar,
+use `/` on every platform (`C:/Users/...` on Windows); a savedir and the
+save files an import copied (`renforge_saves`, `renforge_session`) keep the
+platform's own separator.
+A tool that cannot enumerate its outputs — `renforge_launch`, lint
 analysis, a failed build or translation, or a build that used Ren'Py's default
 destination because no `destination` was passed — omits the key instead of
 returning an empty list, so an empty list always means "wrote nothing". The
