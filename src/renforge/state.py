@@ -53,6 +53,9 @@ def _same_file(a: Path, b: Path) -> bool:
 # and spelling a path lists each of its ancestors. Bounded, and cleared when
 # full, because a long-lived server may see many paths.
 _SPELLINGS: dict[str, Path] = {}
+# Case-folded resolved path -> the first answer kept under that folding, so a
+# key that changed only in case can still find the answer for its folder.
+_SPELLINGS_BY_FOLD: dict[str, Path] = {}
 _SPELLINGS_MAX: Final = 1024
 
 
@@ -81,11 +84,22 @@ def on_disk_spelling(path: Path) -> Path:
     and that game's lock would still be in the old folder. A path with a
     component that is missing or could not be listed (a folder that does
     not exist yet) is spelled afresh each time.
+
+    On Windows ``resolve()`` itself returns the disk's spelling, so after a
+    case-only rename the resolved path, and with it the key, changes. A key
+    that differs only in case from one already kept, and names the same
+    folder, therefore gets the kept answer too. On a case-sensitive volume
+    two such paths are two folders, so each is spelled on its own.
     """
     key = str(path)
     known = _SPELLINGS.get(key)
     if known is not None:
         return known
+    folded_key = _fold(key)
+    kept = _SPELLINGS_BY_FOLD.get(folded_key)
+    if kept is not None and _same_file(kept, path):
+        _keep(key, folded_key, kept)
+        return kept
     complete = True
     out = Path(path.anchor)
     for name in path.parts[1:]:
@@ -105,10 +119,16 @@ def on_disk_spelling(path: Path) -> Path:
                 complete = False  # not there (yet): its spelling may change
         out = candidate
     if complete:
-        if len(_SPELLINGS) >= _SPELLINGS_MAX:
-            _SPELLINGS.clear()
-        _SPELLINGS[key] = out
+        _keep(key, folded_key, out)
     return out
+
+
+def _keep(key: str, folded_key: str, spelling: Path) -> None:
+    if len(_SPELLINGS) >= _SPELLINGS_MAX:
+        _SPELLINGS.clear()
+        _SPELLINGS_BY_FOLD.clear()
+    _SPELLINGS[key] = spelling
+    _SPELLINGS_BY_FOLD.setdefault(folded_key, spelling)
 
 
 def project_state_dir(project_root: str | Path) -> Path:
