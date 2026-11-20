@@ -1287,14 +1287,44 @@ def test_live_import_requires_a_temporary_session(
     assert list(chosen.iterdir()) == []
 
 
+def _within_fifo_deadline(call, fifo: Path, what: str):
+    """Return ``call()``, or fail the test if it is still blocked after 5 s.
+
+    The call runs on a daemon thread, so a regression that blocks opening
+    *fifo* fails this test instead of hanging the suite. A thread, not a
+    child process, because the call depends on this test's monkeypatches.
+    """
+    import threading
+
+    outcome: dict[str, object] = {}
+
+    def run() -> None:
+        try:
+            outcome["value"] = call()
+        except BaseException as exc:  # re-raised on the test's thread
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    if worker.is_alive():
+        # Free a reader blocked in open(). With no reader there yet the open
+        # fails (ENXIO); the failure below must still be reported.
+        with contextlib.suppress(OSError):
+            os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        worker.join(timeout=5)
+        pytest.fail(f"{what} blocked opening a FIFO")
+    if "error" in outcome:
+        raise outcome["error"]  # type: ignore[misc]
+    return outcome["value"]
+
+
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
 def test_a_fifo_swapped_in_for_options_rpy_cannot_hang_the_listing(
     tmp_path: Path, host_save_root: Path, monkeypatch
 ) -> None:
     # Security probe p6: options.rpy becomes a FIFO between the check and
     # the read. The read must refuse it at once, not wait for a writer.
-    import threading
-
     import renforge.save_isolation as save_isolation
 
     project, host_saves = _host_project(tmp_path, host_save_root)
@@ -1326,20 +1356,11 @@ def test_a_fifo_swapped_in_for_options_rpy_cannot_hang_the_listing(
 
     monkeypatch.setattr(Path, "is_file", is_file_then_swap)
     monkeypatch.setattr(save_isolation, "open_regular_at_nofollow", swap_then_open)
-    results: list[dict] = []
-    worker = threading.Thread(
-        target=lambda: results.append(list_host_slots(project, home=tmp_path / "home")),
-        daemon=True,
+    result = _within_fifo_deadline(
+        lambda: list_host_slots(project, home=tmp_path / "home"), options, "list_host_slots"
     )
-    worker.start()
-    worker.join(timeout=5)
-    if worker.is_alive():  # free the reader so the suite can go on
-        fd = os.open(options, os.O_WRONLY | os.O_NONBLOCK)
-        os.close(fd)
-        worker.join(timeout=5)
-        pytest.fail("list_host_slots blocked opening a FIFO")
     assert swapped
-    assert [slot["name"] for slot in results[0]["slots"]] == ["1-1"]
+    assert [slot["name"] for slot in result["slots"]] == ["1-1"]
 
 
 def test_parse_save_directory_skips_a_script_over_the_read_cap(tmp_path: Path) -> None:
@@ -1469,7 +1490,10 @@ def test_import_refuses_a_fifo_swapped_in_for_a_save(
         return real_copy(source, destination, slot)
 
     monkeypatch.setattr(save_isolation, "_copy_slot_files", fifo_then_copy)
-    result = import_host_slots(project, dest, slot="1-1", home=tmp_path / "home")
+    result = _within_fifo_deadline(
+        lambda: import_host_slots(project, dest, slot="1-1", home=tmp_path / "home"),
+        host_saves / "1-1-LT1.save", "import_host_slots",
+    )
 
     assert result["ok"] is False
     assert result["refused"] == [{"name": "1-1", "file": "1-1-LT1.save", "reason": "not_regular"}]
