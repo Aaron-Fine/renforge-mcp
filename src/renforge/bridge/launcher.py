@@ -1042,33 +1042,91 @@ def normalize_language(language: str | None) -> str | None:
     return value
 
 
+def _state_savedir_spelling(savedir: str) -> Path | None:
+    """Return ``savedir`` spelled from the resolved state folder, or None when no part of it is there.
+
+    The path is judged exactly as :func:`resolve_launch_isolation` will
+    resolve it: absolute, ``~`` expanded, and with no ``..`` collapsed by
+    text, since a link is followed before the ``..`` after it. Each prefix
+    of it is resolved in turn, so an alias of the state folder (an
+    unresolved ``RENFORGE_STATE_DIR``, or a linked ``/home``) and a ``..``
+    after a link both get no pass.
+
+    Only a path none of whose prefixes lands in the state folder is left to
+    the caller (None). Otherwise it must enter the state folder at its top,
+    and every longer prefix must land where its text says: a link inside
+    the tree, whether to elsewhere in it or out of it, is refused, wherever
+    the whole path ends up. The returned spelling starts at the resolved
+    :func:`state_root`, with the rest collapsed, ready for a no-follow
+    create. Refusals, and a path whose resolution raises, are
+    ``SESSION_NOT_ISOLATED``.
+    """
+    root = state_root()
+    parts = Path(savedir).expanduser().absolute().parts
+    expected: Path | None = None
+    try:
+        for depth in range(1, len(parts) + 1):
+            landed = Path(*parts[:depth]).resolve()
+            if expected is None:
+                if landed == root:
+                    expected = root
+                elif _is_within(landed, root):
+                    raise _state_savedir_refusal(f"{savedir!r} enters it through a link below its top")
+                continue
+            name = parts[depth - 1]
+            expected = expected.parent if name == ".." else expected / name
+            if not _is_within(expected, root) or landed != expected:
+                raise _state_savedir_refusal(f"{savedir!r} follows a link inside it")
+    except LaunchError:
+        raise  # a refusal above: LaunchError is a RuntimeError, so keep it from being wrapped again
+    except (OSError, RuntimeError) as exc:
+        raise _state_savedir_refusal(f"could not resolve {savedir!r}: {exc}") from exc
+    return expected
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """Return True when ``path`` is ``root`` or lexically below it."""
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _state_savedir_refusal(detail: str) -> LaunchError:
+    """Build the refusal for a savedir in the state folder that a link could redirect."""
+    return LaunchError(
+        "SESSION_NOT_ISOLATED",
+        f"The saves folder in the RenForge state folder is a link or not a folder ({detail}), "
+        "so the launch would not be isolated.",
+        phase="preparing_isolation",
+        suggested_fix="Remove the link from the RenForge state folder and launch again.",
+    )
+
+
 def _make_state_savedir(savedir: str | None) -> str | None:
     """Make a savedir in RenForge's state folder without following links; return the savedir to use.
 
-    A link planted on the way (even to another folder of the state tree)
-    must not choose where the launch saves, so such a folder is made here
-    before :func:`resolve_launch_isolation` resolves it. A savedir anywhere
-    else is returned unchanged: one the caller chose may sit behind a link.
+    A link planted on the way (out of the state tree, or to another folder
+    of it) must not choose where the launch saves, so such a folder is made
+    here before :func:`resolve_launch_isolation` resolves it. Whether a
+    savedir passes through the state folder is judged prefix by prefix as
+    the launcher will resolve it, so a spelling through a link to the state
+    folder, or a ``..`` after a link, is caught too (see
+    :func:`_state_savedir_spelling`). A savedir that never passes through
+    it is returned unchanged: one the caller chose may sit behind a link.
     Ren'Py still opens its save files by path later, so this narrows, but
     cannot close, the window in which a link swapped in redirects them.
     """
     if savedir is None or classify_savedir(savedir) != "path":
         return savedir
-    target = Path(os.path.normpath(Path(savedir).expanduser().absolute()))
-    try:
-        target.relative_to(state_root())
-    except ValueError:
+    target = _state_savedir_spelling(savedir)
+    if target is None:
         return savedir
     try:
         ensure_nofollow_directory(target)
     except PrivatePathError as exc:
-        raise LaunchError(
-            "SESSION_NOT_ISOLATED",
-            f"The saves folder in the RenForge state folder is a link or not a folder ({exc.message}), "
-            "so the launch would not be isolated.",
-            phase="preparing_isolation",
-            suggested_fix="Remove the link from the RenForge state folder and launch again.",
-        ) from exc
+        raise _state_savedir_refusal(exc.message) from exc
     return str(target)
 
 

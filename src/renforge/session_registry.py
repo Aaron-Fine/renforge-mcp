@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from renforge.state import _on_disk_spelling
+from renforge.state import on_disk_spelling
 from renforge.util.files import (
     PrivatePathError,
     atomic_write_private_json,
@@ -84,7 +84,7 @@ def canonical_project_path(project: str | Path) -> str:
     same dashboard and owned session as it finds the same state folder and
     bridge lock.
     """
-    return str(_on_disk_spelling(Path(project).expanduser().resolve()))
+    return str(on_disk_spelling(Path(project).expanduser().resolve()))
 
 
 def _validate_record(payload: object, *, path: Path) -> dict[str, Any] | None:

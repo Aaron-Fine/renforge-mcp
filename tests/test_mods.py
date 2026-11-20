@@ -806,6 +806,46 @@ def test_remove_refuses_a_linked_mod_folder(tmp_path) -> None:
     assert (target / "emptysub" / "deeper").is_dir()
 
 
+def _link_game_folder(tmp_path: Path) -> tuple[Path, Path]:
+    """A project whose ``game`` links to a folder elsewhere that holds mod ``foo``."""
+    import os
+
+    root = tmp_path / "project"
+    root.mkdir()
+    elsewhere = tmp_path / "elsewhere" / "game"
+    (elsewhere / "mods" / "foo" / "empty").mkdir(parents=True)
+    (elsewhere / "mods" / "foo" / "a.rpy").write_text("label a:\n    return\n", encoding="utf-8")
+    manifest = {"name": "foo", "files": ["a.rpy"]}
+    (elsewhere / "mods" / "foo" / "renforge-mod.json").write_text(json.dumps(manifest), encoding="utf-8")
+    try:
+        os.symlink(elsewhere, root / "game", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+    return root, elsewhere / "mods" / "foo"
+
+
+def test_remove_refuses_a_linked_game_folder(tmp_path) -> None:
+    root, foo = _link_game_folder(tmp_path)
+
+    result = mod_tools.mod(str(root), "remove", name="foo")
+
+    assert result["ok"] is False
+    assert "symlink" in result["error"]
+    assert (foo / "renforge-mod.json").exists()
+    assert (foo / "a.rpy").exists()
+    assert (foo / "empty").is_dir()
+
+
+def test_write_refuses_a_linked_game_folder(tmp_path) -> None:
+    root, foo = _link_game_folder(tmp_path)
+
+    with pytest.raises(ValueError, match="refusing to use symlink under game/: game$"):
+        mods.write_file(root, "foo", "b.rpy", "label b:\n    return\n")
+
+    assert not (foo / "b.rpy").exists()
+    assert json.loads((foo / "renforge-mod.json").read_text(encoding="utf-8"))["files"] == ["a.rpy"]
+
+
 def test_remove_refuses_a_linked_mods_folder(tmp_path) -> None:
     import os
 
@@ -826,6 +866,20 @@ def test_remove_refuses_a_linked_mods_folder(tmp_path) -> None:
     assert (elsewhere / "foo" / "empty").is_dir()
 
 
+def _pretend_junction(monkeypatch, junction: Path) -> None:
+    """Make the shared link check, and the copy mods imported, report ``junction`` as a link.
+
+    A Windows junction is not a symlink, so this is how a Linux run sees one.
+    """
+    real_check = util_files.is_link
+
+    def check(path) -> bool:
+        return Path(path) == junction or real_check(path)
+
+    monkeypatch.setattr(util_files, "is_link", check)
+    monkeypatch.setattr(mods, "is_link", check)
+
+
 def test_remove_does_not_walk_into_a_junction_inside_the_mod(tmp_path, monkeypatch) -> None:
     # os.walk(followlinks=False) still descends into NTFS junctions. Stand in
     # for one: a directory the shared reparse-aware check reports as a link.
@@ -834,8 +888,7 @@ def test_remove_does_not_walk_into_a_junction_inside_the_mod(tmp_path, monkeypat
     junction = (root / "game" / "mods" / "demo" / "linked").resolve()
     (junction / "deeper").mkdir(parents=True)
     (junction / "foreign.txt").write_text("not ours", encoding="utf-8")
-    real_check = util_files.is_link
-    monkeypatch.setattr(mods, "is_link", lambda path: Path(path) == junction or real_check(path))
+    _pretend_junction(monkeypatch, junction)
 
     result = mods.remove(root, "demo")
 
@@ -852,8 +905,7 @@ def test_list_does_not_count_files_behind_a_junction_inside_the_mod(tmp_path, mo
     junction = (root / "game" / "mods" / "demo" / "linked").resolve()
     junction.mkdir()
     (junction / "foreign.txt").write_text("not ours", encoding="utf-8")
-    real_check = util_files.is_link
-    monkeypatch.setattr(mods, "is_link", lambda path: Path(path) == junction or real_check(path))
+    _pretend_junction(monkeypatch, junction)
 
     assert mods.list_mods(root)["mods"][0]["unlisted"] == []
 

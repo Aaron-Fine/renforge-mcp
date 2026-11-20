@@ -14,7 +14,7 @@ import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Callable, Iterator
+from typing import Any, Callable
 
 from .lint import parse_lint_output
 from .util.files import (
@@ -23,6 +23,7 @@ from .util.files import (
     is_link,
     read_text_nofollow,
     receipt_path,
+    walk_nofollow,
     write_atomic,
 )
 from .state import ensure_project_state_dir
@@ -134,17 +135,18 @@ def _validate_relpath(path: Any) -> str:
 
 
 def _resolve_target(project_root: str | Path, name: str, rel: str) -> Path:
-    """Resolve ``rel`` under the mod dir, refusing symlinks under ``game/``."""
-    game = _game_dir(project_root)
+    """Resolve ``rel`` under the mod dir, refusing symlinks under ``game/``.
+
+    ``game``, ``game/mods`` and the mod folder are checked by
+    :func:`_refuse_linked_mod_dir`; each component of ``rel`` is checked here.
+    """
+    _refuse_linked_mod_dir(project_root, name)
     mod_dir = _mod_dir(project_root, name)
-    chain = [game, game / "mods", mod_dir]
     current = mod_dir
     for part in rel.split("/"):
         current = current / part
-        chain.append(current)
-    for component in chain:
-        if _is_link(component):
-            raise ValueError(f"refusing to use symlink under game/: {component.name}")
+        if _is_link(current):
+            raise ValueError(f"refusing to use symlink under game/: {current.name}")
     target = mod_dir / rel
     if not target.resolve().is_relative_to(mod_dir.resolve()):
         raise ValueError("resolved path escapes the mod directory")
@@ -169,17 +171,6 @@ def _refuse_linked_mod_dir(project_root: str | Path, name: str) -> None:
     for component in (game, game / "mods", _mod_dir(project_root, name)):
         if _is_link(component):
             raise ValueError(f"refusing to use symlink under game/: {component.name}")
-
-
-def _walk_unlinked(top: Path) -> Iterator[tuple[str, list[str], list[str]]]:
-    """``os.walk`` top-down that never enters a linked folder.
-
-    ``followlinks=False`` skips symlinks but still enters NTFS junctions, so
-    linked names are pruned from ``dirnames`` with the reparse-aware check.
-    """
-    for root, dirnames, filenames in os.walk(top):
-        dirnames[:] = sorted(d for d in dirnames if not _is_link(Path(root) / d))
-        yield root, dirnames, filenames
 
 
 def _load_manifest(mod_dir: Path) -> dict[str, Any] | None:
@@ -217,7 +208,7 @@ def _files_on_disk(mod_dir: Path) -> list[str]:
     found: list[str] = []
     if not mod_dir.is_dir():
         return found
-    for root, _dirnames, filenames in _walk_unlinked(mod_dir):
+    for root, _dirnames, filenames in walk_nofollow(mod_dir):
         for filename in filenames:
             full = Path(root) / filename
             if _is_link(full) or not full.is_file():
@@ -361,7 +352,7 @@ def remove(project_root: str | Path, name: str) -> dict[str, Any]:
     kept.extend(_unlisted(mod_dir, set(files)))
 
     # Deepest first; linked folders were pruned, so they are never removed.
-    folders = [Path(root) / d for root, dirnames, _ in _walk_unlinked(mod_dir) for d in dirnames]
+    folders = [Path(root) / d for root, dirnames, _ in walk_nofollow(mod_dir) for d in dirnames]
     for folder in reversed(folders):
         try:
             os.rmdir(folder)
