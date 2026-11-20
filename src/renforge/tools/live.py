@@ -381,6 +381,9 @@ def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
                 if key in launch_result:
                     result[key] = launch_result[key]
             _apply_ready_language(result, task.requested_language)
+            if launch_result.get("language_applied") is False and result.get("language_applied") is not False:
+                # That launch's message was the language mismatch, which no longer holds.
+                result.pop("message", None)
             return result
         except Exception:
             # Stale ready: initiate close and report closing/failure.

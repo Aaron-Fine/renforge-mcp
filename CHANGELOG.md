@@ -578,6 +578,8 @@ versioning.
   the ones it deleted in `files_deleted`.
 - Save listing no longer reads `config.save_directory` from a script outside
   the project that a linked `game/*.rpy` points to.
+- `renforge_launch_status` drops a launch's language-mismatch message once
+  the game reports the requested language.
 - A `save` or `load` slot that is a path rather than a slot name (absolute,
   with a drive, a `/` or `\` separator, a `:` (on Windows `page:name`
   writes a stream of the file `page`), or `.`/`..`) is refused with
