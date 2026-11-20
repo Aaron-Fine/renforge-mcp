@@ -23,6 +23,7 @@ from renforge.ui.graph import _story_map_signature
 from renforge.ui.server import _list_script_files
 
 UNLOADED = "unloaded_token"
+LOADED = "loaded_token"
 
 
 @pytest.fixture
@@ -37,16 +38,25 @@ def project(tmp_path: Path) -> Path:
     (tl / "Strings.RPY").write_text(
         f'translate french strings:\n    old "{UNLOADED}"\n    new "{UNLOADED}"\n', encoding="utf-8"
     )
+    # Lower-case controls (another name, so case-insensitive volumes keep both):
+    # the scanners must still find what Ren'Py loads.
+    (tl / "loaded.rpy").write_text(
+        f'translate french strings:\n    old "{LOADED}"\n    new "{LOADED}"\n', encoding="utf-8"
+    )
     return root
 
 
 def test_scans_report_only_the_scripts_renpy_loads(project: Path) -> None:
     result = scan_project(str(project))
-    assert [item["file"] for item in result["files"]] == ["game/script.rpy"]
+    loaded = ["game/script.rpy", "game/tl/french/loaded.rpy"]
+    assert [item["file"] for item in result["files"]] == loaded
     assert find_references(project, UNLOADED)["occurrences"] == []
-    assert UNLOADED not in json.dumps(list_translation_strings(project, "french"))
-    assert _list_script_files(project)["files"] == ["game/script.rpy"]
-    assert [Path(entry[0]).as_posix() for entry in _story_map_signature(project)[0]] == ["game/script.rpy"]
+    assert [item["file"] for item in find_references(project, "visible")["occurrences"]] == ["game/script.rpy"]
+    strings = json.dumps(list_translation_strings(project, "french"))
+    assert UNLOADED not in strings
+    assert LOADED in strings
+    assert _list_script_files(project)["files"] == loaded
+    assert [Path(entry[0]).as_posix() for entry in _story_map_signature(project)[0]] == loaded
 
 
 @pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0, reason="needs POSIX permissions that bind")
@@ -57,6 +67,6 @@ def test_the_dashboard_script_list_skips_an_unreadable_folder(project: Path) -> 
     (locked / "hidden.rpy").write_text("label hidden:\n    return\n", encoding="utf-8")
     locked.chmod(0)
     try:
-        assert _list_script_files(project) == {"ok": True, "files": ["game/script.rpy"]}
+        assert _list_script_files(project) == {"ok": True, "files": ["game/script.rpy", "game/tl/french/loaded.rpy"]}
     finally:
         locked.chmod(0o700)
