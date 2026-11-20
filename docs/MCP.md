@@ -911,9 +911,14 @@ be relative, use `/`, end in `.rpy`, `.txt`, `.json`, or `.md`, and stay under
 1,000,000 UTF-8 bytes. Symlinks under `game/` are refused. `write` will not take
 over files it did not create: a `game/mods/<name>/` folder without a manifest
 (some games ship their own mods there), or a file (or a `.rpy`'s `.rpyc`) the
-manifest does not list, is refused, so choose another name. `lint` runs
+manifest does not list, is refused, so choose another name. `remove` also
+refuses a mod whose own folder, `game/mods`, or `game` is a link, and never
+enters a linked folder inside the mod. `lint` runs
 Ren'Py lint on a temporary shadow copy, as `renforge_validate` does, so the
-project's `init` code runs but nothing is written in the game; when it fails
+project's `init` code runs but nothing is written in the game. It uses the
+game's own engine version, like `version="stable"` elsewhere (the
+`renforge.json` pin, the shipped engine, then `script_version.txt`), but never
+an SDK found inside the project. When it fails
 with nothing in the mod, `raw_tail` holds the end of Ren'Py's output. `guide` returns modding idioms
 (`init offset`, screen replacement, `config.label_overrides`, overlay screens).
 

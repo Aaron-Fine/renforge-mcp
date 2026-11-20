@@ -731,6 +731,147 @@ def test_lint_runs_on_a_shadow_copy_by_default(tmp_path, monkeypatch) -> None:
     assert [d["line"] for d in result["diagnostics"]] == [3]
 
 
+def _record_sdk_requests(monkeypatch) -> list:
+    """Stop the shadow lint at SDK selection and record what it asked for."""
+    from renforge.editor.exceptions import EditorError
+    from renforge.tools import validate
+
+    calls = []
+
+    def fake_sdk(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise EditorError("SDK_STOP", "test stops at SDK selection", {})
+
+    monkeypatch.setattr(validate, "get_or_install_sdk", fake_sdk)
+    return calls
+
+
+def test_lint_uses_the_engine_pinned_in_renforge_json(tmp_path, monkeypatch) -> None:
+    # A mod is linted by the engine the game runs, like renforge_validate's
+    # "stable" default promises, not by whatever the stable SDK is today.
+    root = _project(tmp_path)
+    (root / "renforge.json").write_text('{"renpy_version": "8.1.3"}', encoding="utf-8")
+    mods.write_file(root, "hud", "main.rpy", "label hud:\n    return\n")
+    calls = _record_sdk_requests(monkeypatch)
+
+    mods.lint(root, "hud")
+
+    # No project_root: an SDK found inside the project is project-controlled code.
+    assert calls == [(("8.1.3",), {})]
+
+
+def test_lint_uses_the_engine_the_game_ships(tmp_path, monkeypatch) -> None:
+    root = _project(tmp_path)
+    (root / "renpy").mkdir()
+    (root / "renpy" / "vc_version.py").write_text("version = '8.0.3.22090809'\n", encoding="utf-8")
+    mods.write_file(root, "hud", "main.rpy", "label hud:\n    return\n")
+    calls = _record_sdk_requests(monkeypatch)
+
+    mods.lint(root, "hud")
+
+    assert calls == [(("8.0.3",), {})]
+
+
+def test_lint_of_an_unpinned_project_uses_the_stable_sdk(tmp_path, monkeypatch) -> None:
+    root = _project(tmp_path)
+    mods.write_file(root, "hud", "main.rpy", "label hud:\n    return\n")
+    calls = _record_sdk_requests(monkeypatch)
+
+    mods.lint(root, "hud")
+
+    assert calls == [(("stable",), {})]
+
+
+def test_remove_refuses_a_linked_mod_folder(tmp_path) -> None:
+    import os
+
+    root = _project(tmp_path)
+    target = tmp_path / "elsewhere" / "target"
+    (target / "emptysub" / "deeper").mkdir(parents=True)
+    (target / "a.rpy").write_text("label a:\n    return\n", encoding="utf-8")
+    manifest = {"name": "foo", "files": ["a.rpy"]}
+    (target / "renforge-mod.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (root / "game" / "mods").mkdir()
+    try:
+        os.symlink(target, root / "game" / "mods" / "foo", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+
+    result = mod_tools.mod(str(root), "remove", name="foo")
+
+    assert result["ok"] is False
+    assert "symlink" in result["error"]
+    assert (target / "renforge-mod.json").exists()
+    assert (target / "a.rpy").exists()
+    assert (target / "emptysub" / "deeper").is_dir()
+
+
+def test_remove_refuses_a_linked_mods_folder(tmp_path) -> None:
+    import os
+
+    root = _project(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "foo" / "empty").mkdir(parents=True)
+    manifest = {"name": "foo", "files": []}
+    (elsewhere / "foo" / "renforge-mod.json").write_text(json.dumps(manifest), encoding="utf-8")
+    try:
+        os.symlink(elsewhere, root / "game" / "mods", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+
+    result = mod_tools.mod(str(root), "remove", name="foo")
+
+    assert result["ok"] is False
+    assert (elsewhere / "foo" / "renforge-mod.json").exists()
+    assert (elsewhere / "foo" / "empty").is_dir()
+
+
+def test_remove_does_not_walk_into_a_junction_inside_the_mod(tmp_path, monkeypatch) -> None:
+    # os.walk(followlinks=False) still descends into NTFS junctions. Stand in
+    # for one: a directory the shared reparse-aware check reports as a link.
+    root = _project(tmp_path)
+    mods.write_file(root, "demo", "a.rpy", "label a:\n    return\n")
+    junction = (root / "game" / "mods" / "demo" / "linked").resolve()
+    (junction / "deeper").mkdir(parents=True)
+    (junction / "foreign.txt").write_text("not ours", encoding="utf-8")
+    real_check = util_files.is_link
+    monkeypatch.setattr(mods, "is_link", lambda path: Path(path) == junction or real_check(path))
+
+    result = mods.remove(root, "demo")
+
+    assert result["ok"] is True
+    assert result["removed"] == ["a.rpy"]
+    assert result["kept"] == []
+    assert (junction / "deeper").is_dir()
+    assert (junction / "foreign.txt").exists()
+
+
+def test_list_does_not_count_files_behind_a_junction_inside_the_mod(tmp_path, monkeypatch) -> None:
+    root = _project(tmp_path)
+    mods.write_file(root, "demo", "a.rpy", "label a:\n    return\n")
+    junction = (root / "game" / "mods" / "demo" / "linked").resolve()
+    junction.mkdir()
+    (junction / "foreign.txt").write_text("not ours", encoding="utf-8")
+    real_check = util_files.is_link
+    monkeypatch.setattr(mods, "is_link", lambda path: Path(path) == junction or real_check(path))
+
+    assert mods.list_mods(root)["mods"][0]["unlisted"] == []
+
+
+def test_package_receipt_follows_the_shared_receipt_rule(tmp_path, monkeypatch) -> None:
+    # Every receipt names a file inside the project by its project-relative
+    # POSIX path, and one outside by its absolute POSIX path.
+    root = _project(tmp_path)
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(root / "state"))
+    mods.write_file(root, "demo", "a.rpy", "label a:\n    return\n")
+
+    result = mods.package(root, "demo")
+
+    zip_path = project_state_dir(root) / "mods" / "demo.zip"
+    assert result["files_touched"] == [zip_path.relative_to(root.resolve()).as_posix()]
+    assert result["files_touched"] == [util_files.receipt_path(root, zip_path)]
+
+
 def test_reload_returns_a_compact_observation_like_the_play_tools(tmp_path, monkeypatch) -> None:
     raw = {
         "ok": True,
