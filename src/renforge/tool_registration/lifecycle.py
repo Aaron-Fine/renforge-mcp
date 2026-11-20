@@ -500,6 +500,21 @@ def build_wrappers(context):
             if action == "launch":
                 # Saves stay apart from the player's own but survive relaunches.
                 saves = live.session_saves_dir(project_path)
+                if Path(project_path).is_dir():
+                    from ..state import ensure_project_state_dir
+                    from ..util.files import PrivatePathError
+
+                    # Made without following links, as import makes it: a link
+                    # anywhere on the way (even to another folder in the state
+                    # tree) must not choose where this launch saves.
+                    try:
+                        ensure_project_state_dir(project_path, saves.name)
+                    except PrivatePathError as exc:
+                        message = (f"The session's saves folder in the RenForge state folder is a link or not a "
+                                   f"folder ({exc}), so the launch would not be isolated. Remove it and launch "
+                                   f"again.")
+                        return {"ok": False, "ready": False, "code": "SESSION_NOT_ISOLATED",
+                                "phase": "validating_session_mode", "message": message, "error": message}
                 # HOME is always the session's own, even when the server's
                 # RENFORGE_ISOLATION=existing would default it to the player's:
                 # the policy classifies this launch as isolated.

@@ -2330,6 +2330,37 @@ def test_session_launch_refuses_a_saves_folder_linked_out_of_the_state_folder(tm
     state_saves.unlink()
     assert app.tools["renforge_session"](str(project), "launch")["ok"] is True
     assert len(started) == 1 and started[0]["requirements"]["isolated"] is True
+    assert state_saves.is_dir() and not state_saves.is_symlink()
+
+
+def test_session_launch_refuses_a_saves_folder_linked_inside_the_state_folder(tmp_path, monkeypatch) -> None:
+    """A link to another folder of the state tree is still a link: it must not choose where the session saves."""
+    import os
+
+    from renforge.tools import live
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    other = tmp_path / "state" / "projects" / "another-project" / "saves"
+    other.mkdir(parents=True)
+    state_saves = project_state_dir(project) / "saves"
+    state_saves.parent.mkdir(parents=True)
+    try:
+        os.symlink(other, state_saves, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    started: list = []
+    monkeypatch.setattr(live, "start_launch", lambda *a, **k: started.append(k) or {"ok": True, "ready": True})
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    refused = app.tools["renforge_session"](str(project), "launch")
+
+    assert refused["ok"] is False and refused["code"] == "SESSION_NOT_ISOLATED", refused
+    assert started == []
 
 
 @pytest.mark.parametrize(("launched", "says_label"), [
