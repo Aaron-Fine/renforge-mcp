@@ -957,6 +957,13 @@ def launch_game(
             "message": state_error,
             "error": state_error,
         }
+    # resolve_display_strategy refuses display='none' on a fresh launch; a
+    # reused game must not report success for it either.
+    if isinstance(display, str) and display.strip().casefold() == "none":
+        message = "display='none' is not supported; Ren'Py requires a display surface."
+        return {"ok": False, "ready": False, "code": "DISPLAY_UNAVAILABLE",
+                "phase": "detecting_environment", "message": message, "error": message,
+                "suggested_fix": "Use display='auto' or display='xvfb'."}
     wanted = launch_requirements(project.root, savedir=savedir, home=home, persistent=persistent,
                                  preferences=preferences, bridge_eval=bridge_eval)
     eval_on = wanted["eval"]

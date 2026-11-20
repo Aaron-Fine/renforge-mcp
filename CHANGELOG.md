@@ -625,6 +625,9 @@ versioning.
   after a case-only rename of its folder even once the bounded spelling
   cache fills and is cleared: the spelling it started with is pinned while
   the session lives.
+- A launch with `display="none"` is refused with `DISPLAY_UNAVAILABLE`
+  also when a running game would be reused; only a fresh launch refused it
+  before, and reuse reported success for a launch that could never start.
 
 ## [0.7.6] - 2026-11-18
 
