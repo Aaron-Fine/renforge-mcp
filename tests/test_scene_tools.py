@@ -7,6 +7,7 @@ running Ren'Py game.
 
 import io
 import json
+from pathlib import Path
 
 import pytest
 from renforge.state import project_state_dir
@@ -105,9 +106,10 @@ def test_capture_screenshot_reports_a_project_relative_receipt(tmp_path):
 
     assert out["ok"] is True
     # Captures live in the project's RenForge state folder, outside the project.
-    expected = (project_state_dir(tmp_path) / "captures" / "shot.png").as_posix()
-    assert out["files_touched"] == [expected]
-    assert out["relative_path"] == expected
+    expected = (project_state_dir(tmp_path) / "captures" / "shot.png").resolve()
+    assert [Path(item) for item in out["files_touched"]] == [expected]
+    assert Path(out["relative_path"]) == expected
+    assert out["relative_path"] == out["files_touched"][0]
 
 
 def test_scene_tree_truncates_to_max_items(monkeypatch):
@@ -152,7 +154,9 @@ def test_scene_tree_save_then_diff_detects_move(tmp_path, monkeypatch):
     live = _patch(monkeypatch, _FakeClient(_reply([_node("hero", 0, 0, 10, 10)])))
     saved = live.scene_tree(str(tmp_path), save_as="before")
     assert saved.get("saved_as")
-    assert saved["files_touched"] == [(project_state_dir(tmp_path) / "scenes" / "before.json").as_posix()]
+    assert [Path(item) for item in saved["files_touched"]] == [
+        (project_state_dir(tmp_path) / "scenes" / "before.json").resolve()
+    ]
 
     _patch(monkeypatch, _FakeClient(_reply([_node("hero", 30, 0, 10, 10)])))
     out = live.scene_tree(str(tmp_path), diff_against="before")

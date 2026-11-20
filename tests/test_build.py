@@ -70,7 +70,7 @@ def test_distribute_reports_an_external_destination_as_absolute(
     result = build.distribute(_fake_sdk(tmp_path), _project(tmp_path), destination=destination)
 
     assert result["ok"] is True
-    assert result["files_touched"] == [destination.resolve().as_posix()]
+    assert [Path(item) for item in result["files_touched"]] == [destination.resolve()]
 
 
 def test_build_without_a_destination_reports_no_receipt(

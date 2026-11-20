@@ -1220,7 +1220,9 @@ are actually gone, and `failed` names the resource it could not finish. Paths in
 outside the project (an external build destination, Ren'Py's savedir, the
 state folder) are absolute. Every receipt path is in POSIX form, with `/` on
 every platform (`C:/Users/...` on Windows), and reads back as the same file
-through `pathlib.Path`.
+through `pathlib.Path`. Receipts name resolved paths, so on a
+case-insensitive filesystem an existing file keeps its on-disk case (a
+`renforge_mod` `write` of `A.rpy` over `a.rpy` reports `a.rpy`).
 A tool that cannot enumerate its outputs — `renforge_launch`, lint
 analysis, a failed build or translation, or a build that used Ren'Py's default
 destination because no `destination` was passed — omits the key instead of

@@ -254,6 +254,9 @@ def write_file(project_root: str | Path, name: str, path: str, content: str) -> 
 
     Refuses to overwrite or list a file the mod's manifest does not already
     list. ``files_touched`` names the file and the manifest, project-relative.
+    ``path`` and the receipt are resolved (``util.files.receipt_path``), so on
+    a case-insensitive filesystem they spell an existing file as it is on
+    disk, which may differ in case from ``path`` as given and from ``files``.
     """
     _check_name(name)
     rel = _validate_relpath(path)

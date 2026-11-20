@@ -1627,7 +1627,7 @@ def test_import_reports_a_write_receipt(tmp_path: Path, host_save_root: Path, mo
 
 
 def _windows_receipt(project_root, path) -> str:
-    """``receipt_path`` as it answers on Windows: the same file under a drive, ``/``-separated."""
+    """A stand-in for ``receipt_path`` on Windows: the same file under a drive, ``/``-separated."""
     return PureWindowsPath("C:\\", *Path(path).resolve().parts[1:]).as_posix()
 
 
@@ -1635,16 +1635,27 @@ def _windows_receipt(project_root, path) -> str:
 def test_save_import_and_savedir_receipts_are_posix_paths(
     tmp_path: Path, host_save_root: Path, monkeypatch, windows: bool
 ) -> None:
-    # One receipt rule (util.files.receipt_path) on every OS: the save files
-    # an import copied and the savedir a save wrote use /, and each names its
-    # file when read back as a path. The windows case swaps in the rule as it
-    # answers there, so a receipt built with str(path) shows its backslashes.
+    # Pins that the import and the save-slot savedir build their receipts with
+    # the shared rule (util.files.receipt_path), so they use / on every OS.
+    # On a POSIX host str(path) already uses /, so the test cannot see a
+    # backslash; instead each case replaces the module's receipt_path and
+    # checks that every receipt is what the replacement returned. "native"
+    # wraps the real rule (and on Windows also checks there is no
+    # backslash); "windows" returns the rule's Windows answer (C:/...),
+    # which a receipt built with str(path) can never equal on any host.
     import renforge.save_isolation as save_isolation
     from renforge.tools import live
+    from renforge.util import files as util_files
 
-    if windows:
-        monkeypatch.setattr(save_isolation, "receipt_path", _windows_receipt)
-        monkeypatch.setattr(live, "receipt_path", _windows_receipt)
+    given: list[str] = []
+
+    def rule(project_root, path) -> str:
+        receipt = _windows_receipt(project_root, path) if windows else util_files.receipt_path(project_root, path)
+        given.append(receipt)
+        return receipt
+
+    monkeypatch.setattr(save_isolation, "receipt_path", rule)
+    monkeypatch.setattr(live, "receipt_path", rule)
     project, host_saves = _host_project(tmp_path, host_save_root)
     (host_saves / "1-1-LT1.save").write_bytes(b"SLOT")
     (host_saves / "1-1-LT1.save.json").write_text("{}", encoding="utf-8")
@@ -1660,6 +1671,7 @@ def test_save_import_and_savedir_receipts_are_posix_paths(
 
     receipts = imported["files_touched"] + saved["files_touched"]
     files = [dest / "1-1-LT1.save", dest / "1-1-LT1.save.json", dest]
+    assert receipts == given
     assert len(receipts) == len(files)
     for receipt, path in zip(receipts, files):
         assert "\\" not in receipt, receipt
