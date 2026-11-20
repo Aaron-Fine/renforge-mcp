@@ -45,6 +45,9 @@ _EXCLUDED_DIRS = {
 }
 _EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".rpyb", ".rpyc", ".rpymc"}
 _SOURCE_SUFFIXES = {".rpy", ".rpym"}
+# Ren'Py also loads these as scripts: an orphan compiled file, and *_ren.py.
+_LOADABLE_SCRIPT_SUFFIXES = _SOURCE_SUFFIXES | {".rpyc", ".rpymc"}
+_REN_PY_SUFFIX = "_ren.py"
 # Lint resolves media names but never reads their bytes, so media files become
 # zero-byte placeholders instead of consuming the shadow's byte quota.
 _MEDIA_SUFFIXES = {
@@ -117,7 +120,8 @@ def _is_directory_link(directory_st: os.stat_result) -> bool:
 class _LinkedDirectoryScan:
     """Read-only inventory of a linked directory's target.
 
-    ``source_found`` is True when Ren'Py source exists, False when the whole
+    ``source_found`` is True when a script Ren'Py loads exists (source, an
+    orphan ``.rpyc``/``.rpymc``, or ``*_ren.py``), False when the whole
     target was scanned and holds none, and None when it cannot be fully
     inspected (broken link, nested link/special entry, unreadable subtree,
     entry cap, or time budget). ``directories`` and ``files`` are relative
@@ -202,7 +206,9 @@ def _scan_linked_directory(link: Path) -> _LinkedDirectoryScan:
                 complete = False
                 continue
             suffix = Path(filename).suffix.casefold()
-            if suffix in _SOURCE_SUFFIXES:
+            if suffix in _LOADABLE_SCRIPT_SUFFIXES or filename.casefold().endswith(
+                _REN_PY_SUFFIX
+            ):
                 return _LinkedDirectoryScan(source_found=True)
             if suffix in _EXCLUDED_SUFFIXES:
                 continue

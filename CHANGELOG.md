@@ -656,6 +656,9 @@ versioning.
   folder already exists fails without deleting that folder.
 - A shadow lint that fails and then cannot remove its shadow reports the
   lint error, with `cleanup_error` in its details, not `SHADOW_CLEANUP_FAILED`.
+- A linked directory under `game/` holding an orphan `.rpyc`/`.rpymc` or a
+  `*_ren.py` script makes the shadow incomplete (`linked_directory_with_source`)
+  instead of being skipped or replaced by an empty placeholder.
 
 ## [0.7.6] - 2026-11-18
 

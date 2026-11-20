@@ -1109,9 +1109,10 @@ and directory verdicts cannot be reduced by a staged replacement.
 
 Linked directories (symlinks/junctions) are **never copied byte-for-byte**.
 Each skip is recorded in `skipped_links` with a reason. A linked directory under
-`game/` (matched case-insensitively) is scanned read-only for `.rpy`/`.rpym`
-source: the scan never reads file contents, is capped at 50,000 entries, and
-checks a 5-second budget between entries. A hung network/UNC operation may still
+`game/` (matched case-insensitively) is scanned read-only for scripts Ren'Py
+loads (`.rpy`/`.rpym` source, an orphan `.rpyc`/`.rpymc`, or `*_ren.py`): the
+scan never reads file contents, is capped at 50,000 entries, and checks a
+5-second budget between entries. A hung network/UNC operation may still
 block until the OS call returns. If any
 source is found the reason is `linked_directory_with_source` and
 `complete=false` (and `ok=false`). If the target cannot be fully scanned (broken
@@ -1122,8 +1123,8 @@ directory structure and creates **zero-byte placeholder files** for its regular
 files, so lint still sees the expected image/audio names without copying any
 bytes; the reason is `linked_directory_assets_placeholders`, `complete` stays
 true, and `degraded=true`. Placeholders count as files but contribute zero
-bytes to the quota, and none are created for `.rpy`/`.rpym` or compiled-artifact
-suffixes. Links outside `game/` cannot affect source lint, so they never clear
+bytes to the quota, and none are created for caches (`.rpyb`, `.pyc`, `.pyo`).
+Links outside `game/` cannot affect source lint, so they never clear
 `complete`; their reason is `linked_directory_not_followed`. Linked regular
 files and other special files remain fatal (`SHADOW_SPECIAL_FILE`). The Live
 Editor commit and undo gates refuse a shadow with skipped source directories

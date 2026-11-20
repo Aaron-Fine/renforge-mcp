@@ -1725,7 +1725,7 @@ def test_shadow_linked_asset_directory_uses_zero_byte_placeholders(
     external = tmp_path / "external-images"
     external.mkdir()
     (external / "fake_image.png").write_bytes(b"x" * 4096)
-    (external / "compiled.rpyc").write_bytes(b"bytecode")
+    (external / "bytecode.rpyb").write_bytes(b"bytecode")
     nested = external / "ui"
     nested.mkdir()
     (nested / "button_normal.png").write_bytes(b"png")
@@ -1761,7 +1761,7 @@ def test_shadow_linked_asset_directory_uses_zero_byte_placeholders(
         built = built_root / relative
         assert built.is_file()
         assert built.stat().st_size == 0
-    assert not (built_root / "game" / "images" / "compiled.rpyc").exists()
+    assert not (built_root / "game" / "images" / "bytecode.rpyb").exists()
 
 
 def test_shadow_linked_asset_plan_uses_placeholders_without_byte_weight(
@@ -1890,6 +1890,32 @@ def test_shadow_linked_source_directory_is_incomplete_and_refused(
             "reason": "linked_directory_with_source",
         }
     ]
+
+
+@pytest.mark.parametrize("script_name", ["orphan.rpyc", "module.rpymc", "chapter_ren.py"])
+def test_shadow_linked_directory_with_a_loadable_script_is_incomplete(
+    monkeypatch, tmp_path: Path, script_name: str
+) -> None:
+    import renforge.editor.shadow as shadow
+
+    # Ren'Py loads an orphan .rpyc/.rpymc and a *_ren.py script, so neither a
+    # skip nor an empty placeholder stands in for it.
+    project, _source = _make_project(tmp_path)
+    external = tmp_path / "external-scripts"
+    external.mkdir()
+    (external / "bg.png").write_bytes(b"png")
+    (external / script_name).write_bytes(b"script")
+    _link_directory_or_simulate(monkeypatch, project.root / "game" / "images", external)
+    monkeypatch.delenv("RENFORGE_SHADOW_MAX_FILES", raising=False)
+    monkeypatch.delenv("RENFORGE_SHADOW_MAX_BYTES", raising=False)
+
+    plan = shadow.plan_shadow_project(project)
+
+    assert plan.complete is False
+    assert not any(entry.placeholder for entry in plan.entries)
+    assert plan.skipped_links == (
+        {"path": "game/images", "reason": "linked_directory_with_source"},
+    )
 
 
 def test_shadow_uninspectable_linked_asset_target_stays_incomplete(
