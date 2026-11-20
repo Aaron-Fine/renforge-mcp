@@ -93,6 +93,12 @@ def receipt_path(project_root: str | Path, path: str | Path) -> str:
     file outside it, such as one in RenForge's state folder, by its absolute
     POSIX path. A relative ``path`` is relative to the project root, never to
     the server's working directory.
+
+    The path is resolved, so a receipt names where links lead: if a folder
+    was swapped for a link after the write, it names the link's target, not
+    the file written (a receipt only reports). A path that cannot be
+    resolved, such as a link loop (``RuntimeError`` on Python 3.11 and 3.12),
+    is named as given, made absolute.
     """
     root = Path(project_root).expanduser().resolve()
     candidate = Path(path).expanduser()
@@ -100,7 +106,7 @@ def receipt_path(project_root: str | Path, path: str | Path) -> str:
         candidate = root / candidate
     try:
         resolved = candidate.resolve()
-    except OSError:
+    except (OSError, RuntimeError):
         resolved = candidate.absolute()
     try:
         return resolved.relative_to(root).as_posix()

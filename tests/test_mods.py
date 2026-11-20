@@ -208,13 +208,15 @@ def test_package_zips_listed_files_without_compiled_or_manifest(tmp_path) -> Non
     result = mods.package(root, "demo")
 
     zip_path = project_state_dir(root) / "mods" / "demo.zip"
+    receipts = result.pop("files_touched")
     assert result == {
         "ok": True,
         "path": str(zip_path),
         "files": ["readme.md", "scripts/intro.rpy"],
-        # Receipts use "/" on every platform (util.files.receipt_path).
-        "files_touched": [zip_path.as_posix()],
     }
+    # The receipt names the zip by the shared rule (util.files.receipt_path).
+    assert receipts == [util_files.receipt_path(root, zip_path)]
+    assert [Path(item) for item in receipts] == [zip_path.resolve()]
     with zipfile.ZipFile(zip_path) as archive:
         assert sorted(archive.namelist()) == ["game/mods/demo/readme.md", "game/mods/demo/scripts/intro.rpy"]
         assert archive.read("game/mods/demo/readme.md") == b"hello"
@@ -600,7 +602,9 @@ def test_write_remove_and_package_return_write_receipts(tmp_path) -> None:
         "game/mods/demo/renforge-mod.json",
         "game/mods/demo/scripts/intro.rpy",
     ]
-    assert packaged["files_touched"] == [(project_state_dir(root) / "mods" / "demo.zip").as_posix()]
+    assert [Path(item) for item in packaged["files_touched"]] == [
+        (project_state_dir(root) / "mods" / "demo.zip").resolve()
+    ]
     assert removed["files_deleted"] == [
         "game/mods/demo/renforge-mod.json",
         "game/mods/demo/scripts/intro.rpy",
@@ -921,7 +925,8 @@ def test_package_receipt_follows_the_shared_receipt_rule(tmp_path, monkeypatch) 
     result = mods.package(root, "demo")
 
     zip_path = project_state_dir(root) / "mods" / "demo.zip"
-    assert result["files_touched"] == [zip_path.relative_to(root.resolve()).as_posix()]
+    assert [root.resolve() / item for item in result["files_touched"]] == [zip_path.resolve()]
+    assert not Path(result["files_touched"][0]).is_absolute()
     assert result["files_touched"] == [util_files.receipt_path(root, zip_path)]
 
 
@@ -940,3 +945,20 @@ def test_reload_returns_a_compact_observation_like_the_play_tools(tmp_path, monk
     result = mod_tools.mod(str(tmp_path), "reload")
 
     assert result["observation"] == {"ok": True, "stable": True, "observation_id": "o1", "frame": {"width": 1280}}
+
+
+@pytest.mark.parametrize(
+    ("file", "inside"),
+    [
+        ("game/mods/demo/a.rpy", True),
+        ("game\\mods\\demo\\scripts\\a.rpy", True),
+        ("C:\\Games\\Demo\\game\\mods\\demo\\a.rpy", True),
+        ("/srv/demo/game/mods/demo/a.rpy", True),
+        ("game/mods/demo", False),
+        ("game/mods/demo2/a.rpy", False),
+        ("game/xmods/demo/a.rpy", False),
+        ("", False),
+    ],
+)
+def test_lint_keeps_diagnostics_in_the_mod_whatever_the_separator(file: str, inside: bool) -> None:
+    assert mods._diagnostic_in_mod({"file": file}, "demo") is inside

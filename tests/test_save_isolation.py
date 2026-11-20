@@ -9,7 +9,7 @@ import shutil
 import sys
 import time
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
@@ -35,6 +35,7 @@ from renforge.save_isolation import (
     renpy_tool_environment,
     reuse_keeps_isolation,
 )
+from renforge.util.files import receipt_path
 
 
 @pytest.fixture
@@ -1597,7 +1598,10 @@ def test_import_reports_a_write_receipt(tmp_path: Path, host_save_root: Path, mo
     home = tmp_path / "home"
 
     done = import_host_slots(project, dest, slot="1-1", home=home)
-    assert done["files_touched"] == [str(dest / "1-1-LT1.save"), str(dest / "1-1-LT1.save.json")]
+    assert [Path(item) for item in done["files_touched"]] == [
+        (dest / "1-1-LT1.save").resolve(),
+        (dest / "1-1-LT1.save.json").resolve(),
+    ]
 
     none = import_host_slots(project, dest, slot="9-9", home=home)
     assert none["code"] == "NO_MATCHING_SAVE_SLOTS"
@@ -1615,11 +1619,66 @@ def test_import_reports_a_write_receipt(tmp_path: Path, host_save_root: Path, mo
     monkeypatch.setattr(save_isolation, "replace_file_at_nofollow", disk_full_on)
     failed = import_host_slots(project, dest, pattern="*", home=home)
     assert failed["code"] == "SAVE_IMPORT_FAILED"
-    assert failed["files_touched"] == [
-        str(dest / "1-1-LT1.save"),
-        str(dest / "1-1-LT1.save.json"),
-        str(dest / "2-1-LT1.save"),
+    assert [Path(item) for item in failed["files_touched"]] == [
+        (dest / "1-1-LT1.save").resolve(),
+        (dest / "1-1-LT1.save.json").resolve(),
+        (dest / "2-1-LT1.save").resolve(),
     ]
+
+
+def _windows_receipt(project_root, path) -> str:
+    """A stand-in for ``receipt_path`` on Windows: the same file under a drive, ``/``-separated."""
+    return PureWindowsPath("C:\\", *Path(path).resolve().parts[1:]).as_posix()
+
+
+@pytest.mark.parametrize("windows", [False, True], ids=["native", "windows"])
+def test_save_import_and_savedir_receipts_are_posix_paths(
+    tmp_path: Path, host_save_root: Path, monkeypatch, windows: bool
+) -> None:
+    # Pins that the import and the save-slot savedir build their receipts with
+    # the shared rule (util.files.receipt_path), so they use / on every OS.
+    # On a POSIX host str(path) already uses /, so the test cannot see a
+    # backslash; instead each case replaces the module's receipt_path and
+    # checks that every receipt is what the replacement returned. "native"
+    # wraps the real rule (and on Windows also checks there is no
+    # backslash); "windows" returns the rule's Windows answer (C:/...),
+    # which a receipt built with str(path) can never equal on any host.
+    import renforge.save_isolation as save_isolation
+    from renforge.tools import live
+    from renforge.util import files as util_files
+
+    given: list[str] = []
+
+    def rule(project_root, path) -> str:
+        receipt = _windows_receipt(project_root, path) if windows else util_files.receipt_path(project_root, path)
+        given.append(receipt)
+        return receipt
+
+    monkeypatch.setattr(save_isolation, "receipt_path", rule)
+    monkeypatch.setattr(live, "receipt_path", rule)
+    project, host_saves = _host_project(tmp_path, host_save_root)
+    (host_saves / "1-1-LT1.save").write_bytes(b"SLOT")
+    (host_saves / "1-1-LT1.save.json").write_text("{}", encoding="utf-8")
+    dest = tmp_path / "session" / "saves"
+    dest.mkdir(parents=True)
+
+    class FakeClient:
+        def save_slot(self, slot, extra_info=""):
+            return {"ok": True, "slot": slot, "savedir": str(dest)}
+
+    imported = import_host_slots(project, dest, slot="1-1", home=tmp_path / "home")
+    saved = live._save_slot_with_receipt(str(project), "1-1", "", FakeClient())
+
+    receipts = imported["files_touched"] + saved["files_touched"]
+    files = [dest / "1-1-LT1.save", dest / "1-1-LT1.save.json", dest]
+    assert receipts == given
+    assert len(receipts) == len(files)
+    for receipt, path in zip(receipts, files):
+        assert "\\" not in receipt, receipt
+        if windows:
+            assert PureWindowsPath(receipt) == PureWindowsPath("C:\\", *path.resolve().parts[1:])
+        else:
+            assert Path(receipt) == path.resolve()
 
 
 def test_import_receipt_reaches_the_activity_journal(
@@ -1663,14 +1722,16 @@ def test_import_receipt_reaches_the_activity_journal(
         live._SESSIONS.pop(live._key(project), None)
 
     assert result["ok"] is True
-    assert result["files_touched"] == [str(dest / "1-1-LT1.save")]
+    receipt = receipt_path(project, dest / "1-1-LT1.save")
+    assert result["files_touched"] == [receipt]
+    assert Path(receipt) == (dest / "1-1-LT1.save").resolve()
     from renforge.state import project_state_dir
 
     lines = (project_state_dir(project) / "activity.jsonl").read_text(encoding="utf-8").splitlines()
     entry = json.loads(lines[-1])
     assert entry["name"] == "renforge_saves"
     assert entry["files_touched_recorded"] is True
-    assert entry["files_touched"] == [str(dest / "1-1-LT1.save")]
+    assert entry["files_touched"] == [receipt]
 
 
 def test_every_exposure_check_counts_the_projects_game_saves(tmp_path: Path) -> None:
@@ -1957,3 +2018,21 @@ def test_a_path_that_only_might_be_the_players_counts_only_in_the_wide_answer(
         knobs = {"savedir": savedir, "home": "temporary", "project_path": str(project)}
         assert launch_exposed_components(**knobs) == wide, savedir
         assert launch_exposed_components(certain=True, **knobs) == certain, savedir
+
+
+@pytest.mark.parametrize(
+    ("path", "root", "inside"),
+    [
+        (PureWindowsPath("C:/Users/P/AppData/Roaming/RenPy/demo"), PureWindowsPath("c:\\users\\p\\appdata\\roaming\\renpy"), True),
+        (PureWindowsPath("C:\\Users\\P\\AppData\\Roaming\\RenPy"), PureWindowsPath("C:/Users/P/AppData/Roaming/RenPy/"), True),
+        (PureWindowsPath("C:\\Users\\P\\AppData\\Roaming\\RenPyOld"), PureWindowsPath("C:\\Users\\P\\AppData\\Roaming\\RenPy"), False),
+        (PureWindowsPath("D:\\Users\\P\\AppData\\Roaming\\RenPy"), PureWindowsPath("C:\\Users\\P\\AppData\\Roaming\\RenPy"), False),
+        (PurePosixPath("/home/p/Library/RenPy/demo"), PurePosixPath("/home/p/library/renpy"), True),
+        (PurePosixPath("/home/p/.renpy-old"), PurePosixPath("/home/p/.renpy"), False),
+        (PurePosixPath("/anything"), PurePosixPath("/"), True),
+    ],
+)
+def test_inside_compares_path_parts_case_insensitively(path, root, inside: bool) -> None:
+    from renforge.save_isolation import _inside
+
+    assert _inside(path, root) is inside

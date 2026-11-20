@@ -43,6 +43,7 @@ from .util.files import (
     list_directory_nofollow,
     make_directory_at_nofollow,
     open_regular_at_nofollow,
+    receipt_path,
     replace_file_at_nofollow,
     scan_directory_nofollow,
 )
@@ -736,17 +737,17 @@ def path_exposes_user_saves(
     return any(parts[i] == "game" and parts[i + 1] == "saves" for i in range(len(parts) - 1))
 
 
-def _path_key(path: Path) -> str:
-    # Case-folded: on a case-insensitive filesystem (Windows, macOS)
+def _path_key(path: Path) -> tuple[str, ...]:
+    # Case-folded parts: on a case-insensitive filesystem (Windows, macOS)
     # ~/library/renpy is the player's ~/Library/RenPy, and resolve() does not
     # fold case there. Folding everywhere errs toward asking for authorization.
-    return os.path.normcase(str(path)).casefold()
+    return tuple(part.casefold() for part in path.parts)
 
 
 def _inside(path: Path, root: Path) -> bool:
     """*path* is *root* or below it, compared case-insensitively."""
     key, root_key = _path_key(path), _path_key(root)
-    return key == root_key or key.startswith(root_key.rstrip(os.sep) + os.sep)
+    return key[: len(root_key)] == root_key
 
 
 def user_save_roots(
@@ -1061,7 +1062,10 @@ def import_selected_slots(
     are walked without following links, so a session root or savedir swapped
     for a link (at any time since launch) is refused, not followed. Callers
     pass a canonical path (:func:`renforge.tools.live.saves` resolves only the
-    shared temp folder).
+    shared temp folder). Only the ``files_touched`` receipt is resolved
+    (:func:`renforge.util.files.receipt_path`): if the savedir is swapped for
+    a link mid-import, the receipt names the link's target, where nothing was
+    written.
     """
     dest = Path(destination).expanduser()
     if path_exposes_user_saves(dest, project_path=project_root, home=home):
@@ -1095,9 +1099,12 @@ def import_selected_slots(
     missing = list(selection.get("missing") or [])
     imported: list[dict[str, Any]] = []
     refused: list[dict[str, Any]] = []
-    # The write receipt (#116): absolute paths, since the savedir is outside
-    # the project, of every file published so far.
+    # The write receipt (#116) of every file published so far, by the shared
+    # receipt rule: absolute POSIX paths, since the savedir is outside the project.
     touched: list[str] = []
+
+    def _receipts(names: Iterable[str]) -> list[str]:
+        return [receipt_path(project_root, dest / name) for name in names]
 
     def _failed(code: str, error: str) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -1118,7 +1125,7 @@ def import_selected_slots(
         try:
             copied, slot_refused = _copy_slot_files(directory, dest, name)
         except (OSError, ValueError) as exc:
-            touched.extend(str(dest / item) for item in getattr(exc, "slot_files_copied", []))
+            touched.extend(_receipts(getattr(exc, "slot_files_copied", [])))
             if isinstance(exc, FileNotFoundError) and not dest.is_dir():
                 # The session stopped mid-copy and its savedir went with it.
                 return _failed(
@@ -1129,7 +1136,7 @@ def import_selected_slots(
             # rename: nothing was written outside the session, but the
             # import is incomplete.
             return _failed("SAVE_IMPORT_FAILED", str(exc))
-        touched.extend(str(dest / item) for item in copied)
+        touched.extend(_receipts(copied))
         refused.extend(slot_refused)
         if copied:
             imported.append({"name": name, "files": copied, "directory": str(directory)})

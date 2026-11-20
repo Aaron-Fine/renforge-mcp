@@ -1609,8 +1609,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         description=(
             "Persist the current frame under `<state>/captures/` and return the output path plus hash. This writes disk and may "
             "overwrite an existing name. `relative_path` (and `files_touched`) is relative to the project only when the "
-            "capture is inside it; the state folder is normally outside the project, so it is then the same absolute "
-            "path as `path`."
+            "capture is inside it; the state folder is normally outside the project, so it is then the absolute path of "
+            "`path` in POSIX form (`/` on every OS)."
         ),
         annotations=_ann(
             readOnlyHint=False,

@@ -70,6 +70,10 @@ versioning.
 - Write receipts (0.7.4) for files in the state folder (captures, scene
   snapshots, the activity log's `files_touched_file` sidecar) are absolute
   paths, since that folder is outside the project.
+- The `files_touched` receipts of a `renforge_saves` save (the savedir) and
+  of a `renforge_saves` or `renforge_session` import (the copied save files)
+  now use `/` on Windows too, like every other receipt; `savedir` keeps the
+  platform's own form.
 - `renforge_session(action="import")` returns a `files_touched` write
   receipt and passes on the import's own failure codes; a missing slot is
   `NO_MATCHING_SAVE_SLOTS`. It copies the slot to where the running game

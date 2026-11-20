@@ -604,7 +604,7 @@ def test_bridge_session_close_reports_a_removed_temporary_savedir(
     assert result["cleaned"]["temporary_savedir"] is True
     # The temporary savedir lives outside the project, so its receipt stays
     # absolute.
-    assert result["files_deleted"] == [savedir.resolve().as_posix()]
+    assert [Path(item) for item in result["files_deleted"]] == [savedir.resolve()]
 
 
 def test_partial_savedir_cleanup_still_reports_the_paths_it_removed(
@@ -638,7 +638,7 @@ def test_partial_savedir_cleanup_still_reports_the_paths_it_removed(
 
     assert result["cleaned"]["temporary_savedir"] is False
     assert "temporary_savedir" in result["failed"]
-    assert result["files_deleted"] == [removed_file.resolve().as_posix()]
+    assert [Path(item) for item in result["files_deleted"]] == [removed_file.resolve()]
     assert surviving_file.exists()
 
 
@@ -1715,7 +1715,7 @@ def test_repeated_close_does_not_repeat_the_first_calls_deletions(
     first = session.close()
     second = session.close()
 
-    assert first["files_deleted"] == [savedir.resolve().as_posix()]
+    assert [Path(item) for item in first["files_deleted"]] == [savedir.resolve()]
     # The second call deleted nothing, so it reports no deletions even though
     # the cleanup state still names what the first call did.
     assert second["files_deleted"] == []

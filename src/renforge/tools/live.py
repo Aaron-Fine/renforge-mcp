@@ -2187,10 +2187,10 @@ def _save_slot_with_receipt(
         if not isinstance(savedir, str) or not savedir:
             savedir = _known_savedir(project_path)
         if savedir:
-            # This path is outside the project (Ren'Py savedir), so it stays
-            # absolute and is labeled by the explicit ``savedir`` field.
+            # The savedir is normally outside the project, so the receipt is
+            # its absolute POSIX path; ``savedir`` keeps the native form.
             reply["savedir"] = savedir
-            reply["files_touched"] = [savedir]
+            reply["files_touched"] = [receipt_path(project_path, savedir)]
     return reply
 
 

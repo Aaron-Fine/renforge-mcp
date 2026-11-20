@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from renforge.tools import live
 from renforge.state import project_state_dir
 
@@ -74,7 +76,9 @@ def test_run_scenario_failure_collects_diagnostics(monkeypatch, tmp_path):
     assert result["failed_step"] == 0
     assert "diagnostics" in result["steps"][0] or "screenshot" in result
     # Captures live in the project's RenForge state folder, outside the project.
-    assert result["files_touched"] == [(project_state_dir(tmp_path) / "captures" / "scenario-failure-step-0.png").as_posix()]
+    assert [Path(item) for item in result["files_touched"]] == [
+        (project_state_dir(tmp_path) / "captures" / "scenario-failure-step-0.png").resolve()
+    ]
 
 
 def test_run_scenario_capture_rejects_parent_traversal(monkeypatch, tmp_path):
@@ -130,7 +134,9 @@ def test_run_scenario_capture_overwrites_only_named_file_in_capture_directory(
     assert result["ok"] is True
     assert result["steps"][0]["path"] == str(target)
     # Captures live in the project's RenForge state folder, outside the project.
-    assert result["files_touched"] == [(project_state_dir(tmp_path) / "captures" / "frame.png").as_posix()]
+    assert [Path(item) for item in result["files_touched"]] == [
+        (project_state_dir(tmp_path) / "captures" / "frame.png").resolve()
+    ]
     assert target.read_bytes() == b"new"
     assert sibling.read_bytes() == b"keep"
 
