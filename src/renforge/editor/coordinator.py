@@ -2407,7 +2407,10 @@ class EditorCoordinator:
                 displaced_path=displaced_path,
             )
         except EditorPathError as exc:
-            if exc.code not in ("STALE_SOURCE", "SOURCE_EXCHANGE_CONFLICT") and _exchange_may_have_moved(
+            # SOURCE_CAS_UNAVAILABLE is the only code the exchange step itself
+            # raises; the others come from checks made before it, which move
+            # nothing, so they stay clean failures.
+            if exc.code == "SOURCE_CAS_UNAVAILABLE" and _exchange_may_have_moved(
                 exc, transaction.source_absolute_path, displaced_path
             ):
                 details = {
@@ -2588,6 +2591,11 @@ class EditorCoordinator:
         return chosen / RENFORGE_DIRNAME / PROJECT_EXCHANGE_DIRNAME
 
     def _is_project_exchange_root(self, folder: Path) -> bool:
+        """Whether ``folder`` is a ``.renforge/editor-exchange`` inside this project.
+
+        Only such a folder holds exchange files this coordinator may remove;
+        the state folder's exchange files are never discarded here.
+        """
         if folder.name != PROJECT_EXCHANGE_DIRNAME or folder.parent.name != RENFORGE_DIRNAME:
             return False
         try:

@@ -5549,3 +5549,37 @@ def test_commit_and_rollback_work_when_only_the_game_folder_is_another_filesyste
         coordinator.close()
     assert not (project.root / ".renforge").exists()
     assert not (game_dir / ".renforge").exists()
+
+
+def test_a_source_gone_before_publication_is_a_clean_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Nothing was exchanged, so this is not an exchange conflict."""
+    from renforge.editor import coordinator as coordinator_module
+
+    real_replace = coordinator_module.conditional_replace_file
+
+    def source_removed_first(path: Path, **kwargs: Any) -> Any:
+        Path(path).unlink()
+        return real_replace(path, **kwargs)
+
+    monkeypatch.setattr(coordinator_module, "conditional_replace_file", source_removed_first)
+    project, source = _make_project(tmp_path)
+    observation = _base_observation(script_generation=45)
+    probe = _Probe(
+        observe_reply={**observation, "frame_id": "independent-frame-45", "object_id": "obj-independent-45"}
+    )
+    coordinator = EditorCoordinator(project, _make_sdk(tmp_path), attestation_timeout=120.0)
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    status: dict[str, Any] = {}
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analysis = _analyze(sock, auth, observation, request_id="an-gone-first")
+            commit = _commit(sock, auth, analysis, x=81, y=82, request_id="co-gone-first")
+            assert commit["ok"] is False
+            assert commit["error"]["code"] == "PATH_NOT_FOUND", commit["error"]
+    finally:
+        status = coordinator.close()
+    assert list(status["transactions"].values()) == ["failed"]
