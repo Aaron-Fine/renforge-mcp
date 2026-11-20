@@ -212,7 +212,8 @@ def test_package_zips_listed_files_without_compiled_or_manifest(tmp_path) -> Non
         "ok": True,
         "path": str(zip_path),
         "files": ["readme.md", "scripts/intro.rpy"],
-        "files_touched": [str(zip_path)],
+        # Receipts use "/" on every platform (util.files.receipt_path).
+        "files_touched": [zip_path.as_posix()],
     }
     with zipfile.ZipFile(zip_path) as archive:
         assert sorted(archive.namelist()) == ["game/mods/demo/readme.md", "game/mods/demo/scripts/intro.rpy"]
@@ -599,7 +600,7 @@ def test_write_remove_and_package_return_write_receipts(tmp_path) -> None:
         "game/mods/demo/renforge-mod.json",
         "game/mods/demo/scripts/intro.rpy",
     ]
-    assert packaged["files_touched"] == [str(project_state_dir(root) / "mods" / "demo.zip")]
+    assert packaged["files_touched"] == [(project_state_dir(root) / "mods" / "demo.zip").as_posix()]
     assert removed["files_deleted"] == [
         "game/mods/demo/renforge-mod.json",
         "game/mods/demo/scripts/intro.rpy",
