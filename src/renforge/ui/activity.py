@@ -22,17 +22,18 @@ def _coerce_timestamp(value: Any) -> int | None:
 def read_recent_activity(project_root: Path, limit: int = 20) -> list[dict[str, Any]]:
     # History an earlier build kept under the caller's spelling comes first:
     # it is older than anything written to the current folder.
-    paths = [folder / "activity.jsonl"
-             for folder in (prior_project_state_dir(project_root), project_state_dir(project_root))
-             if folder is not None]
-    paths = [path for path in paths if path.exists()]
+    current = project_state_dir(project_root) / "activity.jsonl"
+    prior = prior_project_state_dir(project_root)
+    paths = [path for path in ((prior / "activity.jsonl") if prior else None, current)
+             if path is not None and path.exists()]
     if limit <= 0 or not paths:
         return []
 
     events: deque[dict[str, Any]] = deque(maxlen=limit)
 
     for path in paths:
-        if not _read_activity_file(path, events):
+        # An unreadable earlier file is skipped: it must not hide current history.
+        if not _read_activity_file(path, events) and path == current:
             return []
     return list(events)
 

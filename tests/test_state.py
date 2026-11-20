@@ -175,6 +175,10 @@ def test_activity_recorded_under_the_earlier_state_key_stays_readable(tmp_path: 
 
     tools = [event["payload"]["tool"] for event in read_recent_activity(spelled)]
     assert tools == ["old", "new"]
+    # An earlier file that cannot be read must not hide the current history.
+    (earlier / "activity.jsonl").write_bytes(b"\xff\xfe not utf-8\n")
+    assert [event["payload"]["tool"] for event in read_recent_activity(spelled)] == ["new"]
+
     # The disk's own spelling had no other folder, so it has nothing earlier to read.
     assert state.prior_project_state_dir(project) is None
     assert [event["payload"]["tool"] for event in read_recent_activity(project)] == ["new"]

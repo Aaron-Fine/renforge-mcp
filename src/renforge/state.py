@@ -135,7 +135,8 @@ def _keep(key: str, folded_key: str, spelling: Path) -> None:
     if len(_SPELLINGS) >= _SPELLINGS_MAX:
         _SPELLINGS.clear()
         _SPELLINGS_BY_FOLD.clear()
-        for pinned_key, (pinned_fold, pinned_spelling, _owners) in _PINNED.items():
+        # A copy: a finalizer (_unpin) may run during this loop.
+        for pinned_key, (pinned_fold, pinned_spelling, _owners) in list(_PINNED.items()):
             _SPELLINGS[pinned_key] = pinned_spelling
             _SPELLINGS_BY_FOLD.setdefault(pinned_fold, pinned_spelling)
     _SPELLINGS[key] = spelling
