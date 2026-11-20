@@ -613,7 +613,7 @@ versioning.
   still scanned. A folder listed without search permission is skipped
   instead of aborting the whole scan.
 - The launch guidance describes the HOME a launch resolves to:
-  `savedir=temporary` isolates HOME only while `home` is omitted or `auto`
+  `savedir=temporary` isolates HOME unless `home` is `existing` or a path
   (`home=existing` keeps the user's HOME and needs `authorize` under
   enforce), and under `RENFORGE_ISOLATION=temporary` a `savedir` path with
   `home` omitted gets a temporary HOME and needs no `authorize`. The
@@ -644,10 +644,11 @@ versioning.
   denies listing (save listing, source reads) no longer fails at the root:
   the read-only chain asks the root for list access only when it is the
   folder being listed.
-- The dashboard's recent activity still shows history an earlier build of
-  this branch recorded under a project spelling that differs from the disk
-  only in case (that build gave such a spelling its own state folder). It
-  is read in place; new activity goes to the shared folder.
+- The dashboard's recent activity still shows history a pre-release build
+  recorded under a project spelling that differs from the disk only in
+  case (that build gave such a spelling its own state folder). It is read
+  in place, and an unreadable earlier file is skipped; new activity goes to
+  the shared folder.
 
 ## [0.7.6] - 2026-11-18
 

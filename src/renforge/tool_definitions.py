@@ -58,8 +58,9 @@ _ISOLATION_PARAMETERS = {
     "savedir": (
         "Save location. `temporary` isolates the session: saves, persistent data, "
         "and preferences go to a disposable folder, so the game cannot read "
-        "or write the user's normal Ren'Py saves, and so does HOME unless `home` is set "
-        "(`home=existing` keeps the user's HOME, which needs `authorize` under enforce). Omitted, empty, or `auto` follows "
+        "or write the user's normal Ren'Py saves, and so does HOME unless `home` is `existing` or a path "
+        "(`home=existing` keeps the user's HOME, which needs `authorize` under enforce; `auto` and "
+        "`temporary` stay isolated). Omitted, empty, or `auto` follows "
         "`RENFORGE_ISOLATION` (`temporary` to isolate every launch; otherwise the "
         "game's normal save directory, as `existing` or `default` selects). Any other "
         "non-empty value is an arbitrary save directory path that is created if "

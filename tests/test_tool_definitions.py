@@ -698,7 +698,9 @@ def test_launch_guidance_describes_the_home_the_launch_resolves_to(tmp_path, mon
     # savedir=temporary isolates HOME only while home is left to follow it.
     assert owned("temporary", None) and not owned("temporary", "existing")
     savedir_text = tool_definitions._ISOLATION_PARAMETERS["savedir"]
-    assert "unless `home` is set" in savedir_text
+    assert "unless `home` is `existing` or a path" in savedir_text
+    # An explicit auto or temporary home still isolates; the text must not warn agents off it.
+    assert owned("temporary", "temporary") and owned("temporary", "auto")
     instructions = _instructions(enabled_toolsets())
     assert "with home omitted or auto" in instructions
 
