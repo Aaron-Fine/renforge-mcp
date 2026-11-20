@@ -1005,24 +1005,33 @@ def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch)
 
 def test_the_stuck_pause_timer_starts_when_the_pause_appears(monkeypatch):
     """A long transition before a short pause must not make that pause look stuck."""
-    import time
     from renforge import progression
-    monkeypatch.setattr(progression, "POLL_SECONDS", 0.001)
-    monkeypatch.setattr(progression, "STUCK_PAUSE_SECONDS", 0.15)
+
+    # A fake clock: each read costs 10 ms and a sleep advances it, so no
+    # wall-clock stall on a busy runner can change what the loop sees.
+    clock = {"now": 1000.0}
+
+    def sleep(seconds):
+        clock["now"] += max(seconds, 0.001)
+
+    monkeypatch.setattr(progression.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(progression.time, "sleep", sleep)
+    monkeypatch.setattr(progression, "STUCK_PAUSE_SECONDS", 1.5)
     transition = _raw(interaction=7, stable=False, unstable_reason="transition",
                       session_id="s1", observation_id="t1")
     pause = _raw(interaction=8, stable=False, unstable_reason="pause", say_dismiss="dismiss",
                  session_id="s1", observation_id="p1")
     other_pause = _raw(interaction=9, stable=False, unstable_reason="pause", say_dismiss="dismiss",
                        session_id="s1", observation_id="p2")
-    start = time.monotonic()
+    start = clock["now"]
     nudged_at = []
 
     def fetch(_shot):
-        elapsed = time.monotonic() - start
-        if elapsed < 0.2:
+        clock["now"] += 0.01
+        elapsed = clock["now"] - start
+        if elapsed < 2.0:
             return transition          # longer than STUCK_PAUSE_SECONDS
-        if elapsed < 0.3:
+        if elapsed < 3.0:
             return pause               # a fresh pause, shorter than it
         return other_pause             # a new interaction: its own timer
 
@@ -1031,17 +1040,16 @@ def test_the_stuck_pause_timer_starts_when_the_pause_appears(monkeypatch):
             raise AssertionError("progression must not start from an unstable frame")
 
     def nudge(interaction):
-        nudged_at.append((interaction, time.monotonic() - start))
+        nudged_at.append((interaction, clock["now"] - start))
         return {"ok": True}
 
-    progression.run_native_skip(Client(), fetch, max_steps=5, deadline=start + 0.55,
-                                total_deadline=start + 0.6, nudge=nudge)
+    progression.run_native_skip(Client(), fetch, max_steps=5, deadline=start + 6.0,
+                                total_deadline=start + 7.0, nudge=nudge)
     # Only the last pause stayed a pause past the limit, measured from when it appeared.
     assert len(nudged_at) == 1, nudged_at
     interaction, when = nudged_at[0]
     assert interaction == 9
-    assert when >= 0.3 + 0.15, when
-
+    assert 3.0 + 1.5 <= when < 3.0 + 1.5 + 0.1, when
 
 def test_progression_stops_before_unclassified_input():
     raw = _raw(omitted={'unclassified': True, 'focus_truncated': False})
