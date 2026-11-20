@@ -53,11 +53,61 @@ def test_walk_nofollow_prunes_linked_folders(project: Path) -> None:
 def test_walk_nofollow_prunes_a_folder_whose_attributes_cannot_be_read(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "unreadable").mkdir()
 
+    real = files.is_link
+
+    def refuse(path):
+        if Path(path).name == "unreadable":
+            raise PrivatePathError("PATH_UNVERIFIABLE", "cannot read attributes")
+        return real(path)
+
+    monkeypatch.setattr(files, "is_link", refuse)
+    assert [dirs for _root, dirs, _files in files.walk_nofollow(tmp_path)] == [[]]
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "geteuid") or __import__("os").geteuid() == 0,
+                    reason="needs POSIX permissions that root bypasses")
+def test_walk_nofollow_prunes_a_folder_it_may_list_but_not_search(tmp_path: Path) -> None:
+    """Read without search permission: the child's name is listed but lstat fails; the scan goes on."""
+    (tmp_path / "a_readable").mkdir()
+    (tmp_path / "a_readable" / "kept.rpy").write_text("", encoding="utf-8")
+    listed_only = tmp_path / "listed_only"
+    (listed_only / "child").mkdir(parents=True)
+    listed_only.chmod(0o600)
+    try:
+        walked = {Path(root).name: sorted(names) for root, _dirs, names in files.walk_nofollow(tmp_path)}
+    finally:
+        listed_only.chmod(0o700)
+    assert walked["a_readable"] == ["kept.rpy"]
+    assert "child" not in walked
+
+
+def test_walk_nofollow_does_not_walk_a_starting_folder_that_is_a_link(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.rpy").write_text("label secret:\n    return\n", encoding="utf-8")
+    root = tmp_path / "project"
+    root.mkdir()
+    try:
+        (root / "game").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+
+    assert list(files.walk_nofollow(root / "game")) == []
+
+    from renforge.ui.server import _list_script_files
+
+    assert _list_script_files(root)["files"] == []
+
+
+def test_walk_nofollow_does_not_walk_a_starting_folder_it_cannot_inspect(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    (tmp_path / "game" / "script.rpy").write_text("", encoding="utf-8")
+
     def refuse(_path):
         raise PrivatePathError("PATH_UNVERIFIABLE", "cannot read attributes")
 
     monkeypatch.setattr(files, "is_link", refuse)
-    assert [dirs for _root, dirs, _files in files.walk_nofollow(tmp_path)] == [[]]
+    assert list(files.walk_nofollow(tmp_path / "game")) == []
 
 
 def test_scan_does_not_walk_into_a_junction(project: Path) -> None:

@@ -982,9 +982,13 @@ def walk_nofollow(top: str | Path) -> Iterator[tuple[str, list[str], list[str]]]
     ``os.walk`` skips a symlinked folder, but on Windows a junction is not a
     symlink, so a scan of ``game/`` would read whatever tree it points to.
     Each folder :func:`is_link` reports, or whose attributes cannot be read,
-    is pruned. Files are still listed as found: a caller that opens one
-    checks it itself (for example with :func:`read_text_nofollow`).
+    is pruned. A ``top`` that is itself such a folder yields nothing, as
+    ``os.walk`` would open it before any child can be pruned. Files are still
+    listed as found: a caller that opens one checks it itself (for example
+    with :func:`read_text_nofollow`).
     """
+    if _linked_folder(Path(top)):
+        return
     for root, dirs, filenames in os.walk(top):
         dirs[:] = [name for name in dirs if not _linked_folder(Path(root) / name)]
         yield root, dirs, filenames
@@ -993,8 +997,10 @@ def walk_nofollow(top: str | Path) -> Iterator[tuple[str, list[str], list[str]]]
 def _linked_folder(path: Path) -> bool:
     try:
         return is_link(path)
-    except PrivatePathError:
-        return True  # fail closed: an unreadable reparse state may be a junction
+    except (PrivatePathError, OSError):
+        # Fail closed: an unreadable reparse state may be a junction, and a
+        # POSIX folder listed without search permission cannot be inspected.
+        return True
 
 
 def _reject_link_components(path: Path, *, code: str, include_leaf: bool) -> Path:
