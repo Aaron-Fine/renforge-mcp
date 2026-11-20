@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -498,9 +499,12 @@ def build_wrappers(context):
             if label is not None and not (isinstance(label, str) and label.strip()):
                 return {"ok": False, "error": "label must be a label name"}
             if action == "launch":
+                # One spelling from here on: ``~/project`` must take the same
+                # no-follow create below as the absolute path it names.
+                launch_path = os.path.expanduser(project_path)
                 # Saves stay apart from the player's own but survive relaunches.
-                saves = live.session_saves_dir(project_path)
-                if Path(project_path).is_dir():
+                saves = live.session_saves_dir(launch_path)
+                if Path(launch_path).is_dir():
                     from ..state import ensure_project_state_dir
                     from ..util.files import PrivatePathError
 
@@ -508,7 +512,7 @@ def build_wrappers(context):
                     # anywhere on the way (even to another folder in the state
                     # tree) must not choose where this launch saves.
                     try:
-                        ensure_project_state_dir(project_path, saves.name)
+                        ensure_project_state_dir(launch_path, saves.name)
                     except PrivatePathError as exc:
                         message = (f"The session's saves folder in the RenForge state folder is a link or not a "
                                    f"folder ({exc}), so the launch would not be isolated. Remove it and launch "
@@ -518,7 +522,7 @@ def build_wrappers(context):
                 # HOME is always the session's own, even when the server's
                 # RENFORGE_ISOLATION=existing would default it to the player's:
                 # the policy classifies this launch as isolated.
-                result = _start_launch(project_path, editor=False, savedir=str(saves), home="temporary",
+                result = _start_launch(launch_path, editor=False, savedir=str(saves), home="temporary",
                                        start_label=label.strip() if label else None, require_isolated=True)
                 # Only a game this call starts goes to the label: a reused one
                 # stays where it is, and a refused launch starts nothing.

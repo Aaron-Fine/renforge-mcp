@@ -2333,16 +2333,24 @@ def test_session_launch_refuses_a_saves_folder_linked_out_of_the_state_folder(tm
     assert state_saves.is_dir() and not state_saves.is_symlink()
 
 
-def test_session_launch_refuses_a_saves_folder_linked_inside_the_state_folder(tmp_path, monkeypatch) -> None:
-    """A link to another folder of the state tree is still a link: it must not choose where the session saves."""
+@pytest.mark.parametrize("spelling", ["absolute", "tilde"])
+def test_session_launch_refuses_a_saves_folder_linked_inside_the_state_folder(
+        tmp_path, monkeypatch, spelling) -> None:
+    """A link to another folder of the state tree is still a link: it must not choose where the session saves.
+
+    ``~/project`` names the same folder as its absolute spelling, so it must
+    take the same no-follow create.
+    """
     import os
 
     from renforge.tools import live
 
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("RENFORGE_POLICY", "enforce")
-    project = tmp_path / "project"
+    project = home / "project"
     (project / "game").mkdir(parents=True)
     other = tmp_path / "state" / "projects" / "another-project" / "saves"
     other.mkdir(parents=True)
@@ -2357,7 +2365,7 @@ def test_session_launch_refuses_a_saves_folder_linked_inside_the_state_folder(tm
     app = _ToolRegistry()
     _register_tools(app)
 
-    refused = app.tools["renforge_session"](str(project), "launch")
+    refused = app.tools["renforge_session"]("~/project" if spelling == "tilde" else str(project), "launch")
 
     assert refused["ok"] is False and refused["code"] == "SESSION_NOT_ISOLATED", refused
     assert started == []
