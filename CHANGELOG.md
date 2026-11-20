@@ -609,6 +609,13 @@ versioning.
   symlink or junction, or whose link state cannot be read; they list
   nothing from it. A folder listed without search permission is skipped
   instead of aborting the whole scan.
+- The launch guidance describes the HOME a launch resolves to:
+  `savedir=temporary` isolates HOME only while `home` is omitted or `auto`
+  (`home=existing` keeps the user's HOME and needs `authorize` under
+  enforce), and under `RENFORGE_ISOLATION=temporary` a `savedir` path with
+  `home` omitted gets a temporary HOME and needs no `authorize`. The
+  `savedir` parameter, the launch policy and `authorize` texts, and the
+  server instructions said otherwise.
 
 ## [0.7.6] - 2026-11-18
 

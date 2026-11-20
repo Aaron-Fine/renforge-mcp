@@ -86,8 +86,10 @@ def _instructions(toolsets: list[str]) -> str:
         "reading the player's saves, matching scenario steps, and any launch, "
         "jump or new_game whose saves and HOME are not both in RenForge's own "
         "folders, which by default includes one with no isolation options) require "
-        "authorize=true or an allowlist. Pass savedir=\"temporary\" to launch, jump "
-        "or start a new game isolated without authorize."
+        "authorize=true or an allowlist. Pass savedir=\"temporary\" (with home "
+        "omitted or auto, which then isolates HOME too) to launch, jump or start a "
+        "new game isolated without authorize; an explicit home must also be "
+        "RenForge's own."
     )
     return " ".join(parts)
 

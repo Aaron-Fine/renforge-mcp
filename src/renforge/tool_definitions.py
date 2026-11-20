@@ -57,8 +57,9 @@ def _ann(
 _ISOLATION_PARAMETERS = {
     "savedir": (
         "Save location. `temporary` isolates the session: saves, persistent data, "
-        "preferences, and HOME go to a disposable folder, so the game cannot read "
-        "or write the user's normal Ren'Py saves. Omitted, empty, or `auto` follows "
+        "and preferences go to a disposable folder, so the game cannot read "
+        "or write the user's normal Ren'Py saves, and so does HOME unless `home` is set "
+        "(`home=existing` keeps the user's HOME, which needs `authorize` under enforce). Omitted, empty, or `auto` follows "
         "`RENFORGE_ISOLATION` (`temporary` to isolate every launch; otherwise the "
         "game's normal save directory, as `existing` or `default` selects). Any other "
         "non-empty value is an arbitrary save directory path that is created if "
@@ -93,8 +94,9 @@ _LAUNCH_POLICY = (
     "RenForge's own folders once `RENFORGE_ISOLATION` fills in omitted options: `savedir=temporary` with `home` "
     "omitted or `temporary`, or `savedir`/`home` paths inside the RenForge state folder. Omitted (or `auto`) options "
     "mean the user's saves and HOME unless `RENFORGE_ISOLATION=temporary`, so by default a call with no isolation "
-    "options needs `authorize=true`, and so does a `savedir` path with `home` omitted (it keeps the user's HOME). "
-    "Pass `savedir=temporary` to stay isolated without `authorize`. "
+    "options needs `authorize=true`, and so does a `savedir` path with `home` omitted (it keeps the user's HOME); "
+    "with `RENFORGE_ISOLATION=temporary` an omitted `home` is a temporary HOME, so neither does. "
+    "Pass `savedir=temporary` with `home` omitted to stay isolated without `authorize`. "
 )
 
 _RELAUNCH_POLICY = _LAUNCH_POLICY + (
@@ -104,8 +106,9 @@ _RELAUNCH_POLICY = _LAUNCH_POLICY + (
 
 _LAUNCH_AUTHORIZE = (
     "Pass `authorize=true` when `RENFORGE_POLICY=enforce` and the game would keep its saves or HOME outside RenForge's "
-    "own folders: no isolation options (unless `RENFORGE_ISOLATION=temporary`), `savedir` or `home` set to "
-    "`existing`, a `savedir` path with `home` omitted, a host save or HOME path, or any other path outside the "
+    "own folders: no isolation options or a `savedir` path with `home` omitted (both unless "
+    "`RENFORGE_ISOLATION=temporary`, which makes an omitted `home` temporary), `savedir` or `home` set to "
+    "`existing`, a host save or HOME path, or any other path outside the "
     "RenForge state folder, the shared temp dir included. Isolated launches (`savedir=temporary` with `home` omitted "
     "or `temporary`) do not need this; prefer them."
 )

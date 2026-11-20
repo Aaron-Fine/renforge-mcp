@@ -676,3 +676,34 @@ def test_action_enums_match_the_policy_tables() -> None:
         assert sorted(enum) == sorted(table), name
     assert sorted(MOD_TOOL_ACTIONS) == sorted(policy.MOD_ACTIONS)
     assert sorted(SESSION_ACTIONS) == sorted(policy.SESSION_ACTIONS)
+
+
+def test_launch_guidance_describes_the_home_the_launch_resolves_to(tmp_path, monkeypatch) -> None:
+    """The text must match the policy: an explicit home overrides savedir=temporary, and
+    RENFORGE_ISOLATION=temporary makes an omitted home temporary even beside a savedir path."""
+    from renforge import tool_definitions
+    from renforge.save_isolation import launch_request_is_renforge_owned
+    from renforge.server import _instructions
+    from renforge.state import project_state_dir
+    from renforge.toolsets import enabled_toolsets
+
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    inside = str(project_state_dir(project) / "saves-here")
+
+    def owned(savedir, home):
+        return launch_request_is_renforge_owned(savedir=savedir, home=home, persistent=None,
+                                                preferences=None, project_path=str(project))
+
+    # savedir=temporary isolates HOME only while home is left to follow it.
+    assert owned("temporary", None) and not owned("temporary", "existing")
+    savedir_text = tool_definitions._ISOLATION_PARAMETERS["savedir"]
+    assert "unless `home` is set" in savedir_text
+    instructions = _instructions(enabled_toolsets())
+    assert "with home omitted or auto" in instructions
+
+    # Under RENFORGE_ISOLATION=temporary a savedir path with home omitted keeps no user HOME.
+    monkeypatch.setenv("RENFORGE_ISOLATION", "temporary")
+    assert owned(inside, None)
+    for text in (tool_definitions._LAUNCH_POLICY, tool_definitions._LAUNCH_AUTHORIZE):
+        assert "makes an omitted `home` temporary" in text or "an omitted `home` is a temporary HOME" in text
