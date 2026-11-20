@@ -661,6 +661,9 @@ versioning.
   instead of being skipped or replaced by an empty placeholder.
 - On Windows a `renforge_validate` `staged` key spelled `Game/...` names the
   project's `game/` file, as `game/...` does, not a nested `game/game/` one.
+- The shadow's linked-directory scans share one 50,000-entry, 5-second
+  budget, so many links (even to one folder) no longer multiply the scan
+  time; a link scanned after it runs out is `linked_directory_uninspectable`.
 
 ## [0.7.6] - 2026-11-18
 

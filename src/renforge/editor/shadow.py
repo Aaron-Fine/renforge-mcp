@@ -137,8 +137,24 @@ class _LinkedDirectoryScan:
 _UNINSPECTABLE_LINKED_DIRECTORY = _LinkedDirectoryScan(source_found=None)
 
 
-def _scan_linked_directory(link: Path) -> _LinkedDirectoryScan:
+@dataclass
+class _LinkedScanBudget:
+    """Entries and seconds left for every linked-directory scan of one plan.
+
+    Sharing it keeps many links (even to one large target) from multiplying
+    the scan cost; once it runs out, later links are uninspectable.
+    """
+
+    entries: int = field(default_factory=lambda: MAX_LINKED_SOURCE_SCAN_ENTRIES)
+    seconds: float = field(default_factory=lambda: MAX_LINKED_SOURCE_SCAN_SECONDS)
+
+
+def _scan_linked_directory(
+    link: Path, budget: _LinkedScanBudget | None = None
+) -> _LinkedDirectoryScan:
     """Inspect a linked directory's target without reading or copying bytes."""
+    if budget is None:
+        budget = _LinkedScanBudget()
     try:
         target = link.resolve(strict=True)
     except (OSError, RuntimeError):
@@ -146,8 +162,7 @@ def _scan_linked_directory(link: Path) -> _LinkedDirectoryScan:
     if not target.is_dir():
         return _UNINSPECTABLE_LINKED_DIRECTORY
 
-    deadline = time.monotonic() + MAX_LINKED_SOURCE_SCAN_SECONDS
-    inspected = 0
+    last_check = time.monotonic()
     directories: list[str] = []
     files: list[str] = []
     complete = True
@@ -157,10 +172,14 @@ def _scan_linked_directory(link: Path) -> _LinkedDirectoryScan:
         complete = False
 
     def _budget_exceeded() -> bool:
-        return (
-            inspected > MAX_LINKED_SOURCE_SCAN_ENTRIES
-            or time.monotonic() > deadline
-        )
+        # Charge one entry and the time since the last check, so the time
+        # between scans of different links is not counted.
+        nonlocal last_check
+        now = time.monotonic()
+        budget.entries -= 1
+        budget.seconds -= now - last_check
+        last_check = now
+        return budget.entries < 0 or budget.seconds < 0
 
     for current, dirs, filenames in os.walk(
         target, topdown=True, followlinks=False, onerror=_record_error
@@ -169,7 +188,6 @@ def _scan_linked_directory(link: Path) -> _LinkedDirectoryScan:
         relative_current = current_path.relative_to(target)
         kept_dirs: list[str] = []
         for dirname in sorted(dirs):
-            inspected += 1
             if _budget_exceeded():
                 return _UNINSPECTABLE_LINKED_DIRECTORY
             if dirname in _EXCLUDED_DIRS:
@@ -190,7 +208,6 @@ def _scan_linked_directory(link: Path) -> _LinkedDirectoryScan:
         dirs[:] = kept_dirs
 
         for filename in sorted(filenames):
-            inspected += 1
             if _budget_exceeded():
                 return _UNINSPECTABLE_LINKED_DIRECTORY
             file_path = current_path / filename
@@ -533,6 +550,7 @@ def plan_shadow_project(
     skipped_links: list[dict[str, str]] = []
     complete = True
     staged_file_keys, staged_dir_keys = _staged_retention_keys(staged_replacements)
+    link_scan_budget = _LinkedScanBudget()
 
     def _record_base_entry(
         relative_path: str,
@@ -607,7 +625,7 @@ def plan_shadow_project(
                     relative_dir = _relative_posix(root, directory)
                     reason = "linked_directory_not_followed"
                     if _is_game_relative(relative_dir):
-                        scan = _scan_linked_directory(directory)
+                        scan = _scan_linked_directory(directory, link_scan_budget)
                         if scan.source_found is True:
                             reason = "linked_directory_with_source"
                             complete = False

@@ -1978,6 +1978,62 @@ def test_shadow_linked_asset_scan_entry_cap_marks_target_uninspectable(
     )
 
 
+def test_shadow_linked_scan_budget_is_shared_across_links(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import renforge.editor.shadow as shadow
+
+    # Each link fits the entry cap alone; together they exceed it, so many
+    # links (even to one large target) cannot multiply the scan cost.
+    project, _source = _make_project(tmp_path)
+    external = tmp_path / "external-shared"
+    external.mkdir()
+    (external / "bg.png").write_bytes(b"png")
+    (external / "cg.png").write_bytes(b"png")
+    _link_directory_or_simulate(monkeypatch, project.root / "game" / "images_a", external)
+    _link_directory_or_simulate(monkeypatch, project.root / "game" / "images_b", external)
+    monkeypatch.delenv("RENFORGE_SHADOW_MAX_FILES", raising=False)
+    monkeypatch.delenv("RENFORGE_SHADOW_MAX_BYTES", raising=False)
+    monkeypatch.setattr(shadow, "MAX_LINKED_SOURCE_SCAN_ENTRIES", 3)
+
+    plan = shadow.plan_shadow_project(project)
+
+    assert plan.complete is False
+    assert plan.skipped_links == (
+        {"path": "game/images_a", "reason": "linked_directory_assets_placeholders"},
+        {"path": "game/images_b", "reason": "linked_directory_uninspectable"},
+    )
+
+
+def test_shadow_linked_scan_time_budget_is_shared_across_links(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import renforge.editor.shadow as shadow
+
+    project, _source = _make_project(tmp_path)
+    external = tmp_path / "external-slow"
+    external.mkdir()
+    (external / "bg.png").write_bytes(b"png")
+    (external / "cg.png").write_bytes(b"png")
+    _link_directory_or_simulate(monkeypatch, project.root / "game" / "images_a", external)
+    _link_directory_or_simulate(monkeypatch, project.root / "game" / "images_b", external)
+    monkeypatch.delenv("RENFORGE_SHADOW_MAX_FILES", raising=False)
+    monkeypatch.delenv("RENFORGE_SHADOW_MAX_BYTES", raising=False)
+    # Every clock read advances one second: each scan alone stays under the
+    # budget, the two together do not.
+    clock = iter(range(1_000_000))
+    monkeypatch.setattr(shadow.time, "monotonic", lambda: float(next(clock)))
+    monkeypatch.setattr(shadow, "MAX_LINKED_SOURCE_SCAN_SECONDS", 3.5)
+
+    plan = shadow.plan_shadow_project(project)
+
+    assert plan.complete is False
+    assert plan.skipped_links == (
+        {"path": "game/images_a", "reason": "linked_directory_assets_placeholders"},
+        {"path": "game/images_b", "reason": "linked_directory_uninspectable"},
+    )
+
+
 def test_shadow_linked_directory_with_nested_link_is_uninspectable(
     monkeypatch, tmp_path: Path
 ) -> None:
