@@ -729,6 +729,24 @@ def test_close_waits_for_a_writer_holding_the_session_open(tmp_path: Path) -> No
     writing = threading.Event()
     release = threading.Event()
     closed = threading.Event()
+    blocked = threading.Event()
+
+    class _ReportingLock:
+        """The session's lock, reporting an acquire that has to wait."""
+
+        def __init__(self, lock) -> None:
+            self._lock = lock
+
+        def __enter__(self):
+            if not self._lock.acquire(blocking=False):
+                blocked.set()
+                self._lock.acquire()
+            return self
+
+        def __exit__(self, *_exc) -> None:
+            self._lock.release()
+
+    session._close_lock = _ReportingLock(session._close_lock)
 
     def writer() -> None:
         with session.holding_open() as session_open:
@@ -747,7 +765,9 @@ def test_close_waits_for_a_writer_holding_the_session_open(tmp_path: Path) -> No
     closer_thread = threading.Thread(target=closer)
     closer_thread.start()
 
-    # The stop must not remove the session root under an unfinished copy.
+    # The stop must not remove the session root under an unfinished copy:
+    # close() reached the lock, and waits there for the writer.
+    assert blocked.wait(timeout=5)
     assert not closed.wait(timeout=0.2)
     assert (savedir / "1-1-LT1.save").exists()
 
