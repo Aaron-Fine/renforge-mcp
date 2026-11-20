@@ -607,10 +607,10 @@ versioning.
   observation, the click past a line, and the wait after that click to
   the step's own `timeout`, so a short timeout is no longer overrun before
   progression starts. A click accepted in time is still reported.
-- Project scans and the dashboard's script list no longer walk a starting
-  folder (`game/`, `game/tl/<language>/`, a mod folder) that is itself a
-  symlink or junction, or whose link state cannot be read; they list
-  nothing from it. A folder listed without search permission is skipped
+- The dashboard's script list and story map no longer list the scripts of
+  a `game/` folder that is a link leading out of the project, as the other
+  scans already refused; a `game/` link that stays inside the project is
+  still scanned. A folder listed without search permission is skipped
   instead of aborting the whole scan.
 - The launch guidance describes the HOME a launch resolves to:
   `savedir=temporary` isolates HOME only while `home` is omitted or `auto`

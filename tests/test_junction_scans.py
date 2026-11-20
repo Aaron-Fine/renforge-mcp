@@ -81,33 +81,42 @@ def test_walk_nofollow_prunes_a_folder_it_may_list_but_not_search(tmp_path: Path
     assert "child" not in walked
 
 
-def test_walk_nofollow_does_not_walk_a_starting_folder_that_is_a_link(tmp_path: Path) -> None:
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "secret.rpy").write_text("label secret:\n    return\n", encoding="utf-8")
+def _linked_game(tmp_path: Path, target: Path) -> Path:
+    """A project whose game/ is a link to *target*, which holds script.rpy."""
+    target.mkdir(parents=True)
+    (target / "script.rpy").write_text("label start:\n    return\n", encoding="utf-8")
     root = tmp_path / "project"
-    root.mkdir()
+    root.mkdir(exist_ok=True)
     try:
-        (root / "game").symlink_to(outside, target_is_directory=True)
+        (root / "game").symlink_to(target, target_is_directory=True)
     except OSError:
         pytest.skip("symlinks are not available")
+    return root
 
-    assert list(files.walk_nofollow(root / "game")) == []
 
+def test_a_game_folder_linked_inside_the_project_scans_normally(tmp_path: Path) -> None:
+    """resolves_inside lets a game/ link that stays in the project through; every scan must agree."""
+    from renforge.ui.graph import _story_map_signature
     from renforge.ui.server import _list_script_files
 
+    root = _linked_game(tmp_path, tmp_path / "project" / "src_game")
+
+    assert [item["file"] for item in scan_project(str(root))["files"]] == ["game/script.rpy"]
+    assert len(find_references(root, "start")["occurrences"]) == 1
+    assert _list_script_files(root)["files"] == ["game/script.rpy"]
+    assert [Path(entry[0]).as_posix() for entry in _story_map_signature(root)[0]] == ["game/script.rpy"]
+
+
+def test_a_game_folder_linked_outside_the_project_is_refused_by_every_scan(tmp_path: Path) -> None:
+    from renforge.ui.graph import _story_map_signature
+    from renforge.ui.server import _list_script_files
+
+    root = _linked_game(tmp_path, tmp_path / "outside")
+
+    assert scan_project(str(root))["files"] == []
+    assert find_references(root, "start")["occurrences"] == []
     assert _list_script_files(root)["files"] == []
-
-
-def test_walk_nofollow_does_not_walk_a_starting_folder_it_cannot_inspect(tmp_path: Path, monkeypatch) -> None:
-    (tmp_path / "game").mkdir()
-    (tmp_path / "game" / "script.rpy").write_text("", encoding="utf-8")
-
-    def refuse(_path):
-        raise PrivatePathError("PATH_UNVERIFIABLE", "cannot read attributes")
-
-    monkeypatch.setattr(files, "is_link", refuse)
-    assert list(files.walk_nofollow(tmp_path / "game")) == []
+    assert _story_map_signature(root)[0] == ()
 
 
 def test_scan_does_not_walk_into_a_junction(project: Path) -> None:

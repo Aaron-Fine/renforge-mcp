@@ -982,13 +982,12 @@ def walk_nofollow(top: str | Path) -> Iterator[tuple[str, list[str], list[str]]]
     ``os.walk`` skips a symlinked folder, but on Windows a junction is not a
     symlink, so a scan of ``game/`` would read whatever tree it points to.
     Each folder :func:`is_link` reports, or whose attributes cannot be read,
-    is pruned. A ``top`` that is itself such a folder yields nothing, as
-    ``os.walk`` would open it before any child can be pruned. Files are still
-    listed as found: a caller that opens one checks it itself (for example
-    with :func:`read_text_nofollow`).
+    is pruned. ``top`` itself is walked even when it is a link (a project's
+    ``game`` folder may be one that stays inside the project): a caller
+    checks where it leads first, with :func:`resolves_inside`. Files are
+    still listed as found: a caller that opens one checks it itself (for
+    example with :func:`read_text_nofollow`).
     """
-    if _linked_folder(Path(top)):
-        return
     for root, dirs, filenames in os.walk(top):
         dirs[:] = [name for name in dirs if not _linked_folder(Path(root) / name)]
         yield root, dirs, filenames
