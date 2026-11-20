@@ -179,10 +179,26 @@ def project_state_dir(project_root: str | Path) -> Path:
     spelled as the disk lists it, keeps two projects with the same name apart
     and gives every spelling of one directory the same folder.
     """
-    root = on_disk_spelling(Path(project_root).expanduser().resolve())
+    return _state_dir_for(on_disk_spelling(Path(project_root).expanduser().resolve()))
+
+
+def _state_dir_for(root: Path) -> Path:
     digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:16]
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", root.name).strip("._")[:48] or "project"
     return state_root() / "projects" / f"{name}-{digest}"
+
+
+def prior_project_state_dir(project_root: str | Path) -> Path | None:
+    """The folder an earlier build keyed by the caller's spelling, when it differs.
+
+    Before the key spelled the path as the disk lists it, a spelling that
+    differed only in case (``games/foo`` for ``Games/Foo``) had a folder of
+    its own. Readers of history (the activity log) look there too; nothing
+    is written there any more. ``None`` when the two keys agree.
+    """
+    resolved = Path(project_root).expanduser().resolve()
+    earlier = _state_dir_for(resolved)
+    return None if earlier == project_state_dir(project_root) else earlier
 
 
 def ensure_project_state_dir(project_root: str | Path, *parts: str) -> Path:
