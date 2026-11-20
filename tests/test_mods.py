@@ -1036,3 +1036,15 @@ def test_a_published_file_stays_accounted_for_when_the_last_manifest_write_fails
     removed = mods.remove(root, "demo")
     assert removed["removed"] == ["extra.rpy", "extra.rpyc", "intro.rpy"]
     assert not (root / "game" / "mods" / "demo").exists()
+
+
+def test_the_write_description_names_what_write_creates_and_refuses() -> None:
+    """A new path is created and listed; only an existing unlisted file, or a foreign folder, is refused."""
+    from renforge.tool_definitions import TOOL_DEFINITIONS
+
+    text = TOOL_DEFINITIONS["renforge_mod"].description
+    assert "any file the manifest does not list" not in text
+    assert "creates a new path and lists it" in text
+    assert "an existing file (or a `.rpy`'s `.rpyc`) the manifest does not list" in text
+    assert "a folder that already holds files RenForge did not write" in text
+    assert "`pending`" in text
