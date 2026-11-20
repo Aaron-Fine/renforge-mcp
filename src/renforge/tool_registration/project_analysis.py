@@ -240,6 +240,7 @@ def build_wrappers(context):
         staged: dict[str, str] | None = None,
         keep_shadow: bool = False,
         timeout: float = 0,
+        authorize: bool = False,
     ) -> dict:
         """Lint a clean shadow tree with staged bytes; project sources stay untouched."""
         from ..tools.validate import validate_project
@@ -255,6 +256,7 @@ def build_wrappers(context):
                 "staged": [] if staged is None else sorted(staged),
                 "keep_shadow": keep_shadow,
                 "timeout": timeout,
+                "authorize": authorize,
             },
             project_root=project_path,
             fn=validate_project,

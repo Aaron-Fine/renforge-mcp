@@ -568,6 +568,8 @@ versioning.
   the engine widget.
 - Autopilot ends a run when the bridge refuses a choice and lists it under
   `choice_errors`, instead of counting the menu as explored.
+- Under `RENFORGE_POLICY=enforce`, `renforge_validate` with `staged` bytes
+  needs `authorize=true`: lint runs their init code, like `renforge_eval`.
 - A `save` or `load` slot that is a path rather than a slot name (absolute,
   with a drive, a `/` or `\` separator, a `:` (on Windows `page:name`
   writes a stream of the file `page`), or `.`/`..`) is refused with
