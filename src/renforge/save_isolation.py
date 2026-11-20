@@ -1062,7 +1062,10 @@ def import_selected_slots(
     are walked without following links, so a session root or savedir swapped
     for a link (at any time since launch) is refused, not followed. Callers
     pass a canonical path (:func:`renforge.tools.live.saves` resolves only the
-    shared temp folder).
+    shared temp folder). Only the ``files_touched`` receipt is resolved
+    (:func:`renforge.util.files.receipt_path`): if the savedir is swapped for
+    a link mid-import, the receipt names the link's target, where nothing was
+    written.
     """
     dest = Path(destination).expanduser()
     if path_exposes_user_saves(dest, project_path=project_root, home=home):

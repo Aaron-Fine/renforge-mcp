@@ -493,3 +493,25 @@ def test_receipt_path_is_project_relative_inside_and_absolute_outside(tmp_path) 
     assert receipt_path(project, "game/a.rpy") == "game/a.rpy"
     assert receipt_path(project, project / "game" / "a.rpy") == "game/a.rpy"
     assert receipt_path(str(project), outside) == outside.resolve().as_posix()
+
+
+def test_receipt_path_names_a_link_loop_without_raising(tmp_path, monkeypatch) -> None:
+    # Python 3.11 and 3.12 raise RuntimeError from a non-strict resolve() of a
+    # symlink loop (3.13 does not), so the loop is simulated: a receipt for
+    # a savedir swapped for a looping link must still name it, not raise.
+    from renforge.util.files import receipt_path
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    loop = tmp_path / "saves"
+    real_resolve = Path.resolve
+
+    def resolve(self, strict=False):
+        if self.name == loop.name:
+            raise RuntimeError(f"Symlink loop from {str(self)!r}")
+        return real_resolve(self, strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+
+    assert receipt_path(project, loop) == loop.absolute().as_posix()
+    assert receipt_path(project, str(loop)) == loop.absolute().as_posix()
