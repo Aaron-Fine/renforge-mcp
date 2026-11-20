@@ -220,24 +220,10 @@ def test_launch_with_bridge_builds_run_command(monkeypatch, tmp_path: Path, warp
     session.close(timeout=0.1)
 
 
-def test_launch_tells_the_bridge_the_project_root_its_metadata_names(monkeypatch, tmp_path: Path) -> None:
-    """The bridge refuses an env project root that differs from the starting metadata's.
-
-    On a case-insensitive volume a project root can be spelled other than
-    the disk lists it (``/users/me/game`` for ``/Users/me/Game``), while
-    the metadata names the on-disk spelling. A linked alias stands in for
-    such a spelling here: a root that reaches the project but is not how
-    the disk spells it.
-    """
-    monkeypatch.setenv("DISPLAY", ":0")
-    project, sdk, project_root = _make_project(tmp_path)
-    alias = tmp_path / "Project"
-    try:
-        alias.symlink_to(project_root, target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks unavailable")
+def _launch_names_the_metadata_root(monkeypatch, project, sdk, project_root: Path, spelling: Path) -> None:
+    """Launch ``project`` spelled ``spelling``; the bridge env and metadata name ``project_root``."""
     # As resolve() leaves a case alias on macOS: the caller's spelling, unchanged.
-    object.__setattr__(project, "root", alias)
+    object.__setattr__(project, "root", spelling)
     captured: dict[str, object] = {}
 
     def fake_popen(command, env=None, stdout=None, stderr=None, start_new_session=False):
@@ -255,6 +241,36 @@ def test_launch_tells_the_bridge_the_project_root_its_metadata_names(monkeypatch
         assert captured["env_root"] == captured["metadata_root"] == str(project_root.resolve())
     finally:
         session.close(timeout=0.1)
+
+
+def test_launch_tells_the_bridge_the_project_root_its_metadata_names(monkeypatch, tmp_path: Path) -> None:
+    """The bridge refuses an env project root that differs from the starting metadata's.
+
+    On a case-insensitive volume a project root can be spelled other than
+    the disk lists it (``/users/me/game`` for ``/Users/me/Game``), while
+    the metadata names the on-disk spelling. A linked alias stands in for
+    such a spelling here: a root that reaches the project but is not how
+    the disk spells it. Its name differs from ``project`` by more than
+    case, so a case-insensitive volume can create it too.
+    """
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    alias = tmp_path / "project-link"
+    try:
+        alias.symlink_to(project_root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    _launch_names_the_metadata_root(monkeypatch, project, sdk, project_root, alias)
+
+
+def test_launch_names_the_on_disk_spelling_on_a_case_insensitive_volume(monkeypatch, tmp_path: Path) -> None:
+    """The same as above with a real case alias, where the volume has them."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    spelling = tmp_path / "PROJECT"
+    if not spelling.exists() or not spelling.samefile(project_root):
+        pytest.skip("needs a case-insensitive volume")
+    _launch_names_the_metadata_root(monkeypatch, project, sdk, project_root, spelling)
 
 
 def test_launch_with_bridge_isolates_saves_via_native_savedir(
