@@ -2036,3 +2036,18 @@ def test_inside_compares_path_parts_case_insensitively(path, root, inside: bool)
     from renforge.save_isolation import _inside
 
     assert _inside(path, root) is inside
+
+
+def test_a_relative_reported_save_location_is_never_renforge_owned(monkeypatch) -> None:
+    # The game resolves a relative config.extra_savedirs entry against its
+    # own working directory, so the server's cannot vouch for it.
+    from renforge.save_isolation import storage_is_renforge_owned
+    from renforge.state import state_root
+
+    inside = state_root() / "saves"
+    inside.mkdir(parents=True)
+    monkeypatch.chdir(state_root())
+
+    assert storage_is_renforge_owned(str(inside), home=False) is True
+    assert storage_is_renforge_owned("saves", home=False) is False
+    assert storage_is_renforge_owned("saves", home=True) is False

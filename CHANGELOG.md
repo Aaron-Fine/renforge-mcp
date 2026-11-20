@@ -570,6 +570,8 @@ versioning.
   `choice_errors`, instead of counting the menu as explored.
 - Under `RENFORGE_POLICY=enforce`, `renforge_validate` with `staged` bytes
   needs `authorize=true`: lint runs their init code, like `renforge_eval`.
+- A running game that reports a relative save location or HOME is never
+  treated as isolated: the game resolves it from its own working directory.
 - A `save` or `load` slot that is a path rather than a slot name (absolute,
   with a drive, a `/` or `\` separator, a `:` (on Windows `page:name`
   writes a stream of the file `page`), or `.`/`..`) is refused with

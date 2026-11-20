@@ -595,9 +595,12 @@ def storage_is_renforge_owned(
 
     It must be under the state folder or in a session root, and must not
     reach the player's storage anyway. Anything else, or anything that is
-    not a usable path, counts as the player's.
+    not a usable path, counts as the player's. So does a relative path: the
+    game resolves it against its own working directory, not the server's.
     """
-    if not (isinstance(path, str) and path) or not location_is_renforge_owned(path):
+    if not (isinstance(path, str) and path and Path(path).is_absolute()):
+        return False
+    if not location_is_renforge_owned(path):
         return False
     if home:
         return not home_exposes_user_saves(path)
