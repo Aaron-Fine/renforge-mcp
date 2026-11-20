@@ -163,8 +163,11 @@ def _resolve_as_given(project_root: Path) -> Path:
     """``project_root`` resolved strictly: every component must exist as spelled.
 
     A lenient resolve folds ``missing/..`` away and would accept a path that
-    names no folder. On a case-insensitive volume a case alias exists, and
-    macOS's resolve keeps the caller's spelling.
+    names no folder. That refusal is the POSIX behaviour: Windows folds
+    ``..`` before it looks at any component, as Win32 does when it opens a
+    path, so there ``project\\missing\\..`` does name ``project``. On a
+    case-insensitive volume a case alias exists, and macOS's resolve keeps
+    the caller's spelling.
     """
     return Path(project_root).expanduser().resolve(strict=True)
 
