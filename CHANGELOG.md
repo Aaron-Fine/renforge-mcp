@@ -664,6 +664,9 @@ versioning.
 - The shadow's linked-directory scans share one 50,000-entry, 5-second
   budget, so many links (even to one folder) no longer multiply the scan
   time; a link scanned after it runs out is `linked_directory_uninspectable`.
+- A bounded command (shadow lint) whose descendant keeps its pipes open
+  keeps the output already printed, and waits one 5-second grace for both
+  streams instead of 5 seconds each. The capture is still marked truncated.
 
 ## [0.7.6] - 2026-11-18
 

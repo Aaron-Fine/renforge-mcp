@@ -5,12 +5,15 @@ import os
 import shlex
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Mapping, Sequence
 
 
 DEFAULT_TIMEOUT_SECONDS: Final = 60
+# How long the capture readers may keep draining after the command exits.
+_READER_JOIN_GRACE_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -76,7 +79,9 @@ def _run_command_bounded(
 
     def _drain(stream, buffer: bytearray, index: int) -> None:
         while True:
-            chunk = stream.read(65536)
+            # read1 returns what has arrived instead of waiting for a full
+            # buffer, so output is kept when a descendant holds the pipe open.
+            chunk = stream.read1(65536)
             if not chunk:
                 break
             remaining = max_output_bytes - len(buffer)
@@ -105,8 +110,10 @@ def _run_command_bounded(
         except subprocess.TimeoutExpired:
             pass
         returncode = -1
+    # One grace period for both readers, not one after the other.
+    join_deadline = time.monotonic() + _READER_JOIN_GRACE_SECONDS
     for index, reader in enumerate(readers):
-        reader.join(timeout=5)
+        reader.join(timeout=max(0.0, join_deadline - time.monotonic()))
         if reader.is_alive():
             # A descendant still holds the pipe after the runner returned, so
             # the captured transcript is incomplete even if the exit code is 0.
