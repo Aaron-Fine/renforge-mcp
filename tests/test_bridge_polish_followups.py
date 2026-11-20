@@ -226,7 +226,9 @@ def test_observe_lists_an_unfocused_engine_subclass_as_its_kind(running_bridge, 
 
 
 _PATH_SLOTS = ["../escape", "..", ".", " .. ", "sub/slot", "sub\\slot", "/abs/slot", "C:slot", "C:\\slot",
-               "nul\x00slot"]
+               "nul\x00slot",
+               # A colon is Windows stream syntax: "page:stream" writes a stream of "page".
+               "page:stream", "1-1:$DATA"]
 
 
 @pytest.mark.parametrize("command", ["save_slot", "load_slot"])

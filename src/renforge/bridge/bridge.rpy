@@ -1381,11 +1381,13 @@ init python:
         suffix)``, so a slot that is a path (absolute, with a drive, with
         either separator or NUL, or ``.``/``..``) would read or write outside
         the save folder, the player's own saves included. The host refuses
-        these first (``save_isolation.slot_name_error``, the same rule); this
-        is the second line for a caller that reaches the bridge directly.
+        these first (``save_isolation.slot_name_error``); this is the second
+        line for a caller that reaches the bridge directly. A colon is refused
+        too: on Windows ``page:name`` is stream syntax, writing a stream of
+        the file ``page`` rather than a save file.
         """
         import ntpath
-        if (any(char in slot for char in ("/", "\\", "\x00")) or slot.strip() in (".", "..")
+        if (any(char in slot for char in ("/", "\\", "\x00", ":")) or slot.strip() in (".", "..")
                 or ntpath.splitdrive(slot)[0]):
             return {"ok": False, "code": "SAVE_SLOT_INVALID",
                 "error": "slot must be a save slot name such as 1-1 or quick-1, not a path"}
