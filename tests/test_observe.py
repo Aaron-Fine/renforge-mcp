@@ -1014,8 +1014,9 @@ def test_the_stuck_pause_timer_starts_when_the_pause_appears(monkeypatch):
     def sleep(seconds):
         clock["now"] += max(seconds, 0.001)
 
-    monkeypatch.setattr(progression.time, "monotonic", lambda: clock["now"])
-    monkeypatch.setattr(progression.time, "sleep", sleep)
+    # Replace only progression's own ``time`` name: patching attributes of the
+    # shared time module would also stall threads other tests leaked.
+    monkeypatch.setattr(progression, "time", SimpleNamespace(monotonic=lambda: clock["now"], sleep=sleep))
     monkeypatch.setattr(progression, "STUCK_PAUSE_SECONDS", 1.5)
     transition = _raw(interaction=7, stable=False, unstable_reason="transition",
                       session_id="s1", observation_id="t1")
