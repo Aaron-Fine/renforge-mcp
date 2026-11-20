@@ -1064,16 +1064,23 @@ def test_a_launch_that_compiled_scripts_and_stopped_on_an_error_is_retried_once(
 
 def test_renforges_own_compiled_scripts_do_not_count_as_changed_game_scripts(monkeypatch, tmp_path: Path) -> None:
     """Ren'Py compiles the injected per-session scripts on every launch."""
+    from renforge.bridge.artifacts import bridge_basename, editor_basename, session_init_basename
+
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)
     (project_root / "game").mkdir(exist_ok=True)
     launches = {"count": 0}
+    compiled: list[str] = []
 
     def failing_popen(*_args, **kwargs):
         launches["count"] += 1
         session_id = kwargs["env"]["RENFORGE_BRIDGE_SESSION_ID"]
-        for prefix in ("00renforge_session_", "zzrenforge_bridge_"):
-            (project_root / "game" / f"{prefix}{session_id}.rpyc").write_bytes(b"compiled")
+        # Compile only what the launch injected, as Ren'Py would.
+        for basename in (session_init_basename, bridge_basename, editor_basename):
+            source = project_root / "game" / basename(session_id)
+            if source.exists():
+                source.with_name(source.name + "c").write_bytes(b"compiled")
+                compiled.append(basename.__name__)
         (project_root / "traceback.txt").write_text("Exception: boom %d\n" % launches["count"], encoding="utf-8")
         return _FakeProcess()
 
@@ -1081,7 +1088,9 @@ def test_renforges_own_compiled_scripts_do_not_count_as_changed_game_scripts(mon
     monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
     monkeypatch.setattr("renforge.bridge.launcher._GAME_ERROR_GRACE_S", 0.0)
     with pytest.raises(LaunchError) as excinfo:
-        launch_with_bridge(sdk, project, startup_timeout=30.0)
+        # Temporary saves inject the session init script beside the bridge.
+        launch_with_bridge(sdk, project, savedir="temporary", startup_timeout=30.0)
+    assert {"session_init_basename", "bridge_basename"} <= set(compiled), compiled
     assert excinfo.value.code == "GAME_STARTUP_ERROR"
     assert launches["count"] == 1
     assert excinfo.value.details["scripts_compiled"] is False
