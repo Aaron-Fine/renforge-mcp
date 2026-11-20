@@ -1128,7 +1128,14 @@ def test_import_copies_a_long_but_valid_slot_name(tmp_path: Path, host_save_root
     # name failed with ENAMETOOLONG and aborted the import.
     project, host_saves = _host_project(tmp_path, host_save_root)
     name = "s" * 240 + "-LT1.save"
-    (host_saves / name).write_bytes(b"SLOT")
+    try:
+        (host_saves / name).write_bytes(b"SLOT")
+    except OSError:
+        if sys.platform != "win32":
+            raise
+        # The full path passes MAX_PATH; Windows refuses it unless long
+        # paths are enabled (the Windows CI job passes, so it allows them).
+        pytest.skip("Windows long paths are disabled")
     dest = tmp_path / "session" / "saves"
     dest.mkdir(parents=True)
 
