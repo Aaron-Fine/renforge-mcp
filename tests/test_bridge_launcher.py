@@ -2,6 +2,7 @@ import errno
 import hashlib
 import json
 import os
+import shutil
 import signal
 import stat
 import sys
@@ -9,6 +10,8 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+
+_REAL_RMTREE = shutil.rmtree
 
 import pytest
 
@@ -623,6 +626,15 @@ def test_bridge_session_close_reports_a_removed_temporary_savedir(
     assert [Path(item) for item in result["files_deleted"]] == [savedir.resolve()]
 
 
+def _patch_launcher_rmtree(monkeypatch, rmtree) -> None:
+    """Replace rmtree for the launcher module only; the shared shutil stays real."""
+    import types
+
+    from renforge.bridge import launcher as launcher_module
+
+    monkeypatch.setattr(launcher_module, "shutil", types.SimpleNamespace(**{**vars(shutil), "rmtree": rmtree}))
+
+
 def test_partial_savedir_cleanup_still_reports_the_paths_it_removed(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -635,13 +647,12 @@ def test_partial_savedir_cleanup_still_reports_the_paths_it_removed(
     surviving_file = savedir / "2-1-LT1.save"
     surviving_file.write_text("save", encoding="utf-8")
 
-    from renforge.bridge import launcher as launcher_module
-
     def partial_rmtree(_path, **_kwargs):
         removed_file.unlink()
         raise OSError("locked")
 
-    monkeypatch.setattr(launcher_module.shutil, "rmtree", partial_rmtree)
+    _patch_launcher_rmtree(monkeypatch, partial_rmtree)
+    assert shutil.rmtree is _REAL_RMTREE  # other threads keep the real one
     session = BridgeSession(
         _FakeProcess(),
         _FakeClient(),
@@ -692,12 +703,11 @@ def test_partial_savedir_cleanup_never_reports_a_dangling_link_it_left(
     dangling = savedir / "gone"
     dangling.symlink_to(tmp_path / "missing")
 
-    from renforge.bridge import launcher as launcher_module
-
     def failing_rmtree(_path, **_kwargs):
         raise OSError("locked")
 
-    monkeypatch.setattr(launcher_module.shutil, "rmtree", failing_rmtree)
+    _patch_launcher_rmtree(monkeypatch, failing_rmtree)
+    assert shutil.rmtree is _REAL_RMTREE  # other threads keep the real one
     session = BridgeSession(
         _FakeProcess(),
         _FakeClient(),
