@@ -172,8 +172,18 @@ class _RunningProcess:
         return None
 
 
-# A session root as RenForge makes one; it need not exist to be classified.
+# A session root as RenForge makes one; _session_root_in_tmp_path makes it.
 _SESSION_ROOT = Path(tempfile.gettempdir()) / "renforge-session-test"
+
+
+@pytest.fixture(autouse=True)
+def _session_root_in_tmp_path(tmp_path: Path, monkeypatch) -> None:
+    # A session root counts only if it exists and is this user's (on POSIX),
+    # so each test gets its own, with tmp_path standing in for the temp dir.
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    root = tmp_path / "renforge-session-test"
+    root.mkdir()
+    monkeypatch.setitem(globals(), "_SESSION_ROOT", root)
 
 
 def _isolation(

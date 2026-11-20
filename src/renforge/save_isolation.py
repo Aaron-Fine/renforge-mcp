@@ -677,10 +677,29 @@ def path_in_session_root(value: str | Path) -> bool:
     """
     try:
         resolved = Path(value).expanduser().resolve()
-        relative = resolved.relative_to(Path(tempfile.gettempdir()).resolve())
+        temp = Path(tempfile.gettempdir()).resolve()
+        relative = resolved.relative_to(temp)
     except (OSError, RuntimeError, ValueError, TypeError):
         return False
-    return bool(relative.parts) and relative.parts[0].startswith(SESSION_PREFIX)
+    if not (relative.parts and relative.parts[0].startswith(SESSION_PREFIX)):
+        return False
+    return _session_root_is_ours(temp / relative.parts[0])
+
+
+def _session_root_is_ours(root: Path) -> bool:
+    """On POSIX, a root another user made in the shared temp dir is not one.
+
+    ``mkdtemp`` makes a session root as this user, so a root that is missing,
+    a link, not a folder, or someone else's fails closed. Windows keeps a
+    per-user temp dir and is not checked here.
+    """
+    if not hasattr(os, "getuid"):
+        return True
+    try:
+        st = root.lstat()
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid()
 
 
 def path_is_host_home(value: str | Path, *, home: Path | None = None) -> bool:

@@ -584,6 +584,9 @@ versioning.
   reused external one) includes `isolated` and `eval_enabled`, as documented.
 - A Live Editor save of a file under `game/game/` names that file in
   `files_touched`, not `game/<file>`.
+- On POSIX, a `renforge-session-*` folder in the temp dir counts as a
+  session root only if it exists and this user owns it, so a running game
+  using one another user made is not treated as isolated.
 - A `save` or `load` slot that is a path rather than a slot name (absolute,
   with a drive, a `/` or `\` separator, a `:` (on Windows `page:name`
   writes a stream of the file `page`), or `.`/`..`) is refused with

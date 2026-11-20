@@ -2123,3 +2123,22 @@ def test_import_stops_reading_a_slot_iterable_past_the_limit(tmp_path: Path) -> 
 
     assert result["code"] == "SAVE_IMPORT_INVALID"
     assert len(consumed) == save_isolation.SELECTOR_MAX_SLOTS + 1
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+def test_a_session_root_another_user_made_is_not_renforge_owned(tmp_path: Path, monkeypatch) -> None:
+    # The shared temp dir lets anyone make a renforge-session-* folder;
+    # only one this user made, as mkdtemp does, is a session root.
+    import tempfile
+
+    from renforge.save_isolation import path_in_session_root
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    root = tmp_path / "renforge-session-x"
+    (root / "saves").mkdir(parents=True)
+    assert path_in_session_root(root / "saves") is True
+    assert path_in_session_root(tmp_path / "renforge-session-missing" / "saves") is False
+
+    real_getuid = os.getuid
+    monkeypatch.setattr(os, "getuid", lambda: real_getuid() + 1)
+    assert path_in_session_root(root / "saves") is False
