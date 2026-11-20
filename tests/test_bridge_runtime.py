@@ -7055,9 +7055,9 @@ def test_explain_reads_state_as_data_without_running_game_code(running_bridge):
         MONDAY = 1
 
     store.member, store.day = Calendar(), Day.MONDAY
+    # member.dayCount is readable, so only the binding keeps it out.
     loop = running_bridge.globs["_renforge_explain_condition_values"]({
-        "_bound": ["member"],
-        "_conditions": ["member.status == 1", "day == Day.MONDAY"]})
+        "_conditions": [("member.dayCount == 3", ["member"]), "day == Day.MONDAY"]})
     assert loop == {"day": "Day.MONDAY"}
 
 

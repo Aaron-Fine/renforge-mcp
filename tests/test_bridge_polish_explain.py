@@ -76,6 +76,19 @@ def test_a_screen_loop_variable_is_not_read_from_the_store(running_bridge):
     assert running_bridge.client.explain(screen="list")["values"] == {"quota": 2}
 
 
+def test_a_loop_binds_its_variable_only_for_the_conditions_inside_it(running_bridge):
+    """``if entry`` before ``for entry in entries`` reads the store's ``entry``."""
+    f = "game/list.rpy"
+    store = running_bridge.renpy.store
+    store.entry, store.limit = "store value", 3
+    before = _script_node("SLIf", f, 2, entries=[("entry", _node("SLBlock", children=[]))])
+    inside = _script_node("SLIf", f, 4, entries=[("entry.count > limit", _node("SLBlock", children=[]))])
+    loop = _script_node("SLFor", f, 3, variable="entry", expression="entries", children=[inside])
+    _set_screens(running_bridge, {("list", None): _screen((f, 1), ast=_node("SLScreen", children=[before, loop]))})
+
+    assert running_bridge.client.explain(screen="list")["values"] == {"entry": "store value", "limit": 3}
+
+
 def test_explain_source_on_a_script_if_reports_its_values(running_bridge):
     f = "game/a.rpy"
     running_bridge.renpy.store.points = 5

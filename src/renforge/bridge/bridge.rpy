@@ -6533,9 +6533,14 @@ init python:
         elif kind == "SLFor":
             text = "%s in %s" % (_renforge_explain_str(getattr(node, "variable", None)),
                                  _renforge_explain_str(getattr(node, "expression", None)))
-            _renforge_explain_note(state, binds=getattr(node, "variable", None))
             emit(state, depth, "for", loc, text)
-            _renforge_explain_screen_walk(children, depth + 1, state)
+            # The loop's names are its own only for the conditions inside it.
+            outer = state.get("loop_bound") or builtins.frozenset()
+            state["loop_bound"] = outer | _renforge_loop_targets(getattr(node, "variable", None))
+            try:
+                _renforge_explain_screen_walk(children, depth + 1, state)
+            finally:
+                state["loop_bound"] = outer
         elif kind == "SLUse":
             emit(state, depth, "use", loc, _renforge_explain_str(getattr(node, "target", None)))
             _renforge_explain_screen_walk(getattr(getattr(node, "block", None), "children", None), depth + 1, state)
@@ -6690,7 +6695,7 @@ init python:
         """The script statements at ``(file, line)``, with their full text."""
         script = getattr(getattr(renpy, "game", None), "script", None)
         found = []
-        noted = {"_conditions": [], "_bound": []}
+        noted = {"_conditions": []}
         for node in getattr(script, "all_stmts", None) or ():
             where = _renforge_explain_loc(node)
             if where is None or (where["file"], where["line"]) != wanted:
@@ -7091,43 +7096,50 @@ init python:
         import re as _re
         return builtins.set(_re.findall(r"[A-Za-z_][A-Za-z0-9_]*", _renforge_explain_str(target)))
 
-    def _renforge_explain_note(state, condition=None, binds=None):
-        """Record a walked condition, or a loop target, for explain's ``values``.
+    def _renforge_explain_note(state, condition=None):
+        """Record a walked condition for explain's ``values``.
 
         Entry text is for reading: it is shortened and can carry the
         properties a branch sets after its condition, so ``values`` reads
-        the raw condition recorded here instead."""
+        the raw condition recorded here instead. A condition inside a
+        screen ``for`` is recorded as ``(text, names)`` with the names the
+        enclosing loops bind (``state["loop_bound"]``), which are not store
+        variables there."""
         if condition:
-            state.setdefault("conditions", []).append(_renforge_explain_str(condition))
-        if binds:
-            state.setdefault("bound", builtins.set()).update(_renforge_loop_targets(binds))
+            text = _renforge_explain_str(condition)
+            bound = state.get("loop_bound")
+            state.setdefault("conditions", []).append((text, builtins.sorted(bound)) if bound else text)
 
     def _renforge_explain_noted(state):
         """What a walk recorded with ``_renforge_explain_note``, under the
-        private result keys ``_renforge_h_explain`` reads and then removes."""
-        return {"_conditions": builtins.list(state.get("conditions") or ()),
-                "_bound": builtins.sorted(state.get("bound") or ())}
+        private result key ``_renforge_h_explain`` reads and then removes."""
+        return {"_conditions": builtins.list(state.get("conditions") or ())}
 
     def _renforge_explain_condition_values(result):
         """Current values of the variables behind the conditions in a result.
 
-        ``conditions`` are the conditions enclosing an explained control
-        (``"if x > 3"``, ``"for i in items"``); ``_conditions`` and ``_bound``
-        are the raw conditions and loop targets a label, screen or script
-        walk recorded."""
+        ``conditions`` are the conditions enclosing an explained control,
+        outermost first (``"if x > 3"``, ``"for i in items"``); a loop's
+        names are its own for the conditions after it. ``_conditions`` are
+        the raw conditions a label, screen or script walk recorded, each a
+        text or ``(text, names its enclosing loops bind)``."""
         texts = []
         # Names a for loop binds are the loop's own, not store variables.
-        bound = builtins.set(result.get("_bound") or ())
+        bound = builtins.frozenset()
         for text in result.get("conditions") or ():
             if text.startswith("for "):
-                bound.update(_renforge_loop_targets(text[4:].split(" in ", 1)[0]))
+                bound = bound | _renforge_loop_targets(text[4:].split(" in ", 1)[0])
             else:
-                texts.append(text)
-        texts.extend(result.get("_conditions") or ())
+                texts.append((text, bound))
+        for noted in result.get("_conditions") or ():
+            if isinstance(noted, builtins.str):
+                texts.append((noted, builtins.frozenset()))
+            else:
+                texts.append((noted[0], builtins.frozenset(noted[1])))
         values = {}
-        for text in texts:
+        for text, local in texts:
             for name in _renforge_condition_names(text):
-                if name in values or len(values) >= _RENFORGE_VALUE_FIELDS or name.split(".")[0] in bound:
+                if name in values or len(values) >= _RENFORGE_VALUE_FIELDS or name.split(".")[0] in local:
                     continue
                 read = _renforge_explain_variable(name)
                 if "value" in read:
@@ -7165,7 +7177,6 @@ init python:
         if isinstance(result, builtins.dict):
             # Walk notes feed values only; they are not part of the reply.
             result.pop("_conditions", None)
-            result.pop("_bound", None)
         return result
 
     def _renforge_h_explain_selected(payload):
