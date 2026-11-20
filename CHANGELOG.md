@@ -574,6 +574,8 @@ versioning.
   treated as isolated: the game resolves it from its own working directory.
 - A stop whose cleanup fails no longer lists a dangling link it left behind
   in `files_deleted`.
+- A stop that fails partway through removing the bridge files still lists
+  the ones it deleted in `files_deleted`.
 - A `save` or `load` slot that is a path rather than a slot name (absolute,
   with a drive, a `/` or `\` separator, a `:` (on Windows `page:name`
   writes a stream of the file `page`), or `.`/`..`) is refused with

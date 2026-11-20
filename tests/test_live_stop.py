@@ -287,6 +287,27 @@ def test_stop_game_issues_authenticated_quit_when_bridge_alive(
     assert client.control_calls == ["quit"]
 
 
+def test_stop_game_failure_still_names_the_files_it_deleted(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from renforge.bridge import launcher as launcher_module
+
+    project = _make_project(tmp_path, with_ready_bridge=True)
+    _patch_bridge_client(monkeypatch, _QuitClient())
+
+    def remove_then_fail(_root, *, removed, **_kwargs):
+        removed.append("game/renforge_bridge.rpy")
+        raise OSError("locked")
+
+    monkeypatch.setattr(launcher_module, "remove_bridge_artifacts", remove_then_fail)
+
+    result = live.stop_game(str(project))
+
+    assert result["ok"] is False
+    assert result["files_deleted"] == ["game/renforge_bridge.rpy"]
+
+
 def test_stop_game_ignores_legacy_bridge_metadata_without_live_client(
     tmp_path: Path,
     monkeypatch,

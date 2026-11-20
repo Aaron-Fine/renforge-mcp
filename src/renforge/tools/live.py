@@ -1490,6 +1490,8 @@ def stop_external_game(project_path: str, *, timeout: float = 5.0) -> dict:
             "ok": False,
             "error": f"{type(exc).__name__}: {exc}",
             "was_running": True,
+            # A partial removal still deleted these; a retry cannot name them.
+            "files_deleted": removed,
         }
     finally:
         lock.release()
