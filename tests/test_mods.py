@@ -547,7 +547,10 @@ def test_write_and_remove_work_through_a_symlinked_project_root(tmp_path) -> Non
     real.mkdir()
     _project(real)
     link = tmp_path / "link"
-    link.symlink_to(real, target_is_directory=True)
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are not available (Windows without the privilege)")
 
     written = mods.write_file(link, "demo", "main.rpy", "label demo:\n    return\n")
     removed = mods.remove(link, "demo")
