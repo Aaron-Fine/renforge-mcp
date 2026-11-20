@@ -95,6 +95,29 @@ def expected_measurement_method(statement_kind: str) -> str:
     return "focus_list"
 
 
+# ReplaceFileW's ERROR_UNABLE_TO_MOVE_REPLACEMENT_2: the source has already
+# been renamed to the backup name, and the replacement kept its own name.
+_WIN32_PARTIAL_REPLACE_ERRORS = frozenset({1177})
+
+
+def _exchange_may_have_moved(exc: EditorPathError, source: Path, displaced: Path) -> bool:
+    """Whether a failed publication may have moved files, so none may be discarded.
+
+    A known partial-progress Win32 error, a source that is no longer there, or
+    a displaced file that now exists each mean the exchange got part way.
+    """
+    details = exc.details or {}
+    if details.get("win32_error") in _WIN32_PARTIAL_REPLACE_ERRORS:
+        return True
+    source_path, displaced_path = Path(source), Path(displaced)
+    try:
+        present = source_path.exists() or source_path.is_symlink()
+        return not present or displaced_path.exists() or displaced_path.is_symlink()
+    except OSError:
+        # Unknown either way: keep every candidate.
+        return True
+
+
 @dataclass(frozen=True)
 class _SayStyleGuiAdapter:
     prove: Callable[[str], None]
@@ -2384,6 +2407,21 @@ class EditorCoordinator:
                 displaced_path=displaced_path,
             )
         except EditorPathError as exc:
+            if exc.code not in ("STALE_SOURCE", "SOURCE_EXCHANGE_CONFLICT") and _exchange_may_have_moved(
+                exc, transaction.source_absolute_path, displaced_path
+            ):
+                details = {
+                    **dict(exc.details or {}),
+                    "source": str(transaction.source_absolute_path),
+                    "replacement_path": str(replacement_path),
+                    "displaced_path": str(displaced_path),
+                    "uncertain_paths": [
+                        str(transaction.source_absolute_path),
+                        str(replacement_path),
+                        str(displaced_path),
+                    ],
+                }
+                exc = EditorPathError("SOURCE_EXCHANGE_CONFLICT", str(exc), details=details)
             if exc.code != "SOURCE_EXCHANGE_CONFLICT":
                 # Nothing was exchanged; the staged bytes are in the journal.
                 self._discard_project_exchange(exchange_dir, replacement_path)

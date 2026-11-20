@@ -5402,3 +5402,87 @@ def test_commit_and_close_rollback_across_real_filesystems(
         assert not (project.root / ".renforge").exists()
     finally:
         shutil.rmtree(state_dir, ignore_errors=True)
+
+
+def test_a_partial_windows_replacement_is_a_conflict_that_keeps_every_candidate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ReplaceFileW error 1177 has moved the source to the backup name already.
+
+    The live source is then absent, so the publication must not be called a
+    clean failure: the replacement stays and the transaction is a conflict.
+    """
+    from renforge.editor import coordinator as coordinator_module
+    from renforge.editor.paths import EditorPathError
+
+    seen: dict[str, Path] = {}
+
+    def partial_replace(path: Path, *, expected_sha256: str, replacement_path: Path, displaced_path: Path) -> Any:
+        seen.update(source=Path(path), replacement=Path(replacement_path), displaced=Path(displaced_path))
+        Path(path).rename(displaced_path)
+        raise EditorPathError(
+            "SOURCE_CAS_UNAVAILABLE",
+            "ReplaceFileW failed with Win32 error 1177",
+            details={"win32_error": 1177},
+        )
+
+    monkeypatch.setattr(coordinator_module, "conditional_replace_file", partial_replace)
+    project, source = _make_project(tmp_path)
+    observation = _base_observation(script_generation=42)
+    probe = _Probe(
+        observe_reply={**observation, "frame_id": "independent-frame-42", "object_id": "obj-independent-42"}
+    )
+    coordinator = EditorCoordinator(project, _make_sdk(tmp_path), attestation_timeout=120.0)
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    status: dict[str, Any] = {}
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analysis = _analyze(sock, auth, observation, request_id="an-partial-win")
+            commit = _commit(sock, auth, analysis, x=75, y=76, request_id="co-partial-win")
+            assert commit["ok"] is False
+            assert commit["error"]["code"] == "SOURCE_EXCHANGE_CONFLICT", commit["error"]
+    finally:
+        status = coordinator.close()
+    assert not source.exists()
+    assert seen["replacement"].exists() and seen["displaced"].exists()
+    assert list(status["transactions"].values()) == ["rollback_conflict"]
+
+
+def test_a_windows_replacement_that_moved_nothing_stays_a_clean_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ERROR_UNABLE_TO_REMOVE_REPLACED (1175) leaves both files where they were."""
+    from renforge.editor import coordinator as coordinator_module
+    from renforge.editor.paths import EditorPathError
+
+    def refused_replace(path: Path, *, expected_sha256: str, replacement_path: Path, displaced_path: Path) -> Any:
+        raise EditorPathError(
+            "SOURCE_CAS_UNAVAILABLE",
+            "ReplaceFileW failed with Win32 error 1175",
+            details={"win32_error": 1175},
+        )
+
+    monkeypatch.setattr(coordinator_module, "conditional_replace_file", refused_replace)
+    project, source = _make_project(tmp_path)
+    baseline = source.read_bytes()
+    observation = _base_observation(script_generation=43)
+    probe = _Probe(
+        observe_reply={**observation, "frame_id": "independent-frame-43", "object_id": "obj-independent-43"}
+    )
+    coordinator = EditorCoordinator(project, _make_sdk(tmp_path), attestation_timeout=120.0)
+    coordinator.attach_runtime_probe(probe)
+    endpoint = coordinator.start()
+    status: dict[str, Any] = {}
+    try:
+        with socket.create_connection((endpoint.host, endpoint.port), timeout=2.0) as sock:
+            auth = _auth(sock, endpoint)
+            analysis = _analyze(sock, auth, observation, request_id="an-clean-win")
+            commit = _commit(sock, auth, analysis, x=77, y=78, request_id="co-clean-win")
+            assert commit["ok"] is False
+            assert commit["error"]["code"] == "SOURCE_CAS_UNAVAILABLE", commit["error"]
+    finally:
+        status = coordinator.close()
+    assert source.read_bytes() == baseline
+    assert list(status["transactions"].values()) == ["failed"]
