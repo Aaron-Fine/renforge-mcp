@@ -595,6 +595,11 @@ versioning.
   report its save folder with `SESSION_SAVES_UNKNOWN`, before copying
   anything. It used to treat that game as no game, copy the slot into the
   session's saves folder, and say to load it, which that game could not.
+- `renforge_session` `load` attaches the restored game's observation only
+  when it is stable; at the wait's timeout it returns `next` (observe, do
+  not load again) instead of an unstable observation offered for
+  `renforge_act`. `renforge_mod` `reload` reports `settled: false` and
+  `next` when the screen had not settled, keeping the reload's result.
 
 ## [0.7.6] - 2026-11-18
 

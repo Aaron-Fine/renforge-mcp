@@ -465,6 +465,9 @@ def test_reload_gives_up_after_timeout(tmp_path, monkeypatch) -> None:
     assert result["observation"] == unstable
     assert fake.observe_calls == 1
     assert result["ok"] is True
+    # The reload stands; the screen's state is reported on its own.
+    assert result["settled"] is False
+    assert "renforge_observe" in result["next"] and "not reload" in result["next"]
 
 
 def test_reload_skips_polling_when_control_fails(tmp_path, monkeypatch) -> None:

@@ -658,7 +658,9 @@ def build_wrappers(context):
             """Return the restored game's observation, so the next act can use it.
 
             The bridge replies before the engine has restarted into the save, so
-            its ``restored_label`` names the label from before the load.
+            its ``restored_label`` names the label from before the load. Only a
+            stable observation with an id is attached; otherwise ``next`` says
+            to observe again.
             """
             from ..compact import compact_observation
 
@@ -666,8 +668,14 @@ def build_wrappers(context):
             result.pop("restarting", None)
             result.pop("ended_interaction", None)
             observation = live.wait_for_stable_observation(project_path, require_id=True)
-            if isinstance(observation, dict) and observation.get("observation_id"):
+            # At the wait's timeout it returns the last observation as it was,
+            # which may be unstable: never offer that one for renforge_act.
+            if (isinstance(observation, dict) and observation.get("stable") is True
+                    and observation.get("observation_id")):
                 result["observation"] = compact_observation(observation)
+            else:
+                result["next"] = ("the save loaded, but the restored game had not settled when the wait ended; "
+                                  "call renforge_observe before renforge_act, and do not load the save again")
             return result
 
         return _log_tool_call(

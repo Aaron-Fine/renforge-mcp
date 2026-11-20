@@ -28,7 +28,9 @@ def _errors_changed(before: dict[str, Any], after: dict[str, Any]) -> bool:
 def _reload(project_path: str) -> dict[str, Any]:
     """Reload the game's scripts, wait for a stable screen, and report new errors.
 
-    The observation is compact, like every play-tool observation.
+    The observation is compact, like every play-tool observation. When the
+    wait ends before the screen is stable, ``settled`` is false and ``next``
+    says to observe again rather than reload again.
     """
     baseline = get_errors(project_path)
     baseline = baseline if isinstance(baseline, dict) else {}
@@ -47,12 +49,18 @@ def _reload(project_path: str) -> dict[str, Any]:
     if not isinstance(errors, dict):
         errors = _error_reply("get_errors returned a non-object result")
     ok = errors.get("ok") is True and not _errors_changed(baseline, errors)
-    return {
+    result = {
         "ok": ok,
         "reload": reload_reply,
         "observation": compact_observation(observation),
         "errors": errors,
     }
+    if not (isinstance(observation, dict) and observation.get("stable") is True):
+        # The wait timed out: the reload stands, the screen had not settled.
+        result["settled"] = False
+        result["next"] = ("the scripts reloaded, but the screen had not settled when the wait ended; "
+                          "call renforge_observe again, and do not reload the scripts again")
+    return result
 
 
 def mod(

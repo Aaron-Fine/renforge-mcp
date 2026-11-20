@@ -288,6 +288,24 @@ def test_session_load_returns_the_restored_observation(tmp_path, monkeypatch) ->
                        "observation": {"stable": True, "observation_id": "obs_2", "label": "loaded", "controls": []}}
 
 
+
+def test_session_load_does_not_offer_an_unsettled_observation_to_act_on(tmp_path, monkeypatch) -> None:
+    """At the wait's timeout the last observation may be unstable; the load stands, the observation does not."""
+    from renforge.tools import live
+
+    monkeypatch.setattr(live, "saves", lambda *a, **k: {"ok": True, "slot": "a", "restarting": True})
+    monkeypatch.setattr(live, "wait_for_stable_observation", lambda *a, **k: {
+        "stable": False, "unstable_reason": "transition", "observation_id": "obs_9", "controls": []})
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    loaded = app.tools["renforge_session"](str(tmp_path), "load", slot="a", authorize=True)
+
+    assert loaded["ok"] is True and loaded["slot"] == "a"
+    assert "observation" not in loaded
+    assert "renforge_observe" in loaded["next"] and "not load" in loaded["next"]
+
+
 def test_session_lists_and_imports_the_players_slots(tmp_path, monkeypatch) -> None:
     pytest.importorskip("fastmcp", reason="fastmcp not installed")
     from fastmcp import Client

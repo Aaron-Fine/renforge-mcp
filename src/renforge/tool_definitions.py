@@ -462,7 +462,9 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "(saves and preferences in the project's RenForge state folder, apart from the player's and kept "
             "across launches; isolated HOME; no Live Editor; transitions and vsync off) and returns "
             "status=starting or ready; poll action=status until ready or failed. save and load take a slot "
-            "name; load returns the restored game's observation, ready for renforge_act; list shows the session's slots "
+            "name; load returns the restored game's observation, ready for renforge_act, once it is stable (if it has "
+            "not settled when the wait ends, load returns next instead: observe, and do not load again); "
+            "list shows the session's slots "
             "and the player's own (player_slots); import copies one player slot into the session's saves (the "
             "player's file is only read), so the agent can load and play or test a mod from the player's real "
             "progress; stop ends the game and cleans up. launch with label starts "
@@ -862,7 +864,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "unlisted files are kept and reported, and it refuses a mod folder that is a link. `package` zips the mod into `<state>/mods/`. `write`, `remove`, "
             "and `package` return `files_touched`/`files_deleted` receipts. `reload` (no name: it "
             "reloads every script, wherever the mod lives) hot-reloads the running game and returns errors and a "
-            "fresh compact observation. `guide` returns modding idioms. Mod actions are "
+            "fresh compact observation; settled=false with next when the screen had not settled (observe again, "
+            "do not reload again). `guide` returns modding idioms. Mod actions are "
             "classified per action by the runtime policy."
         ),
         annotations=_ann(
