@@ -2363,6 +2363,46 @@ def test_session_launch_refuses_a_saves_folder_linked_inside_the_state_folder(tm
     assert started == []
 
 
+def test_session_launch_isolation_check_refuses_a_link_to_the_player_saves_on_its_own(tmp_path, monkeypatch) -> None:
+    """Without the no-follow create, the launch's own isolation check still refuses a link to the player's saves.
+
+    The create runs first and refuses the same link, so it is turned off here
+    to keep ``require_isolated`` covered.
+    """
+    import os
+
+    from renforge import state
+    from renforge.save_isolation import host_renpy_root
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    player = host_renpy_root(home=home) / "a-game"
+    player.mkdir(parents=True)
+    state_saves = project_state_dir(project) / "saves"
+    state_saves.parent.mkdir(parents=True)
+    try:
+        os.symlink(player, state_saves, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    monkeypatch.setattr(state, "ensure_project_state_dir", lambda project_root, *parts: state_saves)
+    started: list = []
+    monkeypatch.setattr(live, "start_launch", lambda *a, **k: started.append(k) or {"ok": True, "ready": True})
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    refused = app.tools["renforge_session"](str(project), "launch")
+
+    assert refused["ok"] is False and refused["code"] == "SESSION_NOT_ISOLATED", refused
+    assert "isolated" in refused["message"] and started == []
+
+
 @pytest.mark.parametrize(("launched", "says_label"), [
     ({"ok": True, "ready": True, "already_running": False}, True),
     ({"ok": True, "ready": False, "status": "starting"}, True),
