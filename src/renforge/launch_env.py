@@ -73,7 +73,10 @@ class EnvironmentCapabilities:
 
 
 DISPLAY_STRATEGIES = frozenset({"auto", "native", "xvfb", "external", "none"})
-# "none" is accepted as a name but every launch refuses it: Ren'Py needs a display.
+# "none" is accepted as a name, but a fresh launch refuses it
+# (resolve_display_strategy): Ren'Py needs a display. The dashboard offers only
+# the launchable ones; tools.live.launch_game can still reuse a running session
+# without looking at display.
 LAUNCHABLE_DISPLAY_STRATEGIES = DISPLAY_STRATEGIES - {"none"}
 AUDIO_STRATEGIES = frozenset({"auto", "native", "dummy", "none"})
 

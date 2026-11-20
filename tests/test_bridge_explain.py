@@ -512,6 +512,23 @@ def test_explain_source_on_a_menu_shows_what_each_choice_does(running_bridge):
     reply = running_bridge.client.explain(source="game/script.rpy:42")
 
     rows = [(row["kind"], row["depth"], row["text"]) for row in reply["script"][0]["statements"]]
-    assert ("choice", 0, "Agree") in rows and ("choice", 0, "Hesitate") in rows
-    assert ("python", 1, "ally.affection += 10") in rows
-    assert ("jump", 1, "chapter1_ending") in rows
+    # Ordered: each effect follows its own choice.
+    assert [row for row in rows if row[0] != "menu"] == [
+        ("choice", 0, "Agree"),
+        ("python", 1, "ally.affection += 10"),
+        ("choice", 0, "Hesitate"),
+        ("jump", 1, "chapter1_ending"),
+    ]
+
+
+def test_explain_snippet_shows_a_match_only_case_folding_finds(running_bridge):
+    """``STRASSE`` finds ``Straße`` by casefold; the excerpt must include it."""
+    snippet = running_bridge.globs["_renforge_explain_snippet"]
+    text = "x" * 150 + " the Hauptstraße is closed " + "y" * 150
+
+    excerpt = snippet(text, "STRASSE")
+    assert "Hauptstraße" in excerpt
+    assert len(excerpt) <= len("straße") + 120
+
+    plain = snippet("a" * 100 + "Needle" + "b" * 100, "needle")
+    assert plain == "a" * 60 + "Needle" + "b" * 60

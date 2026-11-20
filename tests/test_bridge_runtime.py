@@ -5651,6 +5651,31 @@ def test_viewport_rejection_does_not_partially_change_an_axis(running_bridge):
     assert calls == []
 
 
+def test_viewport_update_that_ends_the_interaction_says_which_axes_ran(running_bridge, monkeypatch):
+    """The x change ends the interaction, so y never runs: the reply must say so."""
+    EndInteraction = type("EndInteraction", (Exception,), {})
+    monkeypatch.setattr(running_bridge.renpy.display, "core",
+                        types.SimpleNamespace(EndInteraction=EndInteraction), raising=False)
+    calls = []
+
+    def change_x(value):
+        calls.append(("x", value))
+        horizontal.value = value
+        raise EndInteraction()
+
+    horizontal = types.SimpleNamespace(change=change_x, value=0)
+    vertical = types.SimpleNamespace(change=lambda value: calls.append(("y", value)), value=0)
+    viewport = types.SimpleNamespace(xadjustment=horizontal, yadjustment=vertical)
+    adapter = running_bridge.globs["_renforge_act_value"]
+    result = {"ok": True, "id": "page", "interaction": 1}
+    with pytest.raises(EndInteraction):
+        adapter({"x": 20, "y": 30}, types.SimpleNamespace(widget=viewport), result, {"role": "viewport"})
+    assert calls == [("x", 20)]
+    assert result["x"] == 20 and "y" not in result
+    assert result["interrupted"] is True
+    assert result["skipped_axes"] == ["y"]
+
+
 def test_say_callback_records_repeated_lines_and_reports_event_overflow(running_bridge):
     import sys
 
@@ -7055,9 +7080,10 @@ def test_explain_reads_state_as_data_without_running_game_code(running_bridge):
         MONDAY = 1
 
     store.member, store.day = Calendar(), Day.MONDAY
+    # member.dayCount is readable, so only the binding keeps it out.
     loop = running_bridge.globs["_renforge_explain_condition_values"]({
         "_bound": ["member"],
-        "_conditions": ["member.status == 1", "day == Day.MONDAY"]})
+        "_conditions": ["member.dayCount == 3", "day == Day.MONDAY"]})
     assert loop == {"day": "Day.MONDAY"}
 
 

@@ -106,8 +106,17 @@ def test_registry_key_follows_the_state_folder_on_a_case_insensitive_volume(tmp_
 
     # The shared bridge metadata names the project as the disk spells it, so
     # either spelling reads it instead of rejecting it as another project's.
+    from renforge.bridge import control
     from renforge.bridge.control import read_bridge_info, write_starting_bridge_info
 
+    def resolve_on_the_volume(path: Path) -> Path:
+        # There the other spelling exists, and resolve keeps it as given (macOS).
+        resolved = Path(path).expanduser().resolve()
+        if str(resolved).casefold() == str(project.resolve()).casefold():
+            return resolved
+        return Path(path).expanduser().resolve(strict=True)
+
+    monkeypatch.setattr(control, "_resolve_as_given", resolve_on_the_volume)
     monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
     write_starting_bridge_info(other_spelling, session_id="a" * 32, token="b" * 64)
     info = read_bridge_info(project, require_ready=False)

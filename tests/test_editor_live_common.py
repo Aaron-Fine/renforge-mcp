@@ -98,3 +98,55 @@ def test_wait_for_transaction_reports_a_bridge_that_stays_down(tmp_path, monkeyp
 
     assert status is None
     assert bridge_failure == "BridgeError: gone"
+
+
+def test_wait_for_transaction_says_whether_it_completed(tmp_path, monkeypatch) -> None:
+    """A committed status whose bytes never match is a timeout, not a completion."""
+    monkeypatch.setattr(live_common.time, "sleep", lambda _s: None)
+    source = tmp_path / "gui.rpy"
+    source.write_bytes(b"old")
+    committed = {"status_code": "reload_committed", "save_in_progress": False}
+
+    timed_out = live_common.wait_for_transaction(_StatusClient([committed]), source, b"new", timeout=0.05)
+    assert timed_out.completed is False
+    assert timed_out.last_status == committed
+
+    done = live_common.wait_for_transaction(_StatusClient([committed]), source, b"old", timeout=0.05)
+    assert done.completed is True
+    assert tuple(done) == (committed, None)
+
+
+def test_wait_for_transaction_keeps_the_source_read_error_apart_from_the_bridge(
+    tmp_path, monkeypatch
+) -> None:
+    """A source that keeps failing to read is reported as that, not as a bridge error."""
+    monkeypatch.setattr(live_common.time, "sleep", lambda _s: None)
+    missing = tmp_path / "gui.rpy"
+    committed = {"status_code": "reload_committed", "save_in_progress": False}
+
+    result = live_common.wait_for_transaction(_StatusClient([committed]), missing, b"new", timeout=0.05)
+
+    assert result.completed is False
+    assert result.bridge_failure is None
+    assert result.source_error is not None and result.source_error.startswith("FileNotFoundError")
+
+
+def test_wait_for_transaction_forgets_a_source_read_error_after_a_good_read(tmp_path, monkeypatch) -> None:
+    """A read that fails once and then succeeds leaves no source error behind."""
+    monkeypatch.setattr(live_common.time, "sleep", lambda _s: None)
+    source = tmp_path / "gui.rpy"
+    committed = {"status_code": "reload_committed", "save_in_progress": False}
+    reads = iter([OSError("mid-replace"), b"old"])
+
+    def flaky_read_bytes(path):
+        item = next(reads, b"old")
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(type(source), "read_bytes", flaky_read_bytes)
+    result = live_common.wait_for_transaction(_StatusClient([committed]), source, b"new", timeout=0.05)
+    monkeypatch.undo()
+
+    assert result.completed is False
+    assert result.source_error is None

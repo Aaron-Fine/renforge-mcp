@@ -220,24 +220,10 @@ def test_launch_with_bridge_builds_run_command(monkeypatch, tmp_path: Path, warp
     session.close(timeout=0.1)
 
 
-def test_launch_tells_the_bridge_the_project_root_its_metadata_names(monkeypatch, tmp_path: Path) -> None:
-    """The bridge refuses an env project root that differs from the starting metadata's.
-
-    On a case-insensitive volume a project root can be spelled other than
-    the disk lists it (``/users/me/game`` for ``/Users/me/Game``), while
-    the metadata names the on-disk spelling. A linked alias stands in for
-    such a spelling here: a root that reaches the project but is not how
-    the disk spells it.
-    """
-    monkeypatch.setenv("DISPLAY", ":0")
-    project, sdk, project_root = _make_project(tmp_path)
-    alias = tmp_path / "Project"
-    try:
-        alias.symlink_to(project_root, target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks unavailable")
+def _launch_names_the_metadata_root(monkeypatch, project, sdk, project_root: Path, spelling: Path) -> None:
+    """Launch ``project`` spelled ``spelling``; the bridge env and metadata name ``project_root``."""
     # As resolve() leaves a case alias on macOS: the caller's spelling, unchanged.
-    object.__setattr__(project, "root", alias)
+    object.__setattr__(project, "root", spelling)
     captured: dict[str, object] = {}
 
     def fake_popen(command, env=None, stdout=None, stderr=None, start_new_session=False):
@@ -255,6 +241,36 @@ def test_launch_tells_the_bridge_the_project_root_its_metadata_names(monkeypatch
         assert captured["env_root"] == captured["metadata_root"] == str(project_root.resolve())
     finally:
         session.close(timeout=0.1)
+
+
+def test_launch_tells_the_bridge_the_project_root_its_metadata_names(monkeypatch, tmp_path: Path) -> None:
+    """The bridge refuses an env project root that differs from the starting metadata's.
+
+    On a case-insensitive volume a project root can be spelled other than
+    the disk lists it (``/users/me/game`` for ``/Users/me/Game``), while
+    the metadata names the on-disk spelling. A linked alias stands in for
+    such a spelling here: a root that reaches the project but is not how
+    the disk spells it. Its name differs from ``project`` by more than
+    case, so a case-insensitive volume can create it too.
+    """
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    alias = tmp_path / "project-link"
+    try:
+        alias.symlink_to(project_root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    _launch_names_the_metadata_root(monkeypatch, project, sdk, project_root, alias)
+
+
+def test_launch_names_the_on_disk_spelling_on_a_case_insensitive_volume(monkeypatch, tmp_path: Path) -> None:
+    """The same as above with a real case alias, where the volume has them."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    spelling = tmp_path / "PROJECT"
+    if not spelling.exists() or not spelling.samefile(project_root):
+        pytest.skip("needs a case-insensitive volume")
+    _launch_names_the_metadata_root(monkeypatch, project, sdk, project_root, spelling)
 
 
 def test_launch_with_bridge_isolates_saves_via_native_savedir(
@@ -1048,16 +1064,23 @@ def test_a_launch_that_compiled_scripts_and_stopped_on_an_error_is_retried_once(
 
 def test_renforges_own_compiled_scripts_do_not_count_as_changed_game_scripts(monkeypatch, tmp_path: Path) -> None:
     """Ren'Py compiles the injected per-session scripts on every launch."""
+    from renforge.bridge.artifacts import bridge_basename, editor_basename, session_init_basename
+
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)
     (project_root / "game").mkdir(exist_ok=True)
     launches = {"count": 0}
+    compiled: list[str] = []
 
     def failing_popen(*_args, **kwargs):
         launches["count"] += 1
         session_id = kwargs["env"]["RENFORGE_BRIDGE_SESSION_ID"]
-        for prefix in ("00renforge_session_", "zzrenforge_bridge_"):
-            (project_root / "game" / f"{prefix}{session_id}.rpyc").write_bytes(b"compiled")
+        # Compile only what the launch injected, as Ren'Py would.
+        for basename in (session_init_basename, bridge_basename, editor_basename):
+            source = project_root / "game" / basename(session_id)
+            if source.exists():
+                source.with_name(source.name + "c").write_bytes(b"compiled")
+                compiled.append(basename.__name__)
         (project_root / "traceback.txt").write_text("Exception: boom %d\n" % launches["count"], encoding="utf-8")
         return _FakeProcess()
 
@@ -1065,7 +1088,9 @@ def test_renforges_own_compiled_scripts_do_not_count_as_changed_game_scripts(mon
     monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
     monkeypatch.setattr("renforge.bridge.launcher._GAME_ERROR_GRACE_S", 0.0)
     with pytest.raises(LaunchError) as excinfo:
-        launch_with_bridge(sdk, project, startup_timeout=30.0)
+        # Temporary saves inject the session init script beside the bridge.
+        launch_with_bridge(sdk, project, savedir="temporary", startup_timeout=30.0)
+    assert {"session_init_basename", "bridge_basename"} <= set(compiled), compiled
     assert excinfo.value.code == "GAME_STARTUP_ERROR"
     assert launches["count"] == 1
     assert excinfo.value.details["scripts_compiled"] is False

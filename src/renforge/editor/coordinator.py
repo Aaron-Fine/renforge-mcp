@@ -95,6 +95,29 @@ def expected_measurement_method(statement_kind: str) -> str:
     return "focus_list"
 
 
+# ReplaceFileW's ERROR_UNABLE_TO_MOVE_REPLACEMENT_2: the source has already
+# been renamed to the backup name, and the replacement kept its own name.
+_WIN32_PARTIAL_REPLACE_ERRORS = frozenset({1177})
+
+
+def _exchange_may_have_moved(exc: EditorPathError, source: Path, displaced: Path) -> bool:
+    """Whether a failed publication may have moved files, so none may be discarded.
+
+    A known partial-progress Win32 error, a source that is no longer there, or
+    a displaced file that now exists each mean the exchange got part way.
+    """
+    details = exc.details or {}
+    if details.get("win32_error") in _WIN32_PARTIAL_REPLACE_ERRORS:
+        return True
+    source_path, displaced_path = Path(source), Path(displaced)
+    try:
+        present = source_path.exists() or source_path.is_symlink()
+        return not present or displaced_path.exists() or displaced_path.is_symlink()
+    except OSError:
+        # Unknown either way: keep every candidate.
+        return True
+
+
 @dataclass(frozen=True)
 class _SayStyleGuiAdapter:
     prove: Callable[[str], None]
@@ -2384,6 +2407,24 @@ class EditorCoordinator:
                 displaced_path=displaced_path,
             )
         except EditorPathError as exc:
+            # SOURCE_CAS_UNAVAILABLE is the only code the exchange step itself
+            # raises; the others come from checks made before it, which move
+            # nothing, so they stay clean failures.
+            if exc.code == "SOURCE_CAS_UNAVAILABLE" and _exchange_may_have_moved(
+                exc, transaction.source_absolute_path, displaced_path
+            ):
+                details = {
+                    **dict(exc.details or {}),
+                    "source": str(transaction.source_absolute_path),
+                    "replacement_path": str(replacement_path),
+                    "displaced_path": str(displaced_path),
+                    "uncertain_paths": [
+                        str(transaction.source_absolute_path),
+                        str(replacement_path),
+                        str(displaced_path),
+                    ],
+                }
+                exc = EditorPathError("SOURCE_EXCHANGE_CONFLICT", str(exc), details=details)
             if exc.code != "SOURCE_EXCHANGE_CONFLICT":
                 # Nothing was exchanged; the staged bytes are in the journal.
                 self._discard_project_exchange(exchange_dir, replacement_path)
@@ -2518,15 +2559,50 @@ class EditorCoordinator:
         shadow always stay in the state folder; when the source sits on another
         filesystem (a game on a second drive), the replacement and displaced
         files go to ``<project>/.renforge/editor-exchange/<transaction>`` on the
-        source's side instead, and ``_discard_project_exchange`` removes them
-        once the exchange has succeeded or never happened.
+        source's side instead (see ``_project_exchange_root``), and
+        ``_discard_project_exchange`` removes them once the exchange has
+        succeeded or never happened.
         """
-        if same_filesystem(transaction.source_absolute_path, self._transaction_root):
+        source = Path(transaction.source_absolute_path)
+        if same_filesystem(source, self._transaction_root):
             return ensure_nofollow_directory(self._transaction_root / transaction.transaction_id / "exchange")
-        return ensure_nofollow_directory(self._project_exchange_root() / transaction.transaction_id)
+        return ensure_nofollow_directory(self._project_exchange_root(source) / transaction.transaction_id)
 
-    def _project_exchange_root(self) -> Path:
-        return Path(self._project.root) / RENFORGE_DIRNAME / PROJECT_EXCHANGE_DIRNAME
+    def _project_exchange_root(self, source: Path) -> Path:
+        """``.renforge/editor-exchange`` in the highest project folder on the source's filesystem.
+
+        That is the project root, unless a folder inside it (``game`` mounted
+        from elsewhere) is on another filesystem than the root: then it is the
+        highest such folder above the source. When none matches, the project
+        root is returned and the exchange refuses to cross filesystems.
+        """
+        root = Path(self._project.root)
+        candidates = [root]
+        try:
+            relative = source.parent.resolve().relative_to(root.resolve())
+        except (OSError, ValueError):
+            relative = None
+        if relative is not None:
+            folder = root
+            for part in relative.parts:
+                folder = folder / part
+                candidates.append(folder)
+        chosen = next((folder for folder in candidates if same_filesystem(source, folder)), root)
+        return chosen / RENFORGE_DIRNAME / PROJECT_EXCHANGE_DIRNAME
+
+    def _is_project_exchange_root(self, folder: Path) -> bool:
+        """Whether ``folder`` is a ``.renforge/editor-exchange`` inside this project.
+
+        Only such a folder holds exchange files this coordinator may remove;
+        the state folder's exchange files are never discarded here.
+        """
+        if folder.name != PROJECT_EXCHANGE_DIRNAME or folder.parent.name != RENFORGE_DIRNAME:
+            return False
+        try:
+            folder.resolve().relative_to(Path(self._project.root).resolve())
+        except (OSError, ValueError):
+            return False
+        return True
 
     def _discard_project_exchange(self, exchange_dir: Path, *paths: Path) -> None:
         """Remove exchange files kept in the project, and their folders once empty.
@@ -2534,8 +2610,8 @@ class EditorCoordinator:
         Only called when the files hold no evidence the journal lacks. Files in
         the state folder are left alone; a conflict keeps every file anywhere.
         """
-        project_root = self._project_exchange_root()
-        if exchange_dir.parent != project_root:
+        project_root = exchange_dir.parent
+        if not self._is_project_exchange_root(project_root):
             return
         for path in paths:
             try:

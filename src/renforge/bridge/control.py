@@ -159,11 +159,25 @@ def _control_directory_error(exc: PrivatePathError) -> LaunchError:
     )
 
 
+def _resolve_as_given(project_root: Path) -> Path:
+    """``project_root`` resolved strictly: every component must exist as spelled.
+
+    A lenient resolve folds ``missing/..`` away and would accept a path that
+    names no folder. That refusal is the POSIX behaviour: Windows folds
+    ``..`` before it looks at any component, as Win32 does when it opens a
+    path, so there ``project\\missing\\..`` does name ``project``. On a
+    case-insensitive volume a case alias exists, and macOS's resolve keeps
+    the caller's spelling.
+    """
+    return Path(project_root).expanduser().resolve(strict=True)
+
+
 def _canonical_project_root(project_root: Path) -> Path:
     try:
-        # Spelled as the disk lists it, like the state folder that holds the
-        # metadata, so every spelling of one folder reads the same bridge.
-        canonical = Path(canonical_project_path(project_root)).resolve(strict=True)
+        existing = _resolve_as_given(project_root)
+        # Then spelled as the disk lists it, like the state folder that holds
+        # the metadata, so every spelling of one folder reads the same bridge.
+        canonical = Path(canonical_project_path(existing)).resolve(strict=True)
     except OSError as exc:
         raise LaunchError(
             "BRIDGE_CONTROL_DIRECTORY_UNSAFE",

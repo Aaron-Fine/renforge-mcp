@@ -1381,11 +1381,13 @@ init python:
         suffix)``, so a slot that is a path (absolute, with a drive, with
         either separator or NUL, or ``.``/``..``) would read or write outside
         the save folder, the player's own saves included. The host refuses
-        these first (``save_isolation.slot_name_error``, the same rule); this
-        is the second line for a caller that reaches the bridge directly.
+        these first (``save_isolation.slot_name_error``); this is the second
+        line for a caller that reaches the bridge directly. A colon is refused
+        too: on Windows ``page:name`` is stream syntax, writing a stream of
+        the file ``page`` rather than a save file.
         """
         import ntpath
-        if (any(char in slot for char in ("/", "\\", "\x00")) or slot.strip() in (".", "..")
+        if (any(char in slot for char in ("/", "\\", "\x00", ":")) or slot.strip() in (".", "..")
                 or ntpath.splitdrive(slot)[0]):
             return {"ok": False, "code": "SAVE_SLOT_INVALID",
                 "error": "slot must be a save slot name such as 1-1 or quick-1, not a path"}
@@ -1486,8 +1488,10 @@ init python:
                 if inline and _renforge_is_script_control_flow(exc):
                     # The engine restarts into the loaded game after the reply.
                     _renforge_emit_business("load.completed", slot=slot, restored_label=None)
-                    setattr(exc, "renforge_result", {"ok": True, "slot": slot,
-                        "restored_label": None, "restarting": True})
+                    restart = {"ok": True, "slot": slot, "restored_label": None, "restarting": True}
+                    if rescan_error is not None:
+                        restart["rescan_error"] = rescan_error
+                    setattr(exc, "renforge_result", restart)
                 raise
 
         _renforge_invoke(_do_load)
@@ -2480,6 +2484,10 @@ init python:
         menu_action = getattr(focus, "menu_action", None)
         if menu_action is not None:
             return menu_action
+        # A game's own displayable listed by discovery carries the action
+        # discovery validated; its ``clicked`` may be a press flag, not one.
+        if hasattr(focus, "custom_action"):
+            return focus.custom_action
         widget = getattr(focus, "widget", None)
         for owner in (widget, focus):
             if owner is None:
@@ -2729,7 +2737,12 @@ init python:
             "element": element,
             "received_by": topmost,
         }
-        if topmost is not None and topmost.get("id") != element.get("id"):
+        if hit.get("unlisted_receiver"):
+            result["unlisted_receiver"] = True
+            result["warning"] = (
+                "The click point hits a displayable the control list does not describe."
+            )
+        elif topmost is not None and topmost.get("id") != element.get("id"):
             result["warning"] = (
                 "The intended button may be covered by another interactive displayable."
             )
@@ -2745,10 +2758,12 @@ init python:
 
         ``topmost`` is what Ren'Py's own hit test names. When the engine says
         the point hits nothing (a transparent part of a masked button), there
-        is no receiver and the rectangles there are all ``underneath``. Only
-        without a completed render does the topmost rectangle stand in.
-        ``elements`` are focusable-element pairs already built for this
-        request; None builds them.
+        is no receiver and the rectangles there are all ``underneath``. When
+        it names a widget the control list does not describe (beyond the
+        control cap), the receiver is unknown: ``topmost`` is None and
+        ``unlisted_receiver`` is True. Only without a completed render does
+        the topmost rectangle stand in. ``elements`` are focusable-element
+        pairs already built for this request; None builds them.
         """
         if elements is None:
             elements = _renforge_focusable_elements()
@@ -2757,14 +2772,13 @@ init python:
                 if element.get("covered") is not True
                 and _renforge_bounds_contain(element.get("bounds") or {}, x, y)]
         topmost = hits[-1][1] if hits and hit == "unavailable" else None
+        unlisted = False
         if hit == "modal":
             hits = []
         elif isinstance(hit, tuple) and hit[0] == "displayable":
-            topmost = hits[-1][1] if hits else None
-            for focus, element in elements:
-                if getattr(focus, "widget", None) is hit[1]:
-                    topmost = element
-                    break
+            topmost = next((element for focus, element in elements
+                            if getattr(focus, "widget", None) is hit[1]), None)
+            unlisted = topmost is None
         underneath = [element for _focus, element in reversed(hits) if element is not topmost]
         result = {
             "ok": True,
@@ -2774,6 +2788,9 @@ init python:
             "topmost": topmost,
             "underneath": underneath,
         }
+        if unlisted:
+            result["unlisted_receiver"] = True
+            result["warning"] = "The point hits a displayable the control list does not describe."
         if topmost is not None and underneath:
             result["warning"] = "Multiple interactive displayables overlap this point."
         return result
@@ -2875,6 +2892,30 @@ init python:
         finally:
             _renforge_reset_testmouse_state()
 
+    def _renforge_semantic_pointer_point(focus, element):
+        """A point where the pointer reaches a semantic control, for a hover.
+
+        Coverage does not probe semantic controls, whose actions bypass the
+        pointer. A probe point is usable unless Ren'Py's hit test gives it to
+        another displayable; a point that hits nothing still reaches a game's
+        own displayable through its ``event``. Returns ``(x, y)``, True when
+        the engine cannot hit test (the usual point stands), or None when
+        another displayable takes every probe point.
+        """
+        if element.get("click_point"):
+            return True
+        widget = getattr(focus, "widget", None)
+        candidates = _renforge_point_candidates(element.get("bounds"))
+        if not candidates:
+            return True
+        for candidate in candidates:
+            hit = _renforge_render_hit(*candidate)
+            if hit == "unavailable":
+                return True
+            if not isinstance(hit, tuple) or hit[1] is widget:
+                return candidate
+        return None
+
     def _renforge_h_hover_element(payload):
         payload = payload or {}
         expected_frame_id = payload.get("expected_frame_id") or payload.get("expected_screenshot")
@@ -2896,8 +2937,16 @@ init python:
         # As for a click: a covered control would hover whatever covers it.
         if element.get("covered") or element.get("clickable") is False:
             return {"ok": False, "error": "UI element has no eligible click", "element": element}
+        target = element
+        if element.get("semantic"):
+            # Clickable means its action can run, not that the pointer gets there.
+            point = _renforge_semantic_pointer_point(focus, element)
+            if point is None:
+                return {"ok": False, "error": "UI element has no pointer target", "element": element}
+            if point is not True:
+                target = dict(element, click_point={"x": point[0], "y": point[1]})
         try:
-            x, y, method = _renforge_move_mouse(focus, element)
+            x, y, method = _renforge_move_mouse(focus, target)
         except RuntimeError as exc:
             return {"ok": False, "error": str(exc), "element": element}
         result = {
@@ -4485,7 +4534,8 @@ init python:
         except Exception:
             dynamic = False
         if dynamic:
-            found, value = _renforge_store_expression(name)
+            # Character.__call__ py_evals the name in the default store.
+            found, value = _renforge_store_expression(name, characters=False)
             if not found or not isinstance(value, builtins.str):
                 return None
             text = _renforge_render_say_text(value).strip()
@@ -4529,15 +4579,16 @@ init python:
         return "".join(parts)
 
 
-    def _renforge_store_expression(expr):
+    def _renforge_store_expression(expr, characters=True):
         """Resolve a say ``who`` or dynamic-name expression without running game code.
 
         The engine evaluates these with eval_who and py_eval. The bridge only
         reads: a string literal (``"Mysterious voice"``) is its own value; a
         name is looked up in the ``character`` namespace, then in the store,
-        the order eval_who uses; a dotted path follows instance fields and
-        dict keys. Calls, operators and properties are never evaluated.
-        Returns ``(found, value)``.
+        the order eval_who uses for a speaker; with ``characters=False`` (a
+        dynamic name, which py_eval reads) only in the store. A dotted path
+        follows instance fields and dict keys. Calls, operators and
+        properties are never evaluated. Returns ``(found, value)``.
         """
         if not isinstance(expr, builtins.str) or not expr.strip():
             return False, None
@@ -4558,11 +4609,11 @@ init python:
             namespaces = renpy.python.store_dicts
         except Exception:
             namespaces = None
-        if len(parts) == 1 and namespaces is not None:
+        if characters and len(parts) == 1 and namespaces is not None:
             # `define character.e = Character(...)` lives in store.character.
             try:
-                characters = namespaces.get("store.character")
-                value = characters.get(parts[0]) if characters is not None else None
+                character_ns = namespaces.get("store.character")
+                value = character_ns.get(parts[0]) if character_ns is not None else None
             except Exception:
                 value = None
             found = value is not None
@@ -5084,7 +5135,9 @@ init python:
                 continue
             # As with Ren'Py buttons, no action means insensitive.
             enabled = bool(actions) and _renforge_safe_sensitive(sensitivity, value)
-            yield types.SimpleNamespace(widget=widget, screen=screen), {
+            focus = types.SimpleNamespace(widget=widget, screen=screen,
+                                          custom_action=value if actions else None)
+            yield focus, {
                 "screen": name, "layer": layer, "role": "button",
                 "text": _renforge_focus_text(widget) or None,
                 "enabled": enabled, "clickable": enabled, "covered": False,
@@ -6805,12 +6858,24 @@ init python:
     def _renforge_explain_snippet(text, needle):
         """Up to 60 characters either side of the first case-insensitive ``needle``.
 
-        The window is found in ``text`` itself: an index into its casefold
-        can point past the match, since folding changes length (sharp s
-        folds to "ss"). A match only folding finds shows the start of the text."""
-        import re as _re
-        found = _re.search(_re.escape(needle), text, _re.IGNORECASE)
-        start, end = (found.start(), found.end()) if found else (0, len(needle))
+        The match is found as the search finds it, by ``casefold``, then
+        mapped back to ``text``: folding changes length (sharp s folds to
+        "ss"), so an index into the folded text is not one into ``text``.
+        """
+        folded_needle = needle.casefold()
+        folded = []
+        owners = []  # owners[i]: the index in ``text`` of folded character i
+        for index, char in enumerate(text):
+            piece = char.casefold()
+            folded.append(piece)
+            owners.extend([index] * len(piece))
+        at = "".join(folded).find(folded_needle) if folded_needle else -1
+        if at < 0:
+            start, end = 0, len(needle)
+        else:
+            start = owners[at]
+            last = at + len(folded_needle) - 1
+            end = owners[last] + 1 if last < len(owners) else len(text)
         return text[max(0, start - 60):end + 60]
 
 
@@ -7542,7 +7607,9 @@ init python:
 
         ``result`` is act's success reply (operation, id, interaction, screen,
         via); the stored values are added to it and it is returned. A
-        viewport changes no axis unless every requested axis can change.
+        viewport changes no axis unless every requested axis can change; when
+        one axis's change ends the interaction, the reply says which axes
+        never ran (``interrupted``, ``skipped_axes``).
         Refusals: ``value_required`` (no finite number given) and
         ``unsupported`` (the adjustment cannot change)."""
         widget = getattr(focus, "widget", None)
@@ -7557,8 +7624,22 @@ init python:
                     return refuse("value_required")
                 if not callable(getattr(getattr(widget, field, None), "change", None)):
                     return refuse("unsupported")
-            for axis, field in axes:
-                changed, stored = _renforge_change_adjustment(getattr(widget, field, None), payload[axis])
+            for index, (axis, field) in enumerate(axes):
+                adjustment = getattr(widget, field, None)
+                try:
+                    changed, stored = _renforge_change_adjustment(adjustment, payload[axis])
+                except Exception as exc:
+                    if _renforge_is_script_control_flow(exc):
+                        # This axis changed and ended the interaction; any
+                        # later axis never ran. The reply rides on exc.
+                        stored = _renforge_observe_number(getattr(adjustment, "value", None))
+                        if stored is not None:
+                            result[axis] = stored
+                        skipped = [name for name, _field in axes[index + 1:]]
+                        if skipped:
+                            result["interrupted"] = True
+                            result["skipped_axes"] = skipped
+                    raise
                 if not changed:
                     return refuse("unsupported")
                 result[axis] = stored

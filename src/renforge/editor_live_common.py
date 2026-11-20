@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import shutil
 import time
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -80,23 +82,49 @@ def clear_transactions(project_root: Path) -> Path:
     return transaction_root
 
 
+@dataclass(frozen=True)
+class TransactionWait:
+    """How ``wait_for_transaction`` ended.
+
+    ``completed`` is True only when the editor reported a finished reload
+    and the source held the expected bytes. ``last_status`` is then that
+    status; after a timeout it is diagnostic only. ``bridge_failure`` is the
+    last status request's error, ``source_error`` the last source read's,
+    each cleared by a later success.
+
+    It unpacks as ``(last_status, bridge_failure)`` for existing callers,
+    which must still check ``completed``: a timeout can end on a
+    ``reload_committed`` status.
+    """
+
+    completed: bool
+    last_status: dict[str, Any] | None
+    bridge_failure: str | None
+    source_error: str | None
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter((self.last_status, self.bridge_failure))
+
+
 def wait_for_transaction(
     client: Any,
     source_path: Path,
     expected_bytes: bytes,
     *,
     timeout: float = 60.0,
-) -> tuple[dict[str, Any] | None, str | None]:
+) -> TransactionWait:
     """Poll the editor until a save or undo has reloaded and ``source_path`` holds ``expected_bytes``.
 
-    Returns the last editor status and the last bridge error, which is cleared
-    by any later successful status request, so a reload's brief disconnect is
-    not blamed for a commit that never finished. A source that cannot be read
-    yet (mid-replace) only means "not yet".
+    A reload's brief disconnect is not blamed for a commit that never
+    finished: the bridge error is cleared by any later successful status
+    request. A source that cannot be read yet (mid-replace) only means "not
+    yet"; the read error is kept apart from bridge errors, and cleared by a
+    later successful read.
     """
     deadline = time.monotonic() + timeout
     last_status: dict[str, Any] | None = None
     bridge_failure: str | None = None
+    source_error: str | None = None
     while time.monotonic() < deadline:
         try:
             status = client.request("editor_task0_status", {})
@@ -107,12 +135,15 @@ def wait_for_transaction(
             bridge_failure = None
             if status.get("status_code") == "reload_committed" and status.get("save_in_progress") is False:
                 try:
-                    if source_path.read_bytes() == expected_bytes:
-                        return status, None
-                except OSError:
-                    pass
+                    current = source_path.read_bytes()
+                except OSError as exc:
+                    source_error = f"{type(exc).__name__}: {exc}"
+                else:
+                    source_error = None
+                    if current == expected_bytes:
+                        return TransactionWait(True, status, None, None)
         time.sleep(0.25)
-    return last_status, bridge_failure
+    return TransactionWait(False, last_status, bridge_failure, source_error)
 
 
 def inject_editor_live_resources(
