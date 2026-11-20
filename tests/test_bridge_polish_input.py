@@ -76,6 +76,24 @@ def test_an_inline_load_still_reports_the_restart_once(running_bridge, monkeypat
     assert emitted == [("load.completed", {"slot": "teams", "restored_label": None})]
 
 
+
+def test_the_drain_keeps_running_after_an_inline_restart(running_bridge, monkeypatch):
+    """Ren'Py's context loop catches the restart and drains again; so does the test pump."""
+    renpy = running_bridge.renpy
+    RestartTopContext = type("RestartTopContext", (Exception,), {})
+    renpy.game = types.SimpleNamespace(RestartTopContext=RestartTopContext)
+    renpy.can_load = lambda slot: True
+
+    def load(slot):
+        raise RestartTopContext()
+
+    renpy.load = load
+    monkeypatch.delattr(renpy, "invoke_in_main_thread", raising=False)
+    assert running_bridge.client.load_slot("teams")["restarting"] is True
+    # A later request is still drained.
+    assert running_bridge.client.ping().get("ok") is True
+
+
 # --- custom click attributes ----------------------------------------------
 
 
