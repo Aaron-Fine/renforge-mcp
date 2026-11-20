@@ -35,7 +35,7 @@ Covered tools:
 - `renforge_eval` — always `open_world` when `expr` is a non-empty string
 - `renforge_wait_until` — `open_world` with an `expr` condition (it runs in the game, like a scenario `wait` step); `observational` for a label or screen
 - `renforge_set_var` — `mutating`
-- `renforge_validate` — `open_world` with non-empty `staged` bytes (lint runs their `init` code with the server's privileges, like `renforge_eval`); without `staged` it lints only the project's own code, as a launch runs it, and is not classified
+- `renforge_validate` — `open_world` with non-empty `staged` bytes (lint runs their `init` code with the server's privileges, like `renforge_eval`); without `staged` it is `observational`, like `renforge_mod lint`: it lints only the project's own code, as a launch runs it
 - `renforge_run_scenario` — classified by the highest-risk step, including nested `control` actions. `assert` steps and `wait` steps on an `expr` run code in the game, so they are `open_world`: a scenario with any assertion needs `authorize=true` under enforce
 
 ## Authorization

@@ -467,3 +467,6 @@ def test_validate_with_staged_source_needs_authorize_like_eval(monkeypatch, tmp_
     # Without staged source, lint runs only the project's own code, as a launch does.
     assert asyncio.run(_call()) == {"ok": True}
     assert calls == [staged, None]
+    # Like renforge_mod lint, which lints the same kind of shadow.
+    assert classify("renforge_validate", {"staged": []}) == ("renforge_validate", RISK_OBSERVATIONAL)
+    assert classify("renforge_mod", {"action": "lint"})[1] == RISK_OBSERVATIONAL
