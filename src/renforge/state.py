@@ -67,9 +67,14 @@ def _on_disk_spelling(path: Path) -> Path:
 
     An answer is kept for the life of the process once every component was
     found in its directory's listing, so one server keeps one folder (and
-    lock) per project even if the folder is renamed while it runs. A path
-    with a component that is missing or could not be listed (a folder that
-    does not exist yet) is spelled afresh each time.
+    lock) per project even if the folder is renamed while it runs. That is
+    the trade-off for a case-only rename on a case-insensitive volume: a
+    process started after it spells the folder anew and gets another state
+    folder until this one restarts. Spelling afresh here instead would move
+    this server off the lock and bridge metadata of the game it is running,
+    and that game's lock would still be in the old folder. A path with a
+    component that is missing or could not be listed (a folder that does
+    not exist yet) is spelled afresh each time.
     """
     key = str(path)
     known = _SPELLINGS.get(key)

@@ -82,3 +82,23 @@ def test_a_path_spelled_before_it_existed_is_spelled_again(tmp_path: Path, monke
     monkeypatch.setattr(state.os, "listdir", counting)
     assert state.project_state_dir(project) == before
     assert listed
+
+
+def test_a_case_only_rename_keeps_this_process_on_its_folder(tmp_path: Path, monkeypatch) -> None:
+    """A server running a game keeps that game's lock and metadata after the folder is renamed."""
+    project = tmp_path / "Games" / "Foo"
+    project.mkdir(parents=True)
+    first = state.project_state_dir(project)
+    project.rename(tmp_path / "Games" / "foo")
+    real = os.path.samefile
+
+    def case_insensitive(a, b):
+        a, b = str(a), str(b)
+        if a.casefold() == b.casefold() and a.casefold().startswith(str(tmp_path).casefold()):
+            return True
+        return real(a, b)
+
+    monkeypatch.setattr(state.os.path, "samefile", case_insensitive)
+    assert state.project_state_dir(project) == first
+    state._SPELLINGS.clear()  # a process started after the rename
+    assert state.project_state_dir(project) != first
