@@ -1414,19 +1414,25 @@ def test_live_import_lists_before_taking_the_close_lock(
         temporary_savedir=dest,
         isolation=SimpleNamespace(savedir_mode="temporary", session_root=dest.parent),
     )
-    seen: dict[str, list[bool]] = {"parse": [], "copy": []}
+    seen: dict[str, list[bool]] = {"parse": [], "list": [], "copy": []}
     real_parse = save_isolation.parse_save_directory
+    real_list = save_isolation._list_slots
     real_copy = save_isolation._copy_slot_files
 
     def parse(*args, **kwargs):
         seen["parse"].append(session.held)
         return real_parse(*args, **kwargs)
 
+    def list_slots(*args, **kwargs):
+        seen["list"].append(session.held)
+        return real_list(*args, **kwargs)
+
     def copy(*args, **kwargs):
         seen["copy"].append(session.held)
         return real_copy(*args, **kwargs)
 
     monkeypatch.setattr(save_isolation, "parse_save_directory", parse)
+    monkeypatch.setattr(save_isolation, "_list_slots", list_slots)
     monkeypatch.setattr(save_isolation, "_copy_slot_files", copy)
     live._SESSIONS[live._key(project)] = session  # type: ignore[assignment]
     try:
@@ -1436,6 +1442,7 @@ def test_live_import_lists_before_taking_the_close_lock(
 
     assert result["ok"] is True
     assert seen["parse"] and not any(seen["parse"])
+    assert seen["list"] and not any(seen["list"])
     assert seen["copy"] and all(seen["copy"])
 
 
