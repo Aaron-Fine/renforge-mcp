@@ -325,9 +325,13 @@ $RENFORGE_STATE_DIR/projects/<name>-<hash>/       # when set
 separate folders. An optional `<project>/.renforge/policy.json` is still read
 from the project, because the project owner writes it. A Live Editor save,
 undo or rollback of a game on another filesystem than `<state>` (a second
-drive) stages its files in `<project>/.renforge/editor-exchange/<transaction>/`
-instead, because the atomic exchange cannot cross filesystems. They are
-removed when the exchange settles; a conflict keeps them as evidence.
+drive) stages its files in `.renforge/editor-exchange/<transaction>/` on the
+game folder's own filesystem instead, because the atomic exchange cannot cross
+filesystems: under the project, `<project>/.renforge/editor-exchange/`, when
+the project is on that filesystem, or under the highest project folder that is
+(for a game folder mounted from elsewhere, under that mounted folder). The
+journal stays in `<state>`. The files are removed when the exchange settles; a
+conflict keeps them as evidence.
 
 ## Toolsets
 

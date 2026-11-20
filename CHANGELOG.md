@@ -111,8 +111,10 @@ versioning.
   game launched through one spelling is this server's own through another.
   A Live Editor save, undo or rollback of a game on another filesystem than
   the state folder (a second drive) stages its exchange files in
-  `<project>/.renforge/editor-exchange/` instead, because the atomic
-  exchange cannot cross filesystems, and removes them when it is done; a
+  `.renforge/editor-exchange/` on the game folder's own filesystem instead
+  (under the project, or, for a game folder mounted from elsewhere, under
+  that mounted folder), because the atomic exchange cannot cross
+  filesystems, and removes them when it is done; a
   conflict keeps them as evidence.
   `RenpyProject.cache_dir` is gone; `renforge.state.project_state_dir`
   names the folder.
