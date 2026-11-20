@@ -588,6 +588,9 @@ versioning.
   taken over by a retry or deleted by `remove`; a file published before the
   last manifest update failed is listed as `pending`, finished by a retry,
   and deleted by `remove`.
+- The play loop's stuck-pause click is timed from the pause's first frame:
+  a long transition before a short pause no longer makes that pause look
+  stuck and clicked the moment it appears.
 
 ## [0.7.6] - 2026-11-18
 

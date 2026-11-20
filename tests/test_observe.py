@@ -1002,6 +1002,47 @@ def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch)
     assert verdicts == [None]
 
 
+
+def test_the_stuck_pause_timer_starts_when_the_pause_appears(monkeypatch):
+    """A long transition before a short pause must not make that pause look stuck."""
+    import time
+    from renforge import progression
+    monkeypatch.setattr(progression, "POLL_SECONDS", 0.001)
+    monkeypatch.setattr(progression, "STUCK_PAUSE_SECONDS", 0.15)
+    transition = _raw(interaction=7, stable=False, unstable_reason="transition",
+                      session_id="s1", observation_id="t1")
+    pause = _raw(interaction=8, stable=False, unstable_reason="pause", say_dismiss="dismiss",
+                 session_id="s1", observation_id="p1")
+    other_pause = _raw(interaction=9, stable=False, unstable_reason="pause", say_dismiss="dismiss",
+                       session_id="s1", observation_id="p2")
+    start = time.monotonic()
+    nudged_at = []
+
+    def fetch(_shot):
+        elapsed = time.monotonic() - start
+        if elapsed < 0.2:
+            return transition          # longer than STUCK_PAUSE_SECONDS
+        if elapsed < 0.3:
+            return pause               # a fresh pause, shorter than it
+        return other_pause             # a new interaction: its own timer
+
+    class Client:
+        def progression(self, *args, **kwargs):
+            raise AssertionError("progression must not start from an unstable frame")
+
+    def nudge(interaction):
+        nudged_at.append((interaction, time.monotonic() - start))
+        return {"ok": True}
+
+    progression.run_native_skip(Client(), fetch, max_steps=5, deadline=start + 0.55,
+                                total_deadline=start + 0.6, nudge=nudge)
+    # Only the last pause stayed a pause past the limit, measured from when it appeared.
+    assert len(nudged_at) == 1, nudged_at
+    interaction, when = nudged_at[0]
+    assert interaction == 9
+    assert when >= 0.3 + 0.15, when
+
+
 def test_progression_stops_before_unclassified_input():
     raw = _raw(omitted={'unclassified': True, 'focus_truncated': False})
     assert progression_boundary(classify(raw)) == 'unsupported'
