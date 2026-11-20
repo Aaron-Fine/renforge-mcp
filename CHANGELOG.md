@@ -637,6 +637,9 @@ versioning.
   omitted or `null`), as its description says, and its `timeout` text
   states the accepted 0-600 range instead of promising to clamp values the
   schema refuses.
+- `renforge_run_scenario`'s `files_touched` names the save folder a `save`
+  step wrote to, beside its captures, so a report that fails after a save
+  no longer leaves the save out.
 
 ## [0.7.6] - 2026-11-18
 

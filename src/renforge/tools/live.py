@@ -3403,6 +3403,8 @@ def run_scenario(
     deadline = started + float(timeout)
     results: list[dict[str, Any]] = []
     capture_paths: list[str] = []
+    # Receipts steps return already formatted (a save's savedir), kept as given.
+    step_receipts: list[str] = []
     last_action: str | None = None
     overall_ok = True
 
@@ -3585,6 +3587,8 @@ def run_scenario(
                 reply = saves(project_path, "save", slot=str(slot))
                 if not reply.get("ok"):
                     raise RuntimeError(reply.get("error") or "save failed")
+                step_receipts.extend(item for item in reply.get("files_touched") or ()
+                                     if isinstance(item, str) and item)
                 step_result["status"] = "passed"
                 last_action = "save(%s)" % slot
             elif action == "load":
@@ -3658,9 +3662,10 @@ def run_scenario(
         "passed": passed,
         "failed": failed,
         "duration_ms": duration_ms,
-        "files_touched": [
-            receipt_path(project_path, path) for path in capture_paths
-        ],
+        "files_touched": list(dict.fromkeys([
+            *step_receipts,
+            *(receipt_path(project_path, path) for path in capture_paths),
+        ])),
         "steps": results,
     }
     if not report["ok"]:
