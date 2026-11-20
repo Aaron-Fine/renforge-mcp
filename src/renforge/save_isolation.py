@@ -43,6 +43,7 @@ from .util.files import (
     list_directory_nofollow,
     make_directory_at_nofollow,
     open_regular_at_nofollow,
+    receipt_path,
     replace_file_at_nofollow,
     scan_directory_nofollow,
 )
@@ -1095,9 +1096,12 @@ def import_selected_slots(
     missing = list(selection.get("missing") or [])
     imported: list[dict[str, Any]] = []
     refused: list[dict[str, Any]] = []
-    # The write receipt (#116): absolute paths, since the savedir is outside
-    # the project, of every file published so far.
+    # The write receipt (#116) of every file published so far, by the shared
+    # receipt rule: absolute POSIX paths, since the savedir is outside the project.
     touched: list[str] = []
+
+    def _receipts(names: Iterable[str]) -> list[str]:
+        return [receipt_path(project_root, dest / name) for name in names]
 
     def _failed(code: str, error: str) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -1118,7 +1122,7 @@ def import_selected_slots(
         try:
             copied, slot_refused = _copy_slot_files(directory, dest, name)
         except (OSError, ValueError) as exc:
-            touched.extend(str(dest / item) for item in getattr(exc, "slot_files_copied", []))
+            touched.extend(_receipts(getattr(exc, "slot_files_copied", [])))
             if isinstance(exc, FileNotFoundError) and not dest.is_dir():
                 # The session stopped mid-copy and its savedir went with it.
                 return _failed(
@@ -1129,7 +1133,7 @@ def import_selected_slots(
             # rename: nothing was written outside the session, but the
             # import is incomplete.
             return _failed("SAVE_IMPORT_FAILED", str(exc))
-        touched.extend(str(dest / item) for item in copied)
+        touched.extend(_receipts(copied))
         refused.extend(slot_refused)
         if copied:
             imported.append({"name": name, "files": copied, "directory": str(directory)})

@@ -3,24 +3,43 @@ from __future__ import annotations
 import threading
 import time
 import types
+from pathlib import Path
 
 from renforge.save_isolation import LaunchIsolation
 from renforge.tools import live
+from renforge.util.files import receipt_path
 
 
 def test_save_slot_receipt_uses_the_bridge_savedir(tmp_path):
+    savedir = tmp_path / "saves"
+    project = tmp_path / "project"
+    project.mkdir()
+
     class FakeClient:
         def save_slot(self, slot, extra_info=""):
             return {
                 "ok": True,
                 "slot": slot,
-                "savedir": str(tmp_path / "saves"),
+                "savedir": str(savedir),
             }
+
+    reply = live._save_slot_with_receipt(str(project), "slot1", "", FakeClient())
+
+    # Outside the project: the receipt is the savedir's absolute POSIX path,
+    # while ``savedir`` keeps the form the bridge reported.
+    assert reply["files_touched"] == [receipt_path(project, savedir)]
+    assert Path(reply["files_touched"][0]) == savedir.resolve()
+    assert reply["savedir"] == str(savedir)
+
+
+def test_save_slot_receipt_inside_the_project_is_project_relative(tmp_path):
+    class FakeClient:
+        def save_slot(self, slot, extra_info=""):
+            return {"ok": True, "slot": slot, "savedir": str(tmp_path / "game" / "saves")}
 
     reply = live._save_slot_with_receipt(str(tmp_path), "slot1", "", FakeClient())
 
-    assert reply["files_touched"] == [str(tmp_path / "saves")]
-    assert reply["savedir"] == str(tmp_path / "saves")
+    assert reply["files_touched"] == ["game/saves"]
 
 
 def test_save_slot_failure_declares_no_writes(tmp_path):
