@@ -399,3 +399,20 @@ def test_an_inline_load_restart_keeps_the_rescan_warning(running_bridge, monkeyp
     reply = running_bridge.client.load_slot("teams")
     assert reply["ok"] is True and reply["restarting"] is True
     assert reply["rescan_error"] == "OSError: savedir unreadable"
+
+
+# --- the engine's hit names the receiver ------------------------------------
+
+
+def test_hit_test_does_not_name_a_listed_control_for_an_unlisted_engine_hit(running_bridge):
+    """Ren'Py hits a widget the control list omits: the receiver is unknown."""
+    renpy = running_bridge.renpy
+    listed = _FakeWidget("Listed")
+    unlisted = object()  # beyond the control cap, say
+    renpy.display.focus.focus_list[:] = [_FakeFocus("Listed", 10, 10, 100, 20, widget=listed)]
+    renpy.display.render = types.SimpleNamespace(screen_render=types.SimpleNamespace(
+        focus_at_point=lambda x, y, _screen: (unlisted, None, None)))
+    hit = running_bridge.client.hit_test(50, 20)
+    assert hit["topmost"] is None, hit
+    assert hit["unlisted_receiver"] is True
+    assert [element["text"] for element in hit["underneath"]] == ["Listed"]

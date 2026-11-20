@@ -2737,7 +2737,12 @@ init python:
             "element": element,
             "received_by": topmost,
         }
-        if topmost is not None and topmost.get("id") != element.get("id"):
+        if hit.get("unlisted_receiver"):
+            result["unlisted_receiver"] = True
+            result["warning"] = (
+                "The click point hits a displayable the control list does not describe."
+            )
+        elif topmost is not None and topmost.get("id") != element.get("id"):
             result["warning"] = (
                 "The intended button may be covered by another interactive displayable."
             )
@@ -2753,10 +2758,12 @@ init python:
 
         ``topmost`` is what Ren'Py's own hit test names. When the engine says
         the point hits nothing (a transparent part of a masked button), there
-        is no receiver and the rectangles there are all ``underneath``. Only
-        without a completed render does the topmost rectangle stand in.
-        ``elements`` are focusable-element pairs already built for this
-        request; None builds them.
+        is no receiver and the rectangles there are all ``underneath``. When
+        it names a widget the control list does not describe (beyond the
+        control cap), the receiver is unknown: ``topmost`` is None and
+        ``unlisted_receiver`` is True. Only without a completed render does
+        the topmost rectangle stand in. ``elements`` are focusable-element
+        pairs already built for this request; None builds them.
         """
         if elements is None:
             elements = _renforge_focusable_elements()
@@ -2765,14 +2772,13 @@ init python:
                 if element.get("covered") is not True
                 and _renforge_bounds_contain(element.get("bounds") or {}, x, y)]
         topmost = hits[-1][1] if hits and hit == "unavailable" else None
+        unlisted = False
         if hit == "modal":
             hits = []
         elif isinstance(hit, tuple) and hit[0] == "displayable":
-            topmost = hits[-1][1] if hits else None
-            for focus, element in elements:
-                if getattr(focus, "widget", None) is hit[1]:
-                    topmost = element
-                    break
+            topmost = next((element for focus, element in elements
+                            if getattr(focus, "widget", None) is hit[1]), None)
+            unlisted = topmost is None
         underneath = [element for _focus, element in reversed(hits) if element is not topmost]
         result = {
             "ok": True,
@@ -2782,6 +2788,9 @@ init python:
             "topmost": topmost,
             "underneath": underneath,
         }
+        if unlisted:
+            result["unlisted_receiver"] = True
+            result["warning"] = "The point hits a displayable the control list does not describe."
         if topmost is not None and underneath:
             result["warning"] = "Multiple interactive displayables overlap this point."
         return result
