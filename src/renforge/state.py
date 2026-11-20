@@ -56,8 +56,14 @@ _SPELLINGS: dict[str, Path] = {}
 _SPELLINGS_MAX: Final = 1024
 
 
-def _on_disk_spelling(path: Path) -> Path:
+def on_disk_spelling(path: Path) -> Path:
     """Spell each component of ``path`` as its directory lists it.
+
+    ``path`` should be absolute and already resolved, as
+    ``Path(p).expanduser().resolve()`` gives. This is the one spelling every
+    RenForge key for a project folder uses: :func:`project_state_dir` hashes
+    it, and :func:`renforge.session_registry.canonical_project_path` keys the
+    dashboard and owned-session registries by it.
 
     On a case-insensitive volume (macOS by default) ``resolve()`` keeps the
     caller's spelling, so ``/Users/me/Game`` and ``/users/me/game`` would get
@@ -112,7 +118,7 @@ def project_state_dir(project_root: str | Path) -> Path:
     spelled as the disk lists it, keeps two projects with the same name apart
     and gives every spelling of one directory the same folder.
     """
-    root = _on_disk_spelling(Path(project_root).expanduser().resolve())
+    root = on_disk_spelling(Path(project_root).expanduser().resolve())
     digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:16]
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", root.name).strip("._")[:48] or "project"
     return state_root() / "projects" / f"{name}-{digest}"

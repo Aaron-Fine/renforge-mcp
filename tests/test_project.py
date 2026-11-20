@@ -28,7 +28,7 @@ def test_opening_a_project_does_not_look_up_its_state_folder(tmp_path: Path, mon
     def unexpected(*_args, **_kwargs):
         raise AssertionError("RenpyProject looked up the state folder")
 
-    monkeypatch.setattr("renforge.state._on_disk_spelling", unexpected)
+    monkeypatch.setattr("renforge.state.on_disk_spelling", unexpected)
     project = RenpyProject(tmp_path)
     assert project.root == tmp_path.resolve()
     assert not hasattr(project, "cache_dir")
