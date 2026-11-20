@@ -63,7 +63,7 @@ from ..save_isolation import (
 )
 from ..sdk import get_or_install_sdk, require_supported_runtime
 from ..session_registry import canonical_project_path
-from ..state import ensure_project_state_dir, project_state_dir
+from ..state import ensure_project_state_dir, pin_project_spelling, project_state_dir
 from ..state_compact import (
     apply_serialization_limits,
     compact_state,
@@ -1180,6 +1180,9 @@ def launch_game(
     # Reuse checks this: a play-only request must not get a bridge that runs code.
     session_obj.bridge_eval = eval_on
     _SESSIONS[key] = session_obj
+    # Its lock, metadata and session key keep this spelling while it runs,
+    # even after a case-only rename and a full spelling cache.
+    pin_project_spelling(project.root, owner=session_obj)
     label = None
     active_language = None
     try:

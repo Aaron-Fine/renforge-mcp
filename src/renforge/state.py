@@ -15,8 +15,9 @@ import hashlib
 import os
 import re
 import unicodedata
+import weakref
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from .util.files import ensure_nofollow_directory
 
@@ -123,12 +124,52 @@ def on_disk_spelling(path: Path) -> Path:
     return out
 
 
+# Spellings a running session's bridge lock, metadata and session key were
+# derived from: resolved path -> [folded key, spelling, owner count]. They
+# survive eviction, so after a case-only rename the session keeps its keys
+# for as long as it runs, however many other paths are spelled meanwhile.
+_PINNED: dict[str, list[Any]] = {}
+
+
 def _keep(key: str, folded_key: str, spelling: Path) -> None:
     if len(_SPELLINGS) >= _SPELLINGS_MAX:
         _SPELLINGS.clear()
         _SPELLINGS_BY_FOLD.clear()
+        for pinned_key, (pinned_fold, pinned_spelling, _owners) in _PINNED.items():
+            _SPELLINGS[pinned_key] = pinned_spelling
+            _SPELLINGS_BY_FOLD.setdefault(pinned_fold, pinned_spelling)
     _SPELLINGS[key] = spelling
     _SPELLINGS_BY_FOLD.setdefault(folded_key, spelling)
+
+
+def pin_project_spelling(project_root: str | Path, *, owner: object) -> None:
+    """Keep the project's current spelling through cache eviction while *owner* lives.
+
+    Call it when a session starts: its keys (state folder, bridge lock,
+    session registry) then stay the ones it started with. The pin is dropped
+    when *owner* is garbage-collected; an owner that cannot be weakly
+    referenced pins nothing.
+    """
+    key = str(Path(project_root).expanduser().resolve())
+    spelling = on_disk_spelling(Path(key))
+    try:
+        weakref.finalize(owner, _unpin, key)
+    except TypeError:
+        return
+    entry = _PINNED.get(key)
+    if entry is None:
+        _PINNED[key] = [_fold(key), spelling, 1]
+    else:
+        entry[2] += 1
+
+
+def _unpin(key: str) -> None:
+    entry = _PINNED.get(key)
+    if entry is None:
+        return
+    entry[2] -= 1
+    if entry[2] <= 0:
+        del _PINNED[key]
 
 
 def project_state_dir(project_root: str | Path) -> Path:

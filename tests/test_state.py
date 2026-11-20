@@ -121,3 +121,33 @@ def test_a_case_only_rename_keeps_this_process_on_its_folder_when_resolve_respel
     assert state.control_dir(renamed) == first / "control"
     _new_process()
     assert state.project_state_dir(renamed) != first
+
+
+def test_a_running_sessions_spelling_survives_the_cache_filling_up(tmp_path: Path, monkeypatch) -> None:
+    """Eviction must not move a running session off its lock and metadata after a case-only rename."""
+    import gc
+
+    project = tmp_path / "Games" / "Foo"
+    project.mkdir(parents=True)
+    first = state.project_state_dir(project)
+
+    class _Session:
+        pass
+
+    session = _Session()
+    state.pin_project_spelling(project, owner=session)
+    renamed = tmp_path / "Games" / "foo"
+    project.rename(renamed)
+    _pretend_case_insensitive(tmp_path, monkeypatch)
+    for n in range(state._SPELLINGS_MAX + 1):
+        state._keep(f"/unrelated/{n}", f"/unrelated/{n}", Path(f"/unrelated/{n}"))
+
+    assert state.project_state_dir(project) == first
+    assert state.project_state_dir(renamed) == first
+
+    # Once the session is gone its spelling is an ordinary cache entry again.
+    del session
+    gc.collect()
+    for n in range(state._SPELLINGS_MAX + 1):
+        state._keep(f"/other/{n}", f"/other/{n}", Path(f"/other/{n}"))
+    assert state.project_state_dir(renamed) != first

@@ -620,6 +620,10 @@ versioning.
   in case on a case-insensitive volume: a client started after the rename
   accepts the record's earlier spelling of the same folder. Relative paths
   and paths that lead to another folder are still refused.
+- A game this server runs keeps its bridge lock, metadata and session key
+  after a case-only rename of its folder even once the bounded spelling
+  cache fills and is cleared: the spelling it started with is pinned while
+  the session lives.
 
 ## [0.7.6] - 2026-11-18
 
