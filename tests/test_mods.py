@@ -826,6 +826,20 @@ def test_remove_refuses_a_linked_mods_folder(tmp_path) -> None:
     assert (elsewhere / "foo" / "empty").is_dir()
 
 
+def _pretend_junction(monkeypatch, junction: Path) -> None:
+    """Make the shared link check, and the copy mods imported, report ``junction`` as a link.
+
+    A Windows junction is not a symlink, so this is how a Linux run sees one.
+    """
+    real_check = util_files.is_link
+
+    def check(path) -> bool:
+        return Path(path) == junction or real_check(path)
+
+    monkeypatch.setattr(util_files, "is_link", check)
+    monkeypatch.setattr(mods, "is_link", check)
+
+
 def test_remove_does_not_walk_into_a_junction_inside_the_mod(tmp_path, monkeypatch) -> None:
     # os.walk(followlinks=False) still descends into NTFS junctions. Stand in
     # for one: a directory the shared reparse-aware check reports as a link.
@@ -834,8 +848,7 @@ def test_remove_does_not_walk_into_a_junction_inside_the_mod(tmp_path, monkeypat
     junction = (root / "game" / "mods" / "demo" / "linked").resolve()
     (junction / "deeper").mkdir(parents=True)
     (junction / "foreign.txt").write_text("not ours", encoding="utf-8")
-    real_check = util_files.is_link
-    monkeypatch.setattr(mods, "is_link", lambda path: Path(path) == junction or real_check(path))
+    _pretend_junction(monkeypatch, junction)
 
     result = mods.remove(root, "demo")
 
@@ -852,8 +865,7 @@ def test_list_does_not_count_files_behind_a_junction_inside_the_mod(tmp_path, mo
     junction = (root / "game" / "mods" / "demo" / "linked").resolve()
     junction.mkdir()
     (junction / "foreign.txt").write_text("not ours", encoding="utf-8")
-    real_check = util_files.is_link
-    monkeypatch.setattr(mods, "is_link", lambda path: Path(path) == junction or real_check(path))
+    _pretend_junction(monkeypatch, junction)
 
     assert mods.list_mods(root)["mods"][0]["unlisted"] == []
 
