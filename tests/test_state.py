@@ -164,6 +164,12 @@ def test_activity_recorded_under_the_earlier_state_key_stays_readable(tmp_path: 
     _pretend_case_insensitive(tmp_path, monkeypatch)
     spelled = tmp_path / "games" / "foo"
     resolved = spelled.expanduser().resolve()
+    if resolved.name == project.name:
+        # resolve() already returns the disk's spelling here (Windows), so an
+        # earlier build keyed this project by that spelling too: there is no
+        # second folder to find.
+        assert state.prior_project_state_dir(spelled) is None
+        return
     digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:16]
     earlier = state.state_root() / "projects" / f"foo-{digest}"
     assert earlier != state.project_state_dir(spelled)
