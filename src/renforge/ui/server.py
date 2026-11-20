@@ -5,7 +5,6 @@ import base64
 import os
 from contextlib import asynccontextmanager
 import json
-import math
 import string
 import threading
 import webbrowser
@@ -24,12 +23,14 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from .. import session_registry
 from ..bridge.launcher import normalize_language
 from ..launch_env import AUDIO_STRATEGIES, LAUNCHABLE_DISPLAY_STRATEGIES, LaunchError
+from ..interaction import is_real_number
 from ..lint import run_lint
 from ..policy import CONTROL_ACTIONS
 from ..save_isolation import STATE_MODE_TOKENS, launch_state_mode_error
 from ..state import project_state_dir
 from ..tools import live
 from ..tools import project_ops
+from ..util.files import walk_nofollow
 from .activity import read_recent_activity, tail_activity
 from .graph import build_story_map, resolve_game_file_path, resolve_warp_target
 from .errors import error_response
@@ -213,9 +214,10 @@ def _list_script_files(project_root: Path) -> dict[str, Any]:
         return {"ok": True, "files": []}
     try:
         files = sorted(
-            "game/" + path.relative_to(game_root).as_posix()
-            for path in game_root.rglob("*.rpy")
-            if path.is_file()
+            "game/" + (Path(folder) / name).relative_to(game_root).as_posix()
+            for folder, _dirs, names in walk_nofollow(game_root)
+            for name in names
+            if name.endswith(".rpy") and (Path(folder) / name).is_file()
         )
     except OSError:
         return {"ok": False, "error": "could not list project scripts", "files": []}
@@ -763,9 +765,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 details={"cleanup_on_stop": cleanup_on_stop},
             )
         timeout = payload.get("timeout")
-        if timeout is not None and (
-            isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout)
-        ):
+        if timeout is not None and not _usable_timeout(timeout):
             return error_response(
                 code="launch_timeout_invalid",
                 error="timeout must be a number",
@@ -773,6 +773,17 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 details={"timeout": timeout},
             )
         return _isolation_option_error(payload)
+
+    def _usable_timeout(timeout: Any) -> bool:
+        # The act/time-budget number rule, and small enough to become the
+        # float deadline _launch_timeout makes (JSON integers have no limit).
+        if not is_real_number(timeout):
+            return False
+        try:
+            float(timeout)
+        except OverflowError:
+            return False
+        return True
 
     def _launch_timeout(timeout: Any) -> float | None:
         # As for renforge_launch: zero or less means the default deadline.

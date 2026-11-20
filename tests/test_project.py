@@ -15,11 +15,23 @@ def test_renpy_project_with_game_dir(tmp_path: Path) -> None:
 
     assert project.root == project_root
     assert project.game_dir == game_dir
-    assert project.cache_dir == project_state_dir(project_root)
     # Opening a project writes nothing, in it or in the state folder, which
     # is created on use.
     assert not (project_root / ".renforge").exists()
-    assert not project.cache_dir.exists()
+    assert not project_state_dir(project_root).exists()
+
+
+def test_opening_a_project_does_not_look_up_its_state_folder(tmp_path: Path, monkeypatch) -> None:
+    """Callers ask renforge.state for the state folder; a project does not carry one."""
+    (tmp_path / "game").mkdir()
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("RenpyProject looked up the state folder")
+
+    monkeypatch.setattr("renforge.state._on_disk_spelling", unexpected)
+    project = RenpyProject(tmp_path)
+    assert project.root == tmp_path.resolve()
+    assert not hasattr(project, "cache_dir")
 
 
 def test_project_identity_survives_symlink_retarget(tmp_path: Path) -> None:
@@ -42,7 +54,6 @@ def test_project_identity_survives_symlink_retarget(tmp_path: Path) -> None:
     assert project.root == project_a.resolve()
     assert project.abs_root == project_a.resolve()
     assert project.game_dir == project_a.resolve() / "game"
-    assert project.cache_dir == project_state_dir(project_a.resolve())
     assert project.files(["marker"]) == [project_a.resolve() / "marker"]
     assert project.has_config("marker")
 

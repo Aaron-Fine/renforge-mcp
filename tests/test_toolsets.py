@@ -92,6 +92,17 @@ def test_info_and_instructions_name_only_the_listed_tools(monkeypatch):
 
 @pytest.mark.parametrize(
     ("toolsets", "listed"),
+    [(["editor"], False), (["play", "editor"], False), (["live"], False), (["editor", "live"], True)],
+)
+def test_instructions_name_the_live_editor_only_when_info_does(toolsets, listed):
+    """The instructions use renforge_info's rule: the workflow needs both editor and live."""
+    from renforge.server import _instructions
+
+    assert ("Live Editor" in _instructions(toolsets)) is listed
+
+
+@pytest.mark.parametrize(
+    ("toolsets", "listed"),
     [("play,editor", False), ("live,project", False), ("editor,live,project", True), ("all", True)],
 )
 def test_info_lists_the_live_editor_only_when_its_workflow_tools_are_listed(monkeypatch, toolsets, listed):

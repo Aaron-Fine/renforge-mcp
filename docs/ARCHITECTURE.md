@@ -198,7 +198,7 @@ an empty return stack. Arrival at the engine menu confirms and latches the endin
 on the non-rollback bridge object, emits one ending event, and exposes its return
 location. Resuming root gameplay (including custom Start targets) or
 start/load/warp/replay clears the evidence. The shared contract stops
-both progression modes at `end` or `main_menu`, even without clickable menu
+progression at `end` or `main_menu`, even without clickable menu
 controls; the host uses a settled final observation before reporting completion.
 
 The host composes action, observation, and bounded progression with one client.

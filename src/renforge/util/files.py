@@ -10,7 +10,7 @@ import struct
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Iterable, NoReturn, Union
+from typing import Any, Iterable, Iterator, NoReturn, Union
 
 DATA_ENCODING: str = "utf-8"
 FILE_MODE: int = 0o644
@@ -958,6 +958,27 @@ def is_link(path: Path) -> bool:
     Windows cannot read the path's attributes.
     """
     return _component_is_link(Path(path))
+
+
+def walk_nofollow(top: str | Path) -> Iterator[tuple[str, list[str], list[str]]]:
+    """Walk ``top`` like :func:`os.walk`, never descending into a linked folder.
+
+    ``os.walk`` skips a symlinked folder, but on Windows a junction is not a
+    symlink, so a scan of ``game/`` would read whatever tree it points to.
+    Each folder :func:`is_link` reports, or whose attributes cannot be read,
+    is pruned. Files are still listed as found: a caller that opens one
+    checks it itself (for example with :func:`read_text_nofollow`).
+    """
+    for root, dirs, filenames in os.walk(top):
+        dirs[:] = [name for name in dirs if not _linked_folder(Path(root) / name)]
+        yield root, dirs, filenames
+
+
+def _linked_folder(path: Path) -> bool:
+    try:
+        return is_link(path)
+    except PrivatePathError:
+        return True  # fail closed: an unreadable reparse state may be a junction
 
 
 def _reject_link_components(path: Path, *, code: str, include_leaf: bool) -> Path:

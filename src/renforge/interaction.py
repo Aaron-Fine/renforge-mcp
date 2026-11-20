@@ -202,20 +202,25 @@ def _bool(value: Any, default: bool) -> bool:
     return default
 
 
-def _real_number(value: Any) -> bool:
+def is_real_number(value: Any) -> bool:
     """True for a finite int or float that is not a bool.
 
     The one number check for act payloads and time budgets: the host
-    (tools.live) and the injected bridge both call it by this name.
+    (tools.live, the dashboard) and the injected bridge all call it. An int
+    of any size passes; a caller that turns it into a float checks the size.
     """
     return not isinstance(value, bool) and (isinstance(value, int) or isinstance(value, float) and math.isfinite(value))
+
+
+# The earlier private name, still imported by tools.live.
+_real_number = is_real_number
 
 
 def _public_axis(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
     axis = {
-        key: value.get(key) if _real_number(value.get(key)) else None
+        key: value.get(key) if is_real_number(value.get(key)) else None
         for key in ("value", "range", "step", "page")
     }
     if all(item is None for item in axis.values()):
@@ -703,9 +708,9 @@ def validate_act_payload(payload: Mapping[str, Any]) -> str | None:
         if has_key or any(payload.get(name) is not None for name in ("text", "value", "x", "y", "drop")):
             return "unsupported"
         item = payload["input"]
-        if not (item is None or isinstance(item, (str, bool)) or _real_number(item)
+        if not (item is None or isinstance(item, (str, bool)) or is_real_number(item)
                 or (isinstance(item, Mapping) and set(item) <= {"x", "y"}
-                    and all(v is None or _real_number(v) for v in item.values()))):
+                    and all(v is None or is_real_number(v) for v in item.values()))):
             return "unsupported_input"
     if has_key and (has_id or any(payload.get(name) is not None for name in ("text", "value", "x", "y", "drop"))):
         return "key_or_control"
@@ -714,7 +719,7 @@ def validate_act_payload(payload: Mapping[str, Any]) -> str | None:
     if payload.get("text") is not None and not isinstance(payload["text"], str):
         return "text_required"
     for name in ("value", "x", "y"):
-        if payload.get(name) is not None and not _real_number(payload[name]):
+        if payload.get(name) is not None and not is_real_number(payload[name]):
             return "value_required"
     if payload.get("drop") is not None and not isinstance(payload["drop"], str):
         return "unsupported"
@@ -790,12 +795,12 @@ def guard_act(
         if found.get("role") == "viewport":
             if x is None and y is None:
                 return "value_required"
-            if x is not None and not _real_number(x):
+            if x is not None and not is_real_number(x):
                 return "value_required"
-            if y is not None and not _real_number(y):
+            if y is not None and not is_real_number(y):
                 return "value_required"
             return None
-        if not _real_number(value):
+        if not is_real_number(value):
             return "value_required"
         return None
     if "drop" in operations:

@@ -135,3 +135,20 @@ def test_json_dump_compatibility_strategy_is_documented() -> None:
     assert "String-keyed namemaps (Ren'Py 8.4 and earlier" not in dump_docs
     assert "RENPY_SEARCHPATH" in changelog
     assert "dump.py" in changelog
+
+
+def test_docs_describe_one_progression_mode() -> None:
+    """Dismiss mode is gone, so no public doc may refer to a second mode."""
+    root = Path(__file__).parents[1]
+    for name in ("README.md", "docs/MCP.md", "docs/ARCHITECTURE.md", "docs/LIVE_EDITOR.md"):
+        path = root / name
+        if path.exists():
+            assert "progression modes" not in path.read_text(encoding="utf-8"), name
+
+
+def test_mcp_state_folder_section_names_the_editor_exchange_folder() -> None:
+    """The only in-project writes besides game/ are listed where the state folder is."""
+    text = (Path(__file__).parents[1] / "docs" / "MCP.md").read_text(encoding="utf-8")
+    section = text.split("## Where RenForge keeps its files", 1)[1].split("\n## ", 1)[0]
+    assert "<project>/.renforge/editor-exchange/" in section
+    assert "conflict" in section

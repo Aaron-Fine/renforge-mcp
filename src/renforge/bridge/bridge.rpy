@@ -1374,12 +1374,32 @@ init python:
             return {"ok": True, "action": action}
         return {"ok": False, "error": "unknown control action: %s" % action}
 
+    def _renforge_slot_name_error(slot):
+        """Why ``slot`` cannot name a save slot, as a reply, or None.
+
+        Ren'Py builds a save file's path as ``os.path.join(savedir, slot +
+        suffix)``, so a slot that is a path (absolute, with a drive, with
+        either separator or NUL, or ``.``/``..``) would read or write outside
+        the save folder, the player's own saves included. The host refuses
+        these first (``save_isolation.slot_name_error``, the same rule); this
+        is the second line for a caller that reaches the bridge directly.
+        """
+        import ntpath
+        if (any(char in slot for char in ("/", "\\", "\x00")) or slot.strip() in (".", "..")
+                or ntpath.splitdrive(slot)[0]):
+            return {"ok": False, "code": "SAVE_SLOT_INVALID",
+                "error": "slot must be a save slot name such as 1-1 or quick-1, not a path"}
+        return None
+
     def _renforge_h_save_slot(payload):
         payload = payload or {}
         slot = payload.get("slot")
         extra_info = payload.get("extra_info", "")
         if not isinstance(slot, str) or not slot.strip():
             return {"ok": False, "error": "save slot is required"}
+        slot_error = _renforge_slot_name_error(slot)
+        if slot_error is not None:
+            return slot_error
         if extra_info is None:
             extra_info = ""
         if not isinstance(extra_info, str):
@@ -1422,6 +1442,9 @@ init python:
         slot = payload.get("slot")
         if not isinstance(slot, str) or not slot.strip():
             return {"ok": False, "error": "save slot is required"}
+        slot_error = _renforge_slot_name_error(slot)
+        if slot_error is not None:
+            return slot_error
 
         rescan_error = _renforge_rescan_saves()
         can_load = getattr(renpy, "can_load", None)
@@ -6892,7 +6915,13 @@ init python:
         return "<%s>" % _renforge_type_label(value)
 
     def _renforge_explain_variable(path):
-        """Read one store variable or dotted attribute path, never calling anything."""
+        """Read one store variable or dotted attribute path, never calling anything.
+
+        The walk stays in game data: it never steps into a module (renpy is in
+        the store, and renpy.os.environ is the environment the game inherited)
+        or reads a private (``_``) attribute after the first name, matching
+        the public fields _renforge_explain_value lists. Dict keys are data
+        and may start with ``_``."""
         import re as _re
         if not isinstance(path, builtins.str) or not _re.fullmatch(_RENFORGE_VARIABLE_RE, path.strip()):
             return {"error": "not a variable name"}
@@ -6902,9 +6931,13 @@ init python:
             return {"error": "not defined"}
         value = store[parts[0]]
         for part in parts[1:]:
+            if isinstance(value, types.ModuleType):
+                return {"error": "not data (%s)" % _renforge_type_label(value)}
             fields = getattr(value, "__dict__", None)
             if isinstance(value, builtins.dict) and part in value:
                 value = value[part]
+            elif part.startswith("_"):
+                return {"error": "no field %s" % part}
             elif isinstance(fields, builtins.dict) and part in fields:
                 value = fields[part]
             else:
@@ -7309,11 +7342,11 @@ init python:
         max_steps, timeout = payload.get("max_steps"), payload.get("timeout")
         if type(max_steps) is not builtins.int or not 1 <= max_steps <= 200:
             return {"ok": False, "error": "invalid_budget"}
-        if not _renforge_runtime.interaction._real_number(timeout) or not 0.05 <= timeout <= 120:
+        if not _renforge_runtime.interaction.is_real_number(timeout) or not 0.05 <= timeout <= 120:
             return {"ok": False, "error": "invalid_budget"}
         expires_at = payload.get("expires_at")
         if expires_at is not None:
-            if not _renforge_runtime.interaction._real_number(expires_at):
+            if not _renforge_runtime.interaction.is_real_number(expires_at):
                 return {"ok": False, "error": "invalid_budget"}
             timeout = min(timeout, expires_at - _renforge_time.time())
             if timeout <= 0:
@@ -7514,7 +7547,7 @@ init python:
         ``unsupported`` (the adjustment cannot change)."""
         widget = getattr(focus, "widget", None)
         refuse = lambda error: _renforge_act_refusal(error, result["interaction"], result["id"])
-        real_number = _renforge_runtime.interaction._real_number
+        real_number = _renforge_runtime.interaction.is_real_number
         if control.get("role") == "viewport":
             axes = [(axis, field) for axis, field in (("x", "xadjustment"), ("y", "yadjustment")) if axis in payload]
             if not axes:
@@ -7670,7 +7703,7 @@ init python:
             return payload, None  # the normal lookup reports the missing control
         operations = record.get("operations") or ()
         role = _renforge_observe_normalize_role(record.get("role"))
-        number = _renforge_runtime.interaction._real_number(value)
+        number = _renforge_runtime.interaction.is_real_number(value)
         if "text" in operations and isinstance(value, builtins.str):
             payload["text"] = value
         elif "drop" in operations and isinstance(value, builtins.str):

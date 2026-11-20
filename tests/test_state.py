@@ -47,3 +47,58 @@ def test_case_sensitive_siblings_keep_separate_folders(tmp_path: Path) -> None:
         pytest.skip("this volume ignores case")
     lower.mkdir()
     assert state.project_state_dir(upper) != state.project_state_dir(lower)
+
+
+def test_a_repeated_lookup_does_not_list_every_ancestor_again(tmp_path: Path, monkeypatch) -> None:
+    """Hot paths (every observe poll, every activity entry) ask for the folder again."""
+    project = tmp_path / "Games" / "Foo"
+    project.mkdir(parents=True)
+    first = state.project_state_dir(project)
+    listed: list[str] = []
+    real = os.listdir
+
+    def counting(path):
+        listed.append(str(path))
+        return real(path)
+
+    monkeypatch.setattr(state.os, "listdir", counting)
+    assert state.project_state_dir(project) == first
+    assert state.control_dir(project) == first / "control"
+    assert listed == []
+
+
+def test_a_path_spelled_before_it_existed_is_spelled_again(tmp_path: Path, monkeypatch) -> None:
+    """A missing folder cannot be spelled from its listing, so its answer is not kept."""
+    project = tmp_path / "Later"
+    before = state.project_state_dir(project)
+    project.mkdir()
+    listed: list[str] = []
+    real = os.listdir
+
+    def counting(path):
+        listed.append(str(path))
+        return real(path)
+
+    monkeypatch.setattr(state.os, "listdir", counting)
+    assert state.project_state_dir(project) == before
+    assert listed
+
+
+def test_a_case_only_rename_keeps_this_process_on_its_folder(tmp_path: Path, monkeypatch) -> None:
+    """A server running a game keeps that game's lock and metadata after the folder is renamed."""
+    project = tmp_path / "Games" / "Foo"
+    project.mkdir(parents=True)
+    first = state.project_state_dir(project)
+    project.rename(tmp_path / "Games" / "foo")
+    real = os.path.samefile
+
+    def case_insensitive(a, b):
+        a, b = str(a), str(b)
+        if a.casefold() == b.casefold() and a.casefold().startswith(str(tmp_path).casefold()):
+            return True
+        return real(a, b)
+
+    monkeypatch.setattr(state.os.path, "samefile", case_insensitive)
+    assert state.project_state_dir(project) == first
+    state._SPELLINGS.clear()  # a process started after the rename
+    assert state.project_state_dir(project) != first

@@ -73,7 +73,12 @@ def _instructions(toolsets: list[str]) -> str:
     if others:
         parts.append(
             "The " + ", ".join(others) + " toolsets keep the earlier tools for "
-            "existing workflows" + (" and the Live Editor" if "editor" in others else "") + "."
+            "existing workflows"
+            # Same rule as renforge_info's live_editor block: the workflow
+            # launches through renforge_launch (live) and edits through
+            # renforge_editor (editor).
+            + (" and the Live Editor" if "editor" in others and "live" in others else "")
+            + "."
         )
     parts.append(
         "RENFORGE_POLICY defaults to off; when set to enforce, destructive and "
