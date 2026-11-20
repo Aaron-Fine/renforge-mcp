@@ -564,7 +564,8 @@ versioning.
   `renforge_session`, scenario steps and the dashboard. Ren'Py joins the
   slot onto its save folder, so such a slot reached any folder; a
   `renforge_session` save, which needs no `authorize`, could write into the
-  player's own saves.
+  player's own saves. The bridge's `save_slot` and `load_slot` refuse such a
+  slot themselves too, with the same code.
 - Project scans (`renforge_scan_project`, `renforge_assets`,
   `renforge_find_references`, and the dashboard's script list, story map and
   translation strings) no longer walk into a folder under `game/` that is a

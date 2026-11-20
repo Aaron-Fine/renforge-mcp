@@ -1374,12 +1374,32 @@ init python:
             return {"ok": True, "action": action}
         return {"ok": False, "error": "unknown control action: %s" % action}
 
+    def _renforge_slot_name_error(slot):
+        """Why ``slot`` cannot name a save slot, as a reply, or None.
+
+        Ren'Py builds a save file's path as ``os.path.join(savedir, slot +
+        suffix)``, so a slot that is a path (absolute, with a drive, with
+        either separator or NUL, or ``.``/``..``) would read or write outside
+        the save folder, the player's own saves included. The host refuses
+        these first (``save_isolation.slot_name_error``, the same rule); this
+        is the second line for a caller that reaches the bridge directly.
+        """
+        import ntpath
+        if (any(char in slot for char in ("/", "\\", "\x00")) or slot.strip() in (".", "..")
+                or ntpath.splitdrive(slot)[0]):
+            return {"ok": False, "code": "SAVE_SLOT_INVALID",
+                "error": "slot must be a save slot name such as 1-1 or quick-1, not a path"}
+        return None
+
     def _renforge_h_save_slot(payload):
         payload = payload or {}
         slot = payload.get("slot")
         extra_info = payload.get("extra_info", "")
         if not isinstance(slot, str) or not slot.strip():
             return {"ok": False, "error": "save slot is required"}
+        slot_error = _renforge_slot_name_error(slot)
+        if slot_error is not None:
+            return slot_error
         if extra_info is None:
             extra_info = ""
         if not isinstance(extra_info, str):
@@ -1422,6 +1442,9 @@ init python:
         slot = payload.get("slot")
         if not isinstance(slot, str) or not slot.strip():
             return {"ok": False, "error": "save slot is required"}
+        slot_error = _renforge_slot_name_error(slot)
+        if slot_error is not None:
+            return slot_error
 
         rescan_error = _renforge_rescan_saves()
         can_load = getattr(renpy, "can_load", None)

@@ -220,3 +220,36 @@ def test_observe_lists_an_unfocused_engine_subclass_as_its_kind(running_bridge, 
     raw = running_bridge.client.observe(screenshot=False)
     assert [element["role"] for element in raw["elements"]] == ["viewport"], raw["elements"]
     assert classify(raw)["omitted"]["unclassified"] is False
+
+
+# --- save and load slots that are paths (the bridge half of SAVE_SLOT_INVALID) --
+
+
+_PATH_SLOTS = ["../escape", "..", ".", " .. ", "sub/slot", "sub\\slot", "/abs/slot", "C:slot", "C:\\slot",
+               "nul\x00slot"]
+
+
+@pytest.mark.parametrize("command", ["save_slot", "load_slot"])
+@pytest.mark.parametrize("slot", _PATH_SLOTS)
+def test_save_and_load_refuse_a_slot_that_is_a_path(running_bridge, command, slot):
+    """Ren'Py joins the slot onto its save folder; the host refuses these first, and so does the bridge."""
+    calls: list[str] = []
+    running_bridge.renpy.can_save = lambda: True
+    running_bridge.renpy.save = lambda name, extra_info="": calls.append("save")
+    running_bridge.renpy.can_load = lambda name: calls.append("can_load") or True
+    running_bridge.renpy.load = lambda name: calls.append("load")
+
+    reply = running_bridge.client.request(command, {"slot": slot})
+    assert reply.get("ok") is False and reply.get("code") == "SAVE_SLOT_INVALID", reply
+    assert calls == []
+
+
+@pytest.mark.parametrize("slot", ["1-1", "quick-1", "branch.a", "a..b"])
+def test_save_accepts_a_plain_slot_name(running_bridge, slot):
+    saved: list[str] = []
+    running_bridge.renpy.can_save = lambda: True
+    running_bridge.renpy.save = lambda name, extra_info="": saved.append(name)
+
+    reply = running_bridge.client.request("save_slot", {"slot": slot})
+    assert reply.get("ok") is True, reply
+    assert saved == [slot]
