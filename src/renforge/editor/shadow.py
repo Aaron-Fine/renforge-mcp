@@ -769,8 +769,16 @@ def _build_shadow_from_plan(plan: ShadowPlan, *, shadow_root: Path) -> tuple[int
     byte_count = 0
     try:
         # The copy holds staged source, so keep it private even when the caller
-        # puts it somewhere other than a 0700 temp parent.
+        # puts it somewhere other than a 0700 temp parent. Only a root this
+        # call created is cleaned up on failure: an existing one is not ours.
         shadow_root.mkdir(mode=0o700, parents=True, exist_ok=False)
+    except OSError as exc:
+        raise EditorError(
+            "SHADOW_COPY_FAILED",
+            "could not create the shadow project",
+            {"path": str(shadow_root)},
+        ) from exc
+    try:
         for relative_dir in plan.directories:
             destination_dir = shadow_root / relative_dir
             destination_dir.mkdir(parents=True, exist_ok=True)

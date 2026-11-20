@@ -652,6 +652,8 @@ versioning.
 - The activity journal keeps an entry whose receipt holds an undecodable
   path past the first 32, and pruning never deletes the sidecar just
   written, even after the clock moved backward.
+- A shadow lint (`renforge_validate`, the Live Editor gate) whose shadow
+  folder already exists fails without deleting that folder.
 
 ## [0.7.6] - 2026-11-18
 

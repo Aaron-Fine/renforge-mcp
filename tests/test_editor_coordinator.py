@@ -1202,6 +1202,23 @@ def test_shadow_enforces_file_quota_and_removes_partial_copy(
     assert not shadow_root.exists()
 
 
+def test_shadow_build_never_deletes_an_existing_root(tmp_path: Path) -> None:
+    import renforge.editor.shadow as shadow
+
+    project, _source = _make_project(tmp_path)
+    plan = shadow.plan_shadow_project(project)
+    shadow_root = tmp_path / "already-there"
+    shadow_root.mkdir()
+    keep = shadow_root / "keep.txt"
+    keep.write_text("not ours\n", encoding="utf-8")
+
+    with pytest.raises(EditorError) as excinfo:
+        shadow._build_shadow_from_plan(plan, shadow_root=shadow_root)
+
+    assert excinfo.value.code == "SHADOW_COPY_FAILED"
+    assert keep.read_text(encoding="utf-8") == "not ours\n"
+
+
 def test_shadow_quota_error_reports_measurements(monkeypatch, tmp_path: Path) -> None:
     import renforge.editor.shadow as shadow
 
