@@ -183,8 +183,8 @@ host enforcement (`RENFORGE_POLICY=enforce`, see Recipe 3).
 `renforge_session(action="launch")` always isolates: its saves and
 preferences live in the project's RenForge state folder (kept across
 launches, never the player's), and HOME is a private one; if that saves
-folder resolves anywhere else (a link planted in the state folder), the
-launch is refused with `code="SESSION_NOT_ISOLATED"` before anything starts.
+folder, or any folder on the way to it, is a link (one planted in the state
+folder, even to another folder there), the launch is refused with `code="SESSION_NOT_ISOLATED"` before anything starts.
 Its `save`,
 `load`, and `list` act only on a game whose saves and HOME are in RenForge's
 own folders (the state folder or a session root, by what the game's bridge
