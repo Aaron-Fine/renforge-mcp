@@ -2048,6 +2048,48 @@ def test_shadow_unreadable_directory_fails_instead_of_looking_complete(
     assert excinfo.value.details["path"] == str(unreadable)
 
 
+@pytest.mark.parametrize(
+    ("lint_error", "expected_code"),
+    [
+        (EditorError("SHADOW_LINT_BROKEN", "lint broke"), "SHADOW_LINT_BROKEN"),
+        (OSError("launcher vanished"), "SHADOW_LINT_FAILED"),
+        (RuntimeError("unexpected"), None),
+    ],
+)
+def test_shadow_cleanup_failure_does_not_replace_the_lint_failure(
+    monkeypatch, tmp_path: Path, lint_error: Exception, expected_code: str | None
+) -> None:
+    import renforge.editor.shadow as shadow
+
+    project, _source = _make_project(tmp_path)
+
+    def _lint(*_args, **_kwargs):
+        raise lint_error
+
+    def _cleanup(_root: Path) -> None:
+        raise EditorError("SHADOW_CLEANUP_FAILED", "could not remove the validation shadow project")
+
+    monkeypatch.setattr(shadow, "run_shadow_lint", _lint)
+    monkeypatch.setattr(shadow, "remove_shadow_project", _cleanup)
+
+    with pytest.raises(Exception) as excinfo:
+        shadow.validate_shadow_project(
+            project,
+            _make_sdk(tmp_path),
+            shadow_root=tmp_path / "shadow-cleanup-fails",
+            staged_replacements={},
+            timeout=15,
+        )
+
+    if expected_code is None:
+        assert excinfo.value is lint_error
+        assert any("SHADOW_CLEANUP_FAILED" in note for note in excinfo.value.__notes__)
+    else:
+        assert isinstance(excinfo.value, EditorError)
+        assert excinfo.value.code == expected_code
+        assert excinfo.value.details["cleanup_error"] == "SHADOW_CLEANUP_FAILED"
+
+
 def test_shadow_lint_failure_is_not_success(tmp_path: Path) -> None:
     from renforge.editor.shadow import run_shadow_lint
 

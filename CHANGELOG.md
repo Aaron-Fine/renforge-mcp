@@ -654,6 +654,8 @@ versioning.
   written, even after the clock moved backward.
 - A shadow lint (`renforge_validate`, the Live Editor gate) whose shadow
   folder already exists fails without deleting that folder.
+- A shadow lint that fails and then cannot remove its shadow reports the
+  lint error, with `cleanup_error` in its details, not `SHADOW_CLEANUP_FAILED`.
 
 ## [0.7.6] - 2026-11-18
 

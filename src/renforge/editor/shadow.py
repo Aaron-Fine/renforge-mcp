@@ -903,6 +903,17 @@ def remove_shadow_project(shadow_root: Path) -> None:
         ) from exc
 
 
+def _remove_shadow_after_failure(shadow_root: Path, failure: BaseException) -> None:
+    """Clean up after a failed lint without letting cleanup replace that error."""
+    try:
+        remove_shadow_project(shadow_root)
+    except EditorError as cleanup:
+        if isinstance(failure, EditorError):
+            failure.details["cleanup_error"] = cleanup.code
+        else:
+            failure.add_note(f"{cleanup.code}: {cleanup.message}")
+
+
 def run_shadow_lint(
     project: RenpyProject,
     sdk: RenpySdk,
@@ -987,20 +998,21 @@ def validate_shadow_project(
             timeout=timeout,
             error_code=error_code,
         )
-    except EditorError:
+    except EditorError as exc:
         if not keep_shadow:
-            remove_shadow_project(shadow_root)
+            _remove_shadow_after_failure(shadow_root, exc)
         raise
     except (OSError, ValueError) as exc:
-        if not keep_shadow:
-            remove_shadow_project(shadow_root)
-        raise EditorError(
+        error = EditorError(
             "SHADOW_LINT_FAILED",
             "could not run Ren'Py lint in the shadow project",
-        ) from exc
-    except Exception:
+        )
         if not keep_shadow:
-            remove_shadow_project(shadow_root)
+            _remove_shadow_after_failure(shadow_root, error)
+        raise error from exc
+    except Exception as exc:
+        if not keep_shadow:
+            _remove_shadow_after_failure(shadow_root, exc)
         raise
 
     result = replace(
