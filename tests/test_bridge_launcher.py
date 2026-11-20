@@ -2857,6 +2857,54 @@ def test_a_savedir_in_the_state_folder_is_made_without_following_links(monkeypat
     assert saves.is_dir() and not saves.is_symlink()
 
 
+def test_a_savedir_spelled_through_an_alias_of_the_state_folder_is_still_made_without_following_links(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Where the savedir lands decides, not how it is spelled: an alias of the state folder gets no pass."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project, sdk, project_root = _make_project(tmp_path)
+    other = tmp_path / "state" / "projects" / "another-project" / "saves"
+    other.mkdir(parents=True)
+    saves = project_state_dir(project_root) / "saves"
+    saves.parent.mkdir(parents=True)
+    alias = tmp_path / "alias"
+    try:
+        os.symlink(tmp_path / "state", alias, target_is_directory=True)
+        os.symlink(other, saves, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    spelled = alias / saves.relative_to(tmp_path / "state")
+
+    refused = _launch_until_token_check(sdk, project, monkeypatch, str(spelled))
+
+    assert refused.code == "SESSION_NOT_ISOLATED", refused.message
+    assert list(other.iterdir()) == []
+
+    # Without the planted link, the alias spelling is fine and gets a real folder.
+    saves.unlink()
+    assert _launch_until_token_check(sdk, project, monkeypatch, str(spelled)).code == "BRIDGE_TOKEN_INVALID"
+    assert saves.is_dir() and not saves.is_symlink()
+
+
+def test_a_link_from_outside_into_the_middle_of_the_state_folder_is_refused(monkeypatch, tmp_path: Path) -> None:
+    """A savedir that enters the state folder below its top cannot be vouched for, so it fails closed."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project, sdk, _root = _make_project(tmp_path)
+    inside = tmp_path / "state" / "projects" / "another-project"
+    inside.mkdir(parents=True)
+    try:
+        os.symlink(inside, tmp_path / "shortcut", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+
+    refused = _launch_until_token_check(sdk, project, monkeypatch, str(tmp_path / "shortcut" / "saves"))
+
+    assert refused.code == "SESSION_NOT_ISOLATED", refused.message
+    assert not (inside / "saves").exists()
+
+
 def test_a_savedir_outside_the_state_folder_may_sit_behind_a_link(monkeypatch, tmp_path: Path) -> None:
     """Only the state folder is made no-follow: a chosen savedir elsewhere behind a symlink still works."""
     monkeypatch.setenv("DISPLAY", ":0")

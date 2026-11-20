@@ -1042,33 +1042,79 @@ def normalize_language(language: str | None) -> str | None:
     return value
 
 
+def _state_savedir_spelling(savedir: str) -> Path | None:
+    """Return ``savedir`` spelled from the resolved state folder, or None when it lands elsewhere.
+
+    The decision follows where the path actually lands, not how it is
+    spelled, so an alias of the state folder (an unresolved
+    ``RENFORGE_STATE_DIR``, or a linked ``/home``) gets no pass. The
+    returned spelling starts at the resolved :func:`state_root` and keeps
+    the rest of the path unresolved, ready for a no-follow create. It
+    fails closed with ``SESSION_NOT_ISOLATED`` when the path cannot be
+    resolved, or when it enters the state folder below its top through a
+    link, since no part of the state tree may choose where a launch saves.
+    """
+    root = state_root()
+    target = Path(os.path.normpath(Path(savedir).expanduser().absolute()))
+    if _is_within(target, root):
+        return target
+    parts = target.parts
+    try:
+        if not _is_within(target.resolve(), root):
+            return None
+        for depth in range(1, len(parts) + 1):
+            landed = Path(*parts[:depth]).resolve()
+            if landed == root:
+                return root.joinpath(*parts[depth:])
+            if _is_within(landed, root):
+                break
+    except (OSError, RuntimeError) as exc:
+        raise _state_savedir_refusal(f"could not tell where {savedir!r} leads: {exc}") from exc
+    raise _state_savedir_refusal(f"{savedir!r} enters it through a link below its top")
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """Return True when ``path`` is ``root`` or lexically below it."""
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _state_savedir_refusal(detail: str) -> LaunchError:
+    """Build the refusal for a savedir in the state folder that a link could redirect."""
+    return LaunchError(
+        "SESSION_NOT_ISOLATED",
+        f"The saves folder in the RenForge state folder is a link or not a folder ({detail}), "
+        "so the launch would not be isolated.",
+        phase="preparing_isolation",
+        suggested_fix="Remove the link from the RenForge state folder and launch again.",
+    )
+
+
 def _make_state_savedir(savedir: str | None) -> str | None:
     """Make a savedir in RenForge's state folder without following links; return the savedir to use.
 
     A link planted on the way (even to another folder of the state tree)
     must not choose where the launch saves, so such a folder is made here
-    before :func:`resolve_launch_isolation` resolves it. A savedir anywhere
-    else is returned unchanged: one the caller chose may sit behind a link.
+    before :func:`resolve_launch_isolation` resolves it. Whether a savedir
+    is in the state folder is judged by where it lands, so a spelling
+    through a link to the state folder is caught too (see
+    :func:`_state_savedir_spelling`). A savedir that lands anywhere else is
+    returned unchanged: one the caller chose may sit behind a link.
     Ren'Py still opens its save files by path later, so this narrows, but
     cannot close, the window in which a link swapped in redirects them.
     """
     if savedir is None or classify_savedir(savedir) != "path":
         return savedir
-    target = Path(os.path.normpath(Path(savedir).expanduser().absolute()))
-    try:
-        target.relative_to(state_root())
-    except ValueError:
+    target = _state_savedir_spelling(savedir)
+    if target is None:
         return savedir
     try:
         ensure_nofollow_directory(target)
     except PrivatePathError as exc:
-        raise LaunchError(
-            "SESSION_NOT_ISOLATED",
-            f"The saves folder in the RenForge state folder is a link or not a folder ({exc.message}), "
-            "so the launch would not be isolated.",
-            phase="preparing_isolation",
-            suggested_fix="Remove the link from the RenForge state folder and launch again.",
-        ) from exc
+        raise _state_savedir_refusal(exc.message) from exc
     return str(target)
 
 
