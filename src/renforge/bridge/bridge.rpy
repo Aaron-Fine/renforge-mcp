@@ -1488,8 +1488,10 @@ init python:
                 if inline and _renforge_is_script_control_flow(exc):
                     # The engine restarts into the loaded game after the reply.
                     _renforge_emit_business("load.completed", slot=slot, restored_label=None)
-                    setattr(exc, "renforge_result", {"ok": True, "slot": slot,
-                        "restored_label": None, "restarting": True})
+                    restart = {"ok": True, "slot": slot, "restored_label": None, "restarting": True}
+                    if rescan_error is not None:
+                        restart["rescan_error"] = rescan_error
+                    setattr(exc, "renforge_result", restart)
                 raise
 
         _renforge_invoke(_do_load)

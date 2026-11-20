@@ -377,3 +377,25 @@ def test_shared_coordinate_errors_do_not_name_click_at(running_bridge):
         "hit_test", {"x": 5000, "y": 5, "coordinate_space": "screenshot"})
     assert reply["ok"] is False
     assert reply["error"] == "point is outside the screenshot"
+
+
+def test_an_inline_load_restart_keeps_the_rescan_warning(running_bridge, monkeypatch):
+    """A failed rescan with a slot Ren'Py still lists: the restart reply says so."""
+    renpy = running_bridge.renpy
+    RestartTopContext = type("RestartTopContext", (Exception,), {})
+    renpy.game = types.SimpleNamespace(RestartTopContext=RestartTopContext)
+    renpy.can_load = lambda slot: True
+
+    def scan():
+        raise OSError("savedir unreadable")
+
+    def load(slot):
+        raise RestartTopContext()
+
+    monkeypatch.setattr(renpy, "loadsave", types.SimpleNamespace(location=types.SimpleNamespace(scan=scan)),
+                        raising=False)
+    renpy.load = load
+    monkeypatch.delattr(renpy, "invoke_in_main_thread", raising=False)
+    reply = running_bridge.client.load_slot("teams")
+    assert reply["ok"] is True and reply["restarting"] is True
+    assert reply["rescan_error"] == "OSError: savedir unreadable"
