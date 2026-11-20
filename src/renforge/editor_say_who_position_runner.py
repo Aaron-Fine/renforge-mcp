@@ -153,12 +153,16 @@ def run_editor_say_who_style_position_live_scenario(
         b"define gui.name_ypos = gui.scale(0)",
         b"define gui.name_ypos = gui.scale(30)",
     )
-    last_status, bridge_failure = wait_for_transaction(client, gui_path, expected_committed)
-    if not last_status or last_status.get("status_code") != "reload_committed":
+    wait = wait_for_transaction(client, gui_path, expected_committed)
+    if not wait.completed:
+        # A timeout can end on a reload_committed status; only ``completed``
+        # says the reload finished with the expected bytes.
         report["verdict"] = "fail"
         report["error"] = "commit timeout"
-        report["last_status"] = last_status
-        report["bridge_failure"] = bridge_failure
+        report["last_status"] = wait.last_status
+        report["bridge_failure"] = wait.bridge_failure
+        if wait.source_error:
+            report["source_error"] = wait.source_error
         return report
 
     gui_source_after_commit = gui_path.read_bytes()
@@ -206,10 +210,15 @@ def run_editor_say_who_style_position_live_scenario(
 
     undo_click = client.click_element(id="rf_undo", screen="_renforge_editor_overlay")
     report["undo_click"] = undo_click
-    undo_status, undo_bridge_failure = wait_for_transaction(client, gui_path, gui_source_initial)
-    report["undo_status_code"] = undo_status.get("status_code") if undo_status else None
-    if undo_bridge_failure:
-        report["undo_bridge_failure"] = undo_bridge_failure
+    undo_wait = wait_for_transaction(client, gui_path, gui_source_initial)
+    report["undo_completed"] = undo_wait.completed
+    report["undo_status_code"] = (
+        undo_wait.last_status.get("status_code") if undo_wait.last_status else None
+    )
+    if undo_wait.bridge_failure:
+        report["undo_bridge_failure"] = undo_wait.bridge_failure
+    if undo_wait.source_error:
+        report["undo_source_error"] = undo_wait.source_error
     gui_source_after_undo = gui_path.read_bytes()
     report["undo_byte_identical"] = gui_source_after_undo == gui_source_initial
     client.eval_expr(
@@ -223,10 +232,15 @@ def run_editor_say_who_style_position_live_scenario(
 
     redo_click = client.click_element(id="rf_redo", screen="_renforge_editor_overlay")
     report["redo_click"] = redo_click
-    redo_status, redo_bridge_failure = wait_for_transaction(client, gui_path, gui_source_after_commit)
-    report["redo_status_code"] = redo_status.get("status_code") if redo_status else None
-    if redo_bridge_failure:
-        report["redo_bridge_failure"] = redo_bridge_failure
+    redo_wait = wait_for_transaction(client, gui_path, gui_source_after_commit)
+    report["redo_completed"] = redo_wait.completed
+    report["redo_status_code"] = (
+        redo_wait.last_status.get("status_code") if redo_wait.last_status else None
+    )
+    if redo_wait.bridge_failure:
+        report["redo_bridge_failure"] = redo_wait.bridge_failure
+    if redo_wait.source_error:
+        report["redo_source_error"] = redo_wait.source_error
     report["redo_byte_identical"] = gui_path.read_bytes() == gui_source_after_commit
     client.eval_expr(
         f'renpy.show_screen("say", who="{SPEAKER}", what="Redo line", _layer="screens")'
@@ -247,8 +261,10 @@ def run_editor_say_who_style_position_live_scenario(
         and report.get("only_gui_position_changed")
         and report.get("screens_source_unchanged")
         and report.get("committed_geometry_correct")
+        and report.get("undo_completed")
         and report.get("undo_byte_identical")
         and report.get("undo_geometry_restored")
+        and report.get("redo_completed")
         and report.get("redo_byte_identical")
         and report.get("redo_geometry_correct")
         else "fail"
