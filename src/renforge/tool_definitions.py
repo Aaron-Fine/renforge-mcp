@@ -299,12 +299,13 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             ),
             "keep_shadow": "Keep the temporary shadow after validation and return `shadow_path`; cleanup then belongs to the caller.",
             "timeout": (
-                "Lint timeout in seconds. `0` derives `min(180, max(1, attestation_timeout*3))` (90 seconds by "
-                "default); explicit values are clamped to 1-600."
+                "Lint timeout in seconds, from 0-600. `0` derives `min(180, max(1, attestation_timeout*3))` "
+                "(90 seconds by default); a value below 1 second is raised to 1."
             ),
         },
         parameter_schemas={
-            "checks": {"items": _enum("lint")},
+            # Applies to the array branch only: omitted and null stay valid.
+            "checks": {"items": _enum("lint"), "minItems": 1, "maxItems": 1},
             "staged": {"type": "object", "additionalProperties": {"type": "string"}},
             "timeout": _limits(0, 600),
         },

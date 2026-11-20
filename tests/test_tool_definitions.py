@@ -707,3 +707,25 @@ def test_launch_guidance_describes_the_home_the_launch_resolves_to(tmp_path, mon
     assert owned(inside, None)
     for text in (tool_definitions._LAUNCH_POLICY, tool_definitions._LAUNCH_AUTHORIZE):
         assert "makes an omitted `home` temporary" in text or "an omitted `home` is a temporary HOME" in text
+
+
+def test_validate_schema_admits_only_the_documented_checks_and_timeouts() -> None:
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    pytest.importorskip("jsonschema")
+    from jsonschema import Draft202012Validator
+
+    tools = asyncio.run(create_app().list_tools())
+    schema = next(tool.parameters for tool in tools if tool.name == "renforge_validate")
+    validator = Draft202012Validator(schema)
+
+    def valid(**arguments) -> bool:
+        return validator.is_valid({"project_path": "/tmp/game", **arguments})
+
+    # checks: omitted, null, or exactly ["lint"].
+    assert valid() and valid(checks=None) and valid(checks=["lint"])
+    assert not valid(checks=[]) and not valid(checks=["lint", "lint"])
+    # timeout: the schema's range is the accepted range; the text must not
+    # promise to clamp values the schema refuses.
+    assert valid(timeout=0) and valid(timeout=600) and not valid(timeout=601)
+    text = schema["properties"]["timeout"]["description"]
+    assert "0-600" in text and "clamped to 1-600" not in text

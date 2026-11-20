@@ -633,6 +633,10 @@ versioning.
 - `RENFORGE_TOOLSETS` with an unknown name beside `all` (`all,projecct`)
   stops the server at startup like any unknown name, instead of listing
   every group.
+- `renforge_validate`'s schema admits `checks` only as `["lint"]` (or
+  omitted or `null`), as its description says, and its `timeout` text
+  states the accepted 0-600 range instead of promising to clamp values the
+  schema refuses.
 
 ## [0.7.6] - 2026-11-18
 

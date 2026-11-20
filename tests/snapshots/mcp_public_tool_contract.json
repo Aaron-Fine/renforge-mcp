@@ -297,7 +297,9 @@
               "lint"
             ],
             "type": "string"
-          }
+          },
+          "maxItems": 1,
+          "minItems": 1
         },
         "staged": {
           "anyOf": [
@@ -321,7 +323,7 @@
         },
         "timeout": {
           "default": 0,
-          "description": "Lint timeout in seconds. `0` derives `min(180, max(1, attestation_timeout*3))` (90 seconds by default); explicit values are clamped to 1-600.",
+          "description": "Lint timeout in seconds, from 0-600. `0` derives `min(180, max(1, attestation_timeout*3))` (90 seconds by default); a value below 1 second is raised to 1.",
           "maximum": 600,
           "minimum": 0,
           "type": "number"

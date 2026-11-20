@@ -1135,7 +1135,9 @@ eligible because its placeholders let lint validate references.
 such as `8.5.3`; the result reports the resolved `sdk_version`. `timeout=0`
 derives
 `min(180, max(1, attestation_timeout*3))` (90 seconds with the default 30-second
-attestation budget); explicit values are clamped to 1-600 seconds. Lint runs
+attestation budget). The tool accepts 0-600 seconds (601 is refused by the
+schema), and an explicit value below 1 second is raised to 1. `checks` is
+omitted, `null`, or exactly `["lint"]`. Lint runs
 with `--error-code`, so reported lint errors produce a non-zero return code.
 `ok` is false for a timeout. `renforge_validate` also reports `ok=false` for a
 truncated transcript, because it always uses `--error-code` and a report it
