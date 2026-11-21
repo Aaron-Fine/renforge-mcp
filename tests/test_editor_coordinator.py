@@ -5422,13 +5422,15 @@ def test_editor_save_receipt_reads_only_a_completed_commit() -> None:
     view = _editor_public_view(raw, action="save", frame_id="frame-1")
     assert "files_touched" not in view
 
-    already_prefixed = {
+    # The record is always game-relative, so game/game/hud.rpy is stored
+    # as game/hud.rpy and must not be mistaken for game/hud.rpy itself.
+    nested_game_folder = {
         "last_commit_status": {
             "state": "committed",
-            "source_relative_path": "game/screens.rpy",
+            "source_relative_path": "game/hud.rpy",
         }
     }
-    assert _editor_saved_paths(already_prefixed) == ["game/screens.rpy"]
+    assert _editor_saved_paths(nested_game_folder) == ["game/game/hud.rpy"]
     assert _editor_saved_paths({"last_commit_status": {"state": "failed"}}) == []
     assert _editor_saved_paths({"last_commit_status": None}) == []
 

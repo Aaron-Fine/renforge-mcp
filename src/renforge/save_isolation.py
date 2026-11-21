@@ -34,6 +34,7 @@ import sys
 import tempfile
 import zipfile
 from collections.abc import Iterator
+from itertools import islice
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
@@ -595,9 +596,12 @@ def storage_is_renforge_owned(
 
     It must be under the state folder or in a session root, and must not
     reach the player's storage anyway. Anything else, or anything that is
-    not a usable path, counts as the player's.
+    not a usable path, counts as the player's. So does a relative path: the
+    game resolves it against its own working directory, not the server's.
     """
-    if not (isinstance(path, str) and path) or not location_is_renforge_owned(path):
+    if not (isinstance(path, str) and path and Path(path).is_absolute()):
+        return False
+    if not location_is_renforge_owned(path):
         return False
     if home:
         return not home_exposes_user_saves(path)
@@ -673,10 +677,29 @@ def path_in_session_root(value: str | Path) -> bool:
     """
     try:
         resolved = Path(value).expanduser().resolve()
-        relative = resolved.relative_to(Path(tempfile.gettempdir()).resolve())
+        temp = Path(tempfile.gettempdir()).resolve()
+        relative = resolved.relative_to(temp)
     except (OSError, RuntimeError, ValueError, TypeError):
         return False
-    return bool(relative.parts) and relative.parts[0].startswith(SESSION_PREFIX)
+    if not (relative.parts and relative.parts[0].startswith(SESSION_PREFIX)):
+        return False
+    return _session_root_is_ours(temp / relative.parts[0])
+
+
+def _session_root_is_ours(root: Path) -> bool:
+    """On POSIX, a root another user made in the shared temp dir is not one.
+
+    ``mkdtemp`` makes a session root as this user, so a root that is missing,
+    a link, not a folder, or someone else's fails closed. Windows keeps a
+    per-user temp dir and is not checked here.
+    """
+    if not hasattr(os, "getuid"):
+        return True
+    try:
+        st = root.lstat()
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid()
 
 
 def path_is_host_home(value: str | Path, *, home: Path | None = None) -> bool:
@@ -790,17 +813,19 @@ def parse_save_directory(project_root: str | Path) -> str | None:
     game_dir = Path(project_root) / "game"
     if not game_dir.is_dir():
         return None
+    # Resolve the folder only (a linked game library is fine); the script
+    # itself is opened without following a link out of the project.
+    try:
+        game_dir = game_dir.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
     candidates = [game_dir / "options.rpy", *sorted(game_dir.glob("*.rpy"))]
     seen: set[Path] = set()
     for path in candidates:
-        try:
-            resolved = path.resolve()
-        except (OSError, RuntimeError, ValueError):
+        if path in seen:
             continue
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        text = _read_script_bounded(resolved)
+        seen.add(path)
+        text = _read_script_bounded(path)
         if text is None:
             continue
         match = SAVE_DIRECTORY_RE.search(text)
@@ -1023,7 +1048,8 @@ def select_host_slots(
     holding a session open: a slow listing must never delay a stop.
     """
     if slots is not None and not isinstance(slots, (str, bytes)) and isinstance(slots, Iterable):
-        slots = list(slots)
+        # One past the cap is enough for selector_error to refuse it.
+        slots = list(islice(slots, SELECTOR_MAX_SLOTS + 1))
     error = selector_error(slot=slot, slots=slots, pattern=pattern)
     if error is None and slot is None and not slots and pattern is None:
         error = "import requires slot, slots, or pattern"

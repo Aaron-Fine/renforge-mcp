@@ -1128,7 +1128,14 @@ def test_import_copies_a_long_but_valid_slot_name(tmp_path: Path, host_save_root
     # name failed with ENAMETOOLONG and aborted the import.
     project, host_saves = _host_project(tmp_path, host_save_root)
     name = "s" * 240 + "-LT1.save"
-    (host_saves / name).write_bytes(b"SLOT")
+    try:
+        (host_saves / name).write_bytes(b"SLOT")
+    except OSError:
+        if sys.platform != "win32":
+            raise
+        # The full path passes MAX_PATH; Windows refuses it unless long
+        # paths are enabled (the Windows CI job passes, so it allows them).
+        pytest.skip("Windows long paths are disabled")
     dest = tmp_path / "session" / "saves"
     dest.mkdir(parents=True)
 
@@ -1287,14 +1294,44 @@ def test_live_import_requires_a_temporary_session(
     assert list(chosen.iterdir()) == []
 
 
+def _within_fifo_deadline(call, fifo: Path, what: str):
+    """Return ``call()``, or fail the test if it is still blocked after 5 s.
+
+    The call runs on a daemon thread, so a regression that blocks opening
+    *fifo* fails this test instead of hanging the suite. A thread, not a
+    child process, because the call depends on this test's monkeypatches.
+    """
+    import threading
+
+    outcome: dict[str, object] = {}
+
+    def run() -> None:
+        try:
+            outcome["value"] = call()
+        except BaseException as exc:  # re-raised on the test's thread
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    if worker.is_alive():
+        # Free a reader blocked in open(). With no reader there yet the open
+        # fails (ENXIO); the failure below must still be reported.
+        with contextlib.suppress(OSError):
+            os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        worker.join(timeout=5)
+        pytest.fail(f"{what} blocked opening a FIFO")
+    if "error" in outcome:
+        raise outcome["error"]  # type: ignore[misc]
+    return outcome["value"]
+
+
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
 def test_a_fifo_swapped_in_for_options_rpy_cannot_hang_the_listing(
     tmp_path: Path, host_save_root: Path, monkeypatch
 ) -> None:
     # Security probe p6: options.rpy becomes a FIFO between the check and
     # the read. The read must refuse it at once, not wait for a writer.
-    import threading
-
     import renforge.save_isolation as save_isolation
 
     project, host_saves = _host_project(tmp_path, host_save_root)
@@ -1326,20 +1363,11 @@ def test_a_fifo_swapped_in_for_options_rpy_cannot_hang_the_listing(
 
     monkeypatch.setattr(Path, "is_file", is_file_then_swap)
     monkeypatch.setattr(save_isolation, "open_regular_at_nofollow", swap_then_open)
-    results: list[dict] = []
-    worker = threading.Thread(
-        target=lambda: results.append(list_host_slots(project, home=tmp_path / "home")),
-        daemon=True,
+    result = _within_fifo_deadline(
+        lambda: list_host_slots(project, home=tmp_path / "home"), options, "list_host_slots"
     )
-    worker.start()
-    worker.join(timeout=5)
-    if worker.is_alive():  # free the reader so the suite can go on
-        fd = os.open(options, os.O_WRONLY | os.O_NONBLOCK)
-        os.close(fd)
-        worker.join(timeout=5)
-        pytest.fail("list_host_slots blocked opening a FIFO")
     assert swapped
-    assert [slot["name"] for slot in results[0]["slots"]] == ["1-1"]
+    assert [slot["name"] for slot in result["slots"]] == ["1-1"]
 
 
 def test_parse_save_directory_skips_a_script_over_the_read_cap(tmp_path: Path) -> None:
@@ -1386,19 +1414,25 @@ def test_live_import_lists_before_taking_the_close_lock(
         temporary_savedir=dest,
         isolation=SimpleNamespace(savedir_mode="temporary", session_root=dest.parent),
     )
-    seen: dict[str, list[bool]] = {"parse": [], "copy": []}
+    seen: dict[str, list[bool]] = {"parse": [], "list": [], "copy": []}
     real_parse = save_isolation.parse_save_directory
+    real_list = save_isolation._list_slots
     real_copy = save_isolation._copy_slot_files
 
     def parse(*args, **kwargs):
         seen["parse"].append(session.held)
         return real_parse(*args, **kwargs)
 
+    def list_slots(*args, **kwargs):
+        seen["list"].append(session.held)
+        return real_list(*args, **kwargs)
+
     def copy(*args, **kwargs):
         seen["copy"].append(session.held)
         return real_copy(*args, **kwargs)
 
     monkeypatch.setattr(save_isolation, "parse_save_directory", parse)
+    monkeypatch.setattr(save_isolation, "_list_slots", list_slots)
     monkeypatch.setattr(save_isolation, "_copy_slot_files", copy)
     live._SESSIONS[live._key(project)] = session  # type: ignore[assignment]
     try:
@@ -1408,6 +1442,7 @@ def test_live_import_lists_before_taking_the_close_lock(
 
     assert result["ok"] is True
     assert seen["parse"] and not any(seen["parse"])
+    assert seen["list"] and not any(seen["list"])
     assert seen["copy"] and all(seen["copy"])
 
 
@@ -1469,7 +1504,10 @@ def test_import_refuses_a_fifo_swapped_in_for_a_save(
         return real_copy(source, destination, slot)
 
     monkeypatch.setattr(save_isolation, "_copy_slot_files", fifo_then_copy)
-    result = import_host_slots(project, dest, slot="1-1", home=tmp_path / "home")
+    result = _within_fifo_deadline(
+        lambda: import_host_slots(project, dest, slot="1-1", home=tmp_path / "home"),
+        host_saves / "1-1-LT1.save", "import_host_slots",
+    )
 
     assert result["ok"] is False
     assert result["refused"] == [{"name": "1-1", "file": "1-1-LT1.save", "reason": "not_regular"}]
@@ -2036,3 +2074,71 @@ def test_inside_compares_path_parts_case_insensitively(path, root, inside: bool)
     from renforge.save_isolation import _inside
 
     assert _inside(path, root) is inside
+
+
+def test_a_relative_reported_save_location_is_never_renforge_owned(monkeypatch) -> None:
+    # The game resolves a relative config.extra_savedirs entry against its
+    # own working directory, so the server's cannot vouch for it.
+    from renforge.save_isolation import storage_is_renforge_owned
+    from renforge.state import state_root
+
+    inside = state_root() / "saves"
+    inside.mkdir(parents=True)
+    monkeypatch.chdir(state_root())
+
+    assert storage_is_renforge_owned(str(inside), home=False) is True
+    assert storage_is_renforge_owned("saves", home=False) is False
+    assert storage_is_renforge_owned("saves", home=True) is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_parse_save_directory_never_reads_a_script_through_a_link(tmp_path: Path) -> None:
+    # A linked options.rpy must not lend the declaration of a script
+    # outside the project; a linked project root is still read.
+    outside = tmp_path / "outside.rpy"
+    outside.write_text('define config.save_directory = "Outside"\n', encoding="utf-8")
+    project = tmp_path / "project"
+    game = project / "game"
+    game.mkdir(parents=True)
+    (game / "options.rpy").symlink_to(outside)
+    (game / "zz.rpy").write_text('define config.save_directory = "Inside"\n', encoding="utf-8")
+    linked_root = tmp_path / "library"
+    linked_root.symlink_to(project, target_is_directory=True)
+
+    assert parse_save_directory(project) == "Inside"
+    assert parse_save_directory(linked_root) == "Inside"
+
+
+def test_import_stops_reading_a_slot_iterable_past_the_limit(tmp_path: Path) -> None:
+    import renforge.save_isolation as save_isolation
+
+    consumed: list[int] = []
+
+    def names():
+        for index in range(save_isolation.SELECTOR_MAX_SLOTS * 5):
+            consumed.append(index)
+            yield f"{index}-1"
+
+    result = save_isolation.select_host_slots(tmp_path, slots=names(), home=tmp_path / "home")
+
+    assert result["code"] == "SAVE_IMPORT_INVALID"
+    assert len(consumed) == save_isolation.SELECTOR_MAX_SLOTS + 1
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+def test_a_session_root_another_user_made_is_not_renforge_owned(tmp_path: Path, monkeypatch) -> None:
+    # The shared temp dir lets anyone make a renforge-session-* folder;
+    # only one this user made, as mkdtemp does, is a session root.
+    import tempfile
+
+    from renforge.save_isolation import path_in_session_root
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    root = tmp_path / "renforge-session-x"
+    (root / "saves").mkdir(parents=True)
+    assert path_in_session_root(root / "saves") is True
+    assert path_in_session_root(tmp_path / "renforge-session-missing" / "saves") is False
+
+    real_getuid = os.getuid
+    monkeypatch.setattr(os, "getuid", lambda: real_getuid() + 1)
+    assert path_in_session_root(root / "saves") is False

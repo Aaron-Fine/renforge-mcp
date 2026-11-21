@@ -274,6 +274,12 @@ def classify(name: str, params: Mapping[str, Any] | None = None) -> tuple[str, s
         return "renforge_wait_until", RISK_OBSERVATIONAL
     if name == "renforge_set_var":
         return name, RISK_MUTATING
+    if name == "renforge_validate":
+        # Lint runs staged init code with the server's privileges, like eval;
+        # without it, it lints the project's own code, like renforge_mod lint.
+        if payload.get("staged"):
+            return "renforge_validate.staged", RISK_OPEN_WORLD
+        return name, RISK_OBSERVATIONAL
     if name == "renforge_run_scenario":
         return _classify_scenario(payload.get("steps"))
     if name in _LAUNCH_TOOLS:

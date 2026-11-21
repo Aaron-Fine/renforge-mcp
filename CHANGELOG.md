@@ -7,6 +7,8 @@ versioning.
 
 ### Changed
 
+- Under `RENFORGE_POLICY=enforce`, `renforge_validate` with `staged` bytes
+  needs `authorize=true`: lint runs their init code, like `renforge_eval`.
 - Under `RENFORGE_POLICY=enforce`, reading the player's own saves needs
   `authorize=true`: `renforge_saves` `list_user` and `import` and
   `renforge_session` `import` are destructive, and `renforge_session list`
@@ -568,6 +570,23 @@ versioning.
   the engine widget.
 - Autopilot ends a run when the bridge refuses a choice and lists it under
   `choice_errors`, instead of counting the menu as explored.
+- A running game that reports a relative save location or HOME is never
+  treated as isolated: the game resolves it from its own working directory.
+- A stop whose cleanup fails no longer lists a dangling link it left behind
+  in `files_deleted`.
+- A stop that fails partway through removing the bridge files still lists
+  the ones it deleted in `files_deleted`.
+- Save listing no longer reads `config.save_directory` from a script outside
+  the project that a linked `game/*.rpy` points to.
+- `renforge_launch_status` drops a launch's language-mismatch message once
+  the game reports the requested language.
+- A ready `renforge_launch_status` for a launch task (an owned game or a
+  reused external one) includes `isolated` and `eval_enabled`, as documented.
+- A Live Editor save of a file under `game/game/` names that file in
+  `files_touched`, not `game/<file>`.
+- On POSIX, a `renforge-session-*` folder in the temp dir counts as a
+  session root only if it exists and this user owns it, so a running game
+  using one another user made is not treated as isolated.
 - A `save` or `load` slot that is a path rather than a slot name (absolute,
   with a drive, a `/` or `\` separator, a `:` (on Windows `page:name`
   writes a stream of the file `page`), or `.`/`..`) is refused with

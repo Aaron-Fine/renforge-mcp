@@ -488,3 +488,25 @@ def test_ready_launch_status_keeps_an_unreported_language_unknown(tmp_path):
     result = live._launch_task_status(task)
 
     assert result["language_applied"] is None
+
+
+def test_ready_launch_status_drops_the_mismatch_message_once_the_language_matches(tmp_path):
+    task = live._LaunchTask(tmp_path, requested_language="french")
+    task.lifecycle = "ready"
+    task.done_event.set()
+    task.session = types.SimpleNamespace(
+        editor=True,
+        process=types.SimpleNamespace(poll=lambda: None),
+        client=types.SimpleNamespace(get_state=lambda: {"current_label": "start", "language": "french"}),
+    )
+    task.result = {
+        "ok": True, "ready": True, "already_running": True, "language_applied": False,
+        "message": "The requested language cannot be applied to the already-running session.",
+        "warning": "kept",
+    }
+
+    result = live._launch_task_status(task)
+
+    assert result["language_applied"] is True
+    assert "message" not in result
+    assert result["warning"] == "kept"

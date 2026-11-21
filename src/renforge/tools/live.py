@@ -361,6 +361,7 @@ def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
             }
         try:
             state = session.client.get_state()
+            facts = _owned_session_facts(session)
             result = {
                 "ok": True,
                 "ready": True,
@@ -372,6 +373,8 @@ def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
                 "editor": bool(getattr(session, "editor", task.requested_editor)),
                 "elapsed_ms": elapsed_ms,
                 **_isolation_result(session),
+                "isolated": facts["isolated"],
+                "eval_enabled": facts["eval_running"],
                 **_startup_warning(session),
             }
             # A reused session answers through launch_game; keep its verdict
@@ -381,6 +384,9 @@ def _launch_task_status(task: _LaunchTask) -> dict[str, Any]:
                 if key in launch_result:
                     result[key] = launch_result[key]
             _apply_ready_language(result, task.requested_language)
+            if launch_result.get("language_applied") is False and result.get("language_applied") is not False:
+                # That launch's message was the language mismatch, which no longer holds.
+                result.pop("message", None)
             return result
         except Exception:
             # Stale ready: initiate close and report closing/failure.
@@ -1096,6 +1102,8 @@ def launch_game(
                 "editor": False,
                 # What the game itself reports; it has no session of this process.
                 "isolation": external_isolation,
+                "isolated": facts["isolated"],
+                "eval_enabled": facts["eval_running"],
                 "requested_language": language,
                 "active_language": active_language,
             }
@@ -1490,6 +1498,8 @@ def stop_external_game(project_path: str, *, timeout: float = 5.0) -> dict:
             "ok": False,
             "error": f"{type(exc).__name__}: {exc}",
             "was_running": True,
+            # A partial removal still deleted these; a retry cannot name them.
+            "files_deleted": removed,
         }
     finally:
         lock.release()
@@ -2732,7 +2742,8 @@ def _editor_saved_paths(raw: dict[str, Any]) -> list[str]:
 
     Editor transaction records store ``source_relative_path`` relative to the
     ``game/`` directory (for example ``screens.rpy``). Every receipt is
-    project-relative, so add the ``game/`` base unless it is already present.
+    project-relative, so always add the ``game/`` base: ``game/hud.rpy`` is
+    the file ``game/game/hud.rpy``.
     A record that is absolute or escapes its own base is not a shape this
     contract can describe, so no receipt is emitted rather than a guessed one.
     """
@@ -2748,8 +2759,6 @@ def _editor_saved_paths(raw: dict[str, Any]) -> list[str]:
     parts = normalized.split("/")
     if not normalized or normalized.startswith("/") or ":" in parts[0] or ".." in parts:
         return []
-    if normalized.startswith("game/"):
-        return [normalized]
     return ["game/" + normalized]
 
 

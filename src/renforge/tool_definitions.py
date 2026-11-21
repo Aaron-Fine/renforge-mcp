@@ -303,6 +303,10 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
                 "Lint timeout in seconds, from 0-600. `0` derives `min(180, max(1, attestation_timeout*3))` "
                 "(90 seconds by default); a value below 1 second is raised to 1."
             ),
+            "authorize": (
+                "Explicitly authorize `staged` bytes when `RENFORGE_POLICY=enforce`: lint runs their init code "
+                "with your privileges, like `renforge_eval`."
+            ),
         },
         parameter_schemas={
             # Applies to the array branch only: omitted and null stay valid.

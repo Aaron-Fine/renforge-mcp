@@ -342,8 +342,8 @@ def build_wrappers(context):
 
         ``path`` is the PNG's absolute path. ``relative_path`` and
         ``files_touched`` follow the receipt rule: project-relative inside the
-        project, else absolute, so with the default state folder
-        ``relative_path`` equals ``path``.
+        project, else absolute POSIX, so with the default state folder
+        ``relative_path`` is ``path`` in POSIX form (``/`` on every OS).
         """
         def _capture() -> dict:
             from io import BytesIO

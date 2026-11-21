@@ -327,6 +327,11 @@
           "maximum": 600,
           "minimum": 0,
           "type": "number"
+        },
+        "authorize": {
+          "default": false,
+          "description": "Explicitly authorize `staged` bytes when `RENFORGE_POLICY=enforce`: lint runs their init code with your privileges, like `renforge_eval`.",
+          "type": "boolean"
         }
       },
       "required": [

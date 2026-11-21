@@ -2,6 +2,7 @@ import errno
 import hashlib
 import json
 import os
+import shutil
 import signal
 import stat
 import sys
@@ -9,6 +10,8 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+
+_REAL_RMTREE = shutil.rmtree
 
 import pytest
 
@@ -623,6 +626,15 @@ def test_bridge_session_close_reports_a_removed_temporary_savedir(
     assert [Path(item) for item in result["files_deleted"]] == [savedir.resolve()]
 
 
+def _patch_launcher_rmtree(monkeypatch, rmtree) -> None:
+    """Replace rmtree for the launcher module only; the shared shutil stays real."""
+    import types
+
+    from renforge.bridge import launcher as launcher_module
+
+    monkeypatch.setattr(launcher_module, "shutil", types.SimpleNamespace(**{**vars(shutil), "rmtree": rmtree}))
+
+
 def test_partial_savedir_cleanup_still_reports_the_paths_it_removed(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -635,13 +647,12 @@ def test_partial_savedir_cleanup_still_reports_the_paths_it_removed(
     surviving_file = savedir / "2-1-LT1.save"
     surviving_file.write_text("save", encoding="utf-8")
 
-    from renforge.bridge import launcher as launcher_module
-
     def partial_rmtree(_path, **_kwargs):
         removed_file.unlink()
         raise OSError("locked")
 
-    monkeypatch.setattr(launcher_module.shutil, "rmtree", partial_rmtree)
+    _patch_launcher_rmtree(monkeypatch, partial_rmtree)
+    assert shutil.rmtree is _REAL_RMTREE  # other threads keep the real one
     session = BridgeSession(
         _FakeProcess(),
         _FakeClient(),
@@ -681,6 +692,36 @@ def test_cleanup_listing_never_walks_into_a_junction_in_the_session(monkeypatch,
     assert not any(path.is_relative_to(junction) and path != junction for path in listed)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_partial_savedir_cleanup_never_reports_a_dangling_link_it_left(
+    monkeypatch, tmp_path: Path
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    savedir = tmp_path / "renforge-saves"
+    savedir.mkdir()
+    dangling = savedir / "gone"
+    dangling.symlink_to(tmp_path / "missing")
+
+    def failing_rmtree(_path, **_kwargs):
+        raise OSError("locked")
+
+    _patch_launcher_rmtree(monkeypatch, failing_rmtree)
+    assert shutil.rmtree is _REAL_RMTREE  # other threads keep the real one
+    session = BridgeSession(
+        _FakeProcess(),
+        _FakeClient(),
+        project_root,
+        temporary_savedir=savedir,
+        cleanup_savedir=True,
+    )
+
+    result = session.close()
+
+    assert dangling.is_symlink()
+    assert result["files_deleted"] == []
+
+
 def test_close_waits_for_a_writer_holding_the_session_open(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
@@ -698,6 +739,24 @@ def test_close_waits_for_a_writer_holding_the_session_open(tmp_path: Path) -> No
     writing = threading.Event()
     release = threading.Event()
     closed = threading.Event()
+    blocked = threading.Event()
+
+    class _ReportingLock:
+        """The session's lock, reporting an acquire that has to wait."""
+
+        def __init__(self, lock) -> None:
+            self._lock = lock
+
+        def __enter__(self):
+            if not self._lock.acquire(blocking=False):
+                blocked.set()
+                self._lock.acquire()
+            return self
+
+        def __exit__(self, *_exc) -> None:
+            self._lock.release()
+
+    session._close_lock = _ReportingLock(session._close_lock)
 
     def writer() -> None:
         with session.holding_open() as session_open:
@@ -716,7 +775,9 @@ def test_close_waits_for_a_writer_holding_the_session_open(tmp_path: Path) -> No
     closer_thread = threading.Thread(target=closer)
     closer_thread.start()
 
-    # The stop must not remove the session root under an unfinished copy.
+    # The stop must not remove the session root under an unfinished copy:
+    # close() reached the lock, and waits there for the writer.
+    assert blocked.wait(timeout=5)
     assert not closed.wait(timeout=0.2)
     assert (savedir / "1-1-LT1.save").exists()
 

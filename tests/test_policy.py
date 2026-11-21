@@ -436,3 +436,37 @@ def test_launch_path_policy_reads_the_value_the_launch_uses(tmp_path, monkeypatc
     outside = tmp_path / "elsewhere"
     for params in ({"savedir": f" {outside}"}, {"home": f" {outside}"}, {"home": " ~/.ssh"}):
         assert evaluate("renforge_launch", params).risk == RISK_DESTRUCTIVE, params
+
+
+def test_validate_with_staged_source_needs_authorize_like_eval(monkeypatch, tmp_path) -> None:
+    """Lint runs staged init code with the server's privileges, so enforce denies it unapproved."""
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    from fastmcp import Client
+    from renforge.tools import validate
+
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    calls: list[object] = []
+    monkeypatch.setattr(validate, "validate_project",
+                        lambda project_path, **kwargs: calls.append(kwargs.get("staged")) or {"ok": True})
+
+    async def _call(**payload):
+        async with Client(create_app()) as client:
+            result = await client.call_tool(
+                "renforge_validate", {"project_path": str(tmp_path), **payload}, raise_on_error=False
+            )
+        return json.loads(next(block.text for block in result.content if block.type == "text"))
+
+    staged = {"game/zz.rpy": "init python:\n    import os\n"}
+    denied = asyncio.run(_call(staged=staged))
+    assert calls == []
+    assert denied["code"] == "POLICY_DENIED"
+    assert denied["policy"]["operation"] == "renforge_validate.staged"
+    assert denied["policy"]["risk"] == RISK_OPEN_WORLD
+
+    assert asyncio.run(_call(staged=staged, authorize=True)) == {"ok": True}
+    # Without staged source, lint runs only the project's own code, as a launch does.
+    assert asyncio.run(_call()) == {"ok": True}
+    assert calls == [staged, None]
+    # Like renforge_mod lint, which lints the same kind of shadow.
+    assert classify("renforge_validate", {"staged": []}) == ("renforge_validate", RISK_OBSERVATIONAL)
+    assert classify("renforge_mod", {"action": "lint"})[1] == RISK_OBSERVATIONAL
