@@ -6,7 +6,9 @@ every earlier capability available for existing clients, scripts, and the
 Live Editor, and are listed unless the server is limited to fewer groups.
 
 ``RENFORGE_TOOLSETS``: comma-separated group names, or ``all`` (the default).
-Unknown names stop the server at startup so a typo cannot hide tools.
+Unknown names, or a value that names no group, stop the server at startup so
+a typo cannot hide tools. ``renforge_info`` is listed whatever the selection:
+every workflow starts with it.
 """
 
 from __future__ import annotations
@@ -56,6 +58,8 @@ TOOLSETS: dict[str, tuple[str, ...]] = {
         "renforge_capture_screenshot",
         "renforge_diff_screenshots",
         "renforge_find_image_on_screen",
+        # Estimates the image shift between two captures, not a language.
+        "renforge_estimate_translation",
         "renforge_scene_tree",
         "renforge_measure",
     ),
@@ -85,13 +89,13 @@ TOOLSETS: dict[str, tuple[str, ...]] = {
         "renforge_find_references",
         "renforge_parse_lint",
         "renforge_assets",
+        "renforge_validate",
     ),
     "translation": (
         "renforge_languages",
         "renforge_translation_stats",
         "renforge_generate_translations",
         "renforge_export_dialogue",
-        "renforge_estimate_translation",
     ),
     "build": (
         "renforge_web_build",
@@ -105,39 +109,52 @@ TOOLSETS: dict[str, tuple[str, ...]] = {
 }
 
 
-def allowed_tools(known: Iterable[str], environ: Mapping[str, str] | None = None) -> set[str]:
-    """Return the tool names the server lists under the current environment."""
+# Listed by every server: it names the project and the listed groups.
+ALWAYS_LISTED: tuple[str, ...] = ("renforge_info",)
+
+
+def _selected_toolsets(environ: Mapping[str, str] | None) -> list[str]:
+    """Parse ``RENFORGE_TOOLSETS`` into group names, in catalogue order.
+
+    Empty or ``all`` selects every group. Raises ``RuntimeError`` for an
+    unknown name or a value that names no group (``","``).
+    """
     env = os.environ if environ is None else environ
-    known_set = set(known)
     raw = env.get(TOOLSETS_ENV, "").strip()
-    if raw in ("", "all"):
-        return known_set
-    names: set[str] = set()
-    unknown: list[str] = []
-    for token in (part.strip() for part in raw.split(",")):
-        if not token:
-            continue
-        if token == "all":
-            return known_set
-        if token in TOOLSETS:
-            names |= set(TOOLSETS[token])
-        else:
-            unknown.append(token)
-    if unknown:
+    if raw == "":
+        return list(TOOLSETS)
+    tokens = [part.strip() for part in raw.split(",") if part.strip()]
+    # Every token is checked first, so "all,projecct" fails like "projecct".
+    unknown = [token for token in tokens if token not in TOOLSETS and token != "all"]
+    if unknown or not tokens:
+        named = ", ".join(unknown) if unknown else repr(raw)
         raise RuntimeError(
-            f"Unknown toolset in {TOOLSETS_ENV}: {', '.join(unknown)}. "
+            f"Unknown toolset in {TOOLSETS_ENV}: {named}. "
             f"Toolsets: {', '.join(TOOLSETS)}, all."
         )
-    return names & known_set
+    if "all" in tokens:
+        return list(TOOLSETS)
+    return [name for name in TOOLSETS if name in tokens]
+
+
+def allowed_tools(known: Iterable[str], environ: Mapping[str, str] | None = None) -> set[str]:
+    """Return the tool names the server lists under the current environment.
+
+    Raises ``RuntimeError`` when ``RENFORGE_TOOLSETS`` is invalid.
+    """
+    names = set(ALWAYS_LISTED)
+    for group in _selected_toolsets(environ):
+        names |= set(TOOLSETS[group])
+    return names & set(known)
 
 
 def enabled_toolsets(environ: Mapping[str, str] | None = None) -> list[str]:
-    """The groups the server lists, in catalogue order (all of them by default)."""
-    env = os.environ if environ is None else environ
-    tokens = {part.strip() for part in env.get(TOOLSETS_ENV, "").split(",") if part.strip()}
-    if not tokens or "all" in tokens:
-        return list(TOOLSETS)
-    return [name for name in TOOLSETS if name in tokens]
+    """The groups the server lists, in catalogue order (all of them by default).
+
+    Parses the variable exactly as :func:`allowed_tools` does, so it raises
+    ``RuntimeError`` for the same invalid values.
+    """
+    return _selected_toolsets(environ)
 
 
 # Groups whose tools run arbitrary expressions in the game (renforge_eval,
@@ -152,6 +169,11 @@ def bridge_eval_allowed(environ: Mapping[str, str] | None = None) -> bool:
 
     A server limited to groups that never evaluate code (``play``, say) starts
     games whose bridge refuses both. With ``play`` alone no tool can run code
-    in the game; ``mod`` writes scripts on purpose.
+    in the game; ``mod`` writes scripts on purpose. An invalid
+    ``RENFORGE_TOOLSETS`` fails closed: such a server lists no tools.
     """
-    return not EVAL_TOOLSETS.isdisjoint(enabled_toolsets(environ))
+    try:
+        groups = enabled_toolsets(environ)
+    except RuntimeError:
+        return False
+    return not EVAL_TOOLSETS.isdisjoint(groups)

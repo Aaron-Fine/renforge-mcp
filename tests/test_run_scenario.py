@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from renforge.tools import live
 from renforge.state import project_state_dir
 
@@ -73,6 +75,36 @@ def test_run_scenario_failure_collects_diagnostics(monkeypatch, tmp_path):
     assert result["ok"] is False
     assert result["failed_step"] == 0
     assert "diagnostics" in result["steps"][0] or "screenshot" in result
+    # Captures live in the project's RenForge state folder, outside the project.
+    assert [Path(item) for item in result["files_touched"]] == [
+        (project_state_dir(tmp_path) / "captures" / "scenario-failure-step-0.png").resolve()
+    ]
+
+
+
+def test_run_scenario_keeps_a_save_steps_receipt_when_a_later_step_fails(monkeypatch, tmp_path):
+    """The save already happened: the report names it beside the failure screenshot."""
+    saved = "/tmp/renforge-session-x/saves"
+    monkeypatch.setattr(live, "saves", lambda path, action, **kwargs: {
+        "ok": True, "slot": kwargs.get("slot"), "files_touched": [saved]})
+    monkeypatch.setattr(live, "eval_expr", lambda path, expr: {"ok": True, "value": "slow"})
+    monkeypatch.setattr(live, "game_state", lambda path, **kwargs: {"ok": True, "current_label": "x"})
+    monkeypatch.setattr(live, "list_choices", lambda path: {"ok": True, "choices": []})
+    monkeypatch.setattr(live, "get_errors", lambda path: {"ok": True, "events": []})
+    monkeypatch.setattr(live, "poll_events", lambda path: {"ok": True, "events": []})
+    monkeypatch.setattr(live, "screenshot_png", lambda path: b"\x89PNG\r\n")
+
+    result = live.run_scenario(
+        str(tmp_path),
+        steps=[{"save": "1-1"}, {"assert": {"expr": "config.skipping is None", "equals": None}}],
+        capture_on_failure=True,
+    )
+
+    assert result["ok"] is False and result["failed_step"] == 1
+    shot = (project_state_dir(tmp_path) / "captures" / "scenario-failure-step-1.png").resolve()
+    # The save's receipt is passed on as formatted, not re-resolved as a new path.
+    assert result["files_touched"][0] == saved
+    assert [Path(item) for item in result["files_touched"][1:]] == [shot]
 
 
 def test_run_scenario_capture_rejects_parent_traversal(monkeypatch, tmp_path):
@@ -127,6 +159,10 @@ def test_run_scenario_capture_overwrites_only_named_file_in_capture_directory(
 
     assert result["ok"] is True
     assert result["steps"][0]["path"] == str(target)
+    # Captures live in the project's RenForge state folder, outside the project.
+    assert [Path(item) for item in result["files_touched"]] == [
+        (project_state_dir(tmp_path) / "captures" / "frame.png").resolve()
+    ]
     assert target.read_bytes() == b"new"
     assert sibling.read_bytes() == b"keep"
 

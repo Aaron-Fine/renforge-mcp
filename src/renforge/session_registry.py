@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from renforge.state import _fold, _same_file, on_disk_spelling
 from renforge.util.files import (
     PrivatePathError,
     atomic_write_private_json,
@@ -74,8 +75,29 @@ def _pid_is_alive(pid: int) -> bool:
     return True
 
 
-def _canonical_project(project: str | Path) -> str:
-    return str(Path(project).expanduser().resolve())
+def canonical_project_path(project: str | Path) -> str:
+    """The project folder as every RenForge registry keys it.
+
+    Resolved, and spelled as the disk lists each component, the same
+    spelling :func:`renforge.state.project_state_dir` hashes: on a
+    case-insensitive volume every spelling of one folder then finds the
+    same dashboard and owned session as it finds the same state folder and
+    bridge lock.
+    """
+    return str(on_disk_spelling(Path(project).expanduser().resolve()))
+
+
+def _respelled_in_place(published: str, canonical: str) -> bool:
+    """Whether *published* names *canonical*'s folder, spelled before a case-only rename.
+
+    A dashboard keeps the spelling it published; a reader spells the folder
+    as the disk lists it now. Only a difference of case in an absolute path
+    to the same folder is accepted: a relative path, ``..``, or a link to
+    another folder still changes more than case and is refused.
+    """
+    if not Path(published).is_absolute() or _fold(published) != _fold(canonical):
+        return False
+    return _same_file(Path(published), Path(canonical))
 
 
 def _validate_record(payload: object, *, path: Path) -> dict[str, Any] | None:
@@ -99,10 +121,10 @@ def _validate_record(payload: object, *, path: Path) -> dict[str, Any] | None:
     if type(updated) is not int or isinstance(updated, bool) or updated < 0:
         return None
     try:
-        canonical = _canonical_project(str(project))
+        canonical = canonical_project_path(str(project))
     except (OSError, RuntimeError, ValueError):
         return None
-    if str(project) != canonical:
+    if str(project) != canonical and not _respelled_in_place(str(project), canonical):
         # Accept only fully resolved absolute project paths.
         return None
     return {
@@ -146,7 +168,7 @@ def publish_dashboard(
     if loaded is not None:
         previous = loaded
 
-    resolved_project = _canonical_project(project)
+    resolved_project = canonical_project_path(project)
     record = {
         "schema_version": _SCHEMA_VERSION,
         "pid": os.getpid(),
@@ -217,7 +239,7 @@ def dashboard_connection(project_path: str | Path | None = None) -> dict[str, An
         return None
     if project_path is not None:
         try:
-            wanted = os.path.normcase(_canonical_project(project_path))
+            wanted = os.path.normcase(canonical_project_path(project_path))
         except (OSError, RuntimeError, ValueError):
             return None
         records = [

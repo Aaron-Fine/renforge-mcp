@@ -39,12 +39,19 @@ def build_wrappers(context):
         return [result, _png_content(png)] if isinstance(png, bytes) and png else result
 
     def _compact(result):
-        """Observations from the play tools are always compact."""
+        """Observations from the play tools are always compact, nested ones included."""
         if not isinstance(result, dict):
             return result
-        if isinstance(result.get("observation"), dict):
-            return dict(result, observation=compact_observation(result["observation"]))
-        return compact_observation(result)
+        if "observation" not in result and "progress" not in result:
+            return compact_observation(result)  # observe returns the snapshot itself
+        out = dict(result)
+        for key in ("observation", "last_observation"):
+            if isinstance(out.get(key), dict):
+                out[key] = compact_observation(out[key])
+        progress = out.get("progress")
+        if isinstance(progress, dict) and isinstance(progress.get("last_observation"), dict):
+            out["progress"] = dict(progress, last_observation=compact_observation(progress["last_observation"]))
+        return out
 
     def renforge_advance(project_path: str) -> dict:
         """Advance the current dialogue."""
@@ -170,6 +177,26 @@ def build_wrappers(context):
         )
 
 
+    def _saves(project_path: str, action: str, **kwargs: Any) -> dict:
+        if (
+            action == "import"
+            and live.saves_argument_error(action, **kwargs) is None
+            and not live.owns_session(project_path)
+        ):
+            from ..dashboard_client import import_saves as import_via_dashboard
+
+            delegated = import_via_dashboard(
+                project_path,
+                slot=kwargs["slot"],
+                slots=kwargs["slots"],
+                pattern=kwargs["pattern"],
+            )
+            # A contacted dashboard's answer is final; None means no dashboard.
+            if delegated is not None:
+                return delegated
+        return live.saves(project_path, action, **kwargs)
+
+
     def renforge_saves(
         project_path: str,
         action: str,
@@ -177,6 +204,7 @@ def build_wrappers(context):
         extra_info: str | None = None,
         regexp: str | None = None,
         slots: list[str] | None = None,
+        pattern: str | None = None,
         authorize: bool = False,
     ) -> dict:
         """Save, load, list, list host slots, or import selected host slots.
@@ -184,7 +212,8 @@ def build_wrappers(context):
         ``list`` reads the running session. ``list_user`` observes host saves
         without a running game. ``import`` copies selected host slots into the
         isolated session savedir and refuses when the session exposes the user
-        tree. ``load`` requires authorize=true when RENFORGE_POLICY=enforce.
+        tree. ``load``, ``list_user`` and ``import`` (which read the player's
+        own saves) require authorize=true when RENFORGE_POLICY=enforce.
         """
         return _log_tool_call(
             name="renforge_saves",
@@ -195,16 +224,18 @@ def build_wrappers(context):
                 "extra_info": extra_info,
                 "regexp": regexp,
                 "slots": slots,
+                "pattern": pattern,
                 "authorize": authorize,
             },
             project_root=project_path,
-            fn=live.saves,
+            fn=_saves,
             args=(project_path, action),
             kwargs={
                 "slot": slot,
                 "extra_info": extra_info,
                 "regexp": regexp,
                 "slots": slots,
+                "pattern": pattern,
             },
         )
 

@@ -122,6 +122,22 @@ _REASONS = {
     RISK_MALFORMED: "The requested operation could not be classified from the supplied parameters.",
 }
 
+# A launch is destructive when it reaches the player's storage or a folder
+# outside RenForge's own. With isolation opt-in the common case is a launch
+# with no knobs, and most agents want an isolated session, so say that first.
+_LAUNCH_REASON = (
+    "This launch can read and write the user's Ren'Py saves or HOME, or writes saves and settings "
+    "into a folder outside RenForge's own. A launch with no savedir (or savedir=auto) uses the "
+    "user's saves and HOME unless RENFORGE_ISOLATION=temporary; so do savedir=existing and "
+    "home=existing. A jump/new_game with no knobs is judged the same way, whatever game it replaces."
+)
+_LAUNCH_NEXT_STEP = (
+    'Pass savedir="temporary" (with home omitted or "temporary") to launch an isolated session, '
+    "which needs no authorization. To use the user's saves or the folder you named, retry with "
+    "authorize=true, add this operation to RENFORGE_POLICY_ALLOW, or set RENFORGE_POLICY=off for "
+    "trusted local automation."
+)
+
 _NEXT_STEPS = {
     RISK_DESTRUCTIVE: (
         "Retry with authorize=true, add this operation to RENFORGE_POLICY_ALLOW, "
@@ -214,54 +230,34 @@ def load_settings(
     )
 
 
+# Tools whose risk is set by their `action` alone.
+_ACTION_TABLES: dict[str, Mapping[str, str]] = {
+    "renforge_control": CONTROL_ACTIONS,
+    "renforge_saves": SAVES_ACTIONS,
+    "renforge_mod": MOD_ACTIONS,
+    "renforge_session": SESSION_ACTIONS,
+    "renforge_editor": EDITOR_ACTIONS,
+}
+
+
+def _classify_action(name: str, table: Mapping[str, str], payload: Mapping[str, Any]) -> tuple[str, str]:
+    """Look ``payload["action"]`` up in ``table``; a blank or unknown action is malformed."""
+    action = payload.get("action")
+    if not isinstance(action, str) or not action.strip():
+        return name, RISK_MALFORMED
+    action = action.strip()
+    risk = table.get(action)
+    if risk is None:
+        return f"{name}.{action}", RISK_MALFORMED
+    return f"{name}.{action}", risk
+
+
 def classify(name: str, params: Mapping[str, Any] | None = None) -> tuple[str, str]:
     """Return ``(operation_id, risk)`` for a validated tool invocation."""
     payload = dict(params or {})
-    if name == "renforge_control":
-        action = payload.get("action")
-        if not isinstance(action, str) or not action.strip():
-            return "renforge_control", RISK_MALFORMED
-        action = action.strip()
-        risk = CONTROL_ACTIONS.get(action)
-        if risk is None:
-            return f"renforge_control.{action}", RISK_MALFORMED
-        return f"renforge_control.{action}", risk
-    if name == "renforge_saves":
-        action = payload.get("action")
-        if not isinstance(action, str) or not action.strip():
-            return "renforge_saves", RISK_MALFORMED
-        action = action.strip()
-        risk = SAVES_ACTIONS.get(action)
-        if risk is None:
-            return f"renforge_saves.{action}", RISK_MALFORMED
-        return f"renforge_saves.{action}", risk
-    if name == "renforge_mod":
-        action = payload.get("action")
-        if not isinstance(action, str) or not action.strip():
-            return "renforge_mod", RISK_MALFORMED
-        action = action.strip()
-        risk = MOD_ACTIONS.get(action)
-        if risk is None:
-            return f"renforge_mod.{action}", RISK_MALFORMED
-        return f"renforge_mod.{action}", risk
-    if name == "renforge_session":
-        action = payload.get("action")
-        if not isinstance(action, str) or not action.strip():
-            return "renforge_session", RISK_MALFORMED
-        action = action.strip()
-        risk = SESSION_ACTIONS.get(action)
-        if risk is None:
-            return f"renforge_session.{action}", RISK_MALFORMED
-        return f"renforge_session.{action}", risk
-    if name == "renforge_editor":
-        action = payload.get("action")
-        if not isinstance(action, str) or not action.strip():
-            return "renforge_editor", RISK_MALFORMED
-        action = action.strip()
-        risk = EDITOR_ACTIONS.get(action)
-        if risk is None:
-            return f"renforge_editor.{action}", RISK_MALFORMED
-        return f"renforge_editor.{action}", risk
+    table = _ACTION_TABLES.get(name)
+    if table is not None:
+        return _classify_action(name, table, payload)
     if name == "renforge_eval":
         expr = payload.get("expr")
         if not isinstance(expr, str) or not expr.strip():
@@ -278,6 +274,12 @@ def classify(name: str, params: Mapping[str, Any] | None = None) -> tuple[str, s
         return "renforge_wait_until", RISK_OBSERVATIONAL
     if name == "renforge_set_var":
         return name, RISK_MUTATING
+    if name == "renforge_validate":
+        # Lint runs staged init code with the server's privileges, like eval;
+        # without it, it lints the project's own code, like renforge_mod lint.
+        if payload.get("staged"):
+            return "renforge_validate.staged", RISK_OPEN_WORLD
+        return name, RISK_OBSERVATIONAL
     if name == "renforge_run_scenario":
         return _classify_scenario(payload.get("steps"))
     if name in _LAUNCH_TOOLS:
@@ -308,6 +310,8 @@ def evaluate(
         risk,
         "No authorization is required for this operation.",
     )
+    if risk == RISK_DESTRUCTIVE and operation in _LAUNCH_TOOLS:
+        reason, next_step = _LAUNCH_REASON, _LAUNCH_NEXT_STEP
     if resolved.mode == MODE_OFF:
         return PolicyDecision(
             operation=operation,

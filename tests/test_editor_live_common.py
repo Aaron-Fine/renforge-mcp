@@ -41,3 +41,112 @@ def test_select_lock_can_target_focusable_edge(monkeypatch) -> None:
 
     assert result == "CONTAINER_POSITION_UNSUPPORTED"
     assert calls == [("editor_task0_select", {"x": 110, "y": 142})]
+
+
+class _StatusClient:
+    """Replies to editor_task0_status from a script; an exception entry is raised."""
+
+    def __init__(self, replies):
+        self.replies = list(replies)
+
+    def request(self, name, payload):
+        assert name == "editor_task0_status"
+        reply = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+def test_wait_for_transaction_forgets_a_bridge_failure_the_bridge_recovered_from(
+    tmp_path, monkeypatch
+) -> None:
+    from renforge.bridge.client import BridgeProtocolError
+
+    monkeypatch.setattr(live_common.time, "sleep", lambda _s: None)
+    source = tmp_path / "gui.rpy"
+    source.write_bytes(b"old")
+    pending = {"status_code": "reload_pending", "save_in_progress": True}
+    client = _StatusClient([BridgeProtocolError("reloading"), pending])
+
+    status, bridge_failure = live_common.wait_for_transaction(client, source, b"new", timeout=0.05)
+
+    assert status == pending
+    assert bridge_failure is None
+
+
+def test_wait_for_transaction_does_not_blame_the_bridge_for_an_unreadable_source(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(live_common.time, "sleep", lambda _s: None)
+    missing = tmp_path / "gui.rpy"  # mid-replace: briefly absent
+    committed = {"status_code": "reload_committed", "save_in_progress": False}
+
+    status, bridge_failure = live_common.wait_for_transaction(_StatusClient([committed]), missing, b"new", timeout=0.05)
+
+    assert status == committed
+    assert bridge_failure is None
+
+
+def test_wait_for_transaction_reports_a_bridge_that_stays_down(tmp_path, monkeypatch) -> None:
+    from renforge.bridge.client import BridgeError
+
+    monkeypatch.setattr(live_common.time, "sleep", lambda _s: None)
+    source = tmp_path / "gui.rpy"
+    source.write_bytes(b"old")
+
+    status, bridge_failure = live_common.wait_for_transaction(_StatusClient([BridgeError("gone")]), source, b"new", timeout=0.05)
+
+    assert status is None
+    assert bridge_failure == "BridgeError: gone"
+
+
+def test_wait_for_transaction_says_whether_it_completed(tmp_path, monkeypatch) -> None:
+    """A committed status whose bytes never match is a timeout, not a completion."""
+    monkeypatch.setattr(live_common.time, "sleep", lambda _s: None)
+    source = tmp_path / "gui.rpy"
+    source.write_bytes(b"old")
+    committed = {"status_code": "reload_committed", "save_in_progress": False}
+
+    timed_out = live_common.wait_for_transaction(_StatusClient([committed]), source, b"new", timeout=0.05)
+    assert timed_out.completed is False
+    assert timed_out.last_status == committed
+
+    done = live_common.wait_for_transaction(_StatusClient([committed]), source, b"old", timeout=0.05)
+    assert done.completed is True
+    assert tuple(done) == (committed, None)
+
+
+def test_wait_for_transaction_keeps_the_source_read_error_apart_from_the_bridge(
+    tmp_path, monkeypatch
+) -> None:
+    """A source that keeps failing to read is reported as that, not as a bridge error."""
+    monkeypatch.setattr(live_common.time, "sleep", lambda _s: None)
+    missing = tmp_path / "gui.rpy"
+    committed = {"status_code": "reload_committed", "save_in_progress": False}
+
+    result = live_common.wait_for_transaction(_StatusClient([committed]), missing, b"new", timeout=0.05)
+
+    assert result.completed is False
+    assert result.bridge_failure is None
+    assert result.source_error is not None and result.source_error.startswith("FileNotFoundError")
+
+
+def test_wait_for_transaction_forgets_a_source_read_error_after_a_good_read(tmp_path, monkeypatch) -> None:
+    """A read that fails once and then succeeds leaves no source error behind."""
+    monkeypatch.setattr(live_common.time, "sleep", lambda _s: None)
+    source = tmp_path / "gui.rpy"
+    committed = {"status_code": "reload_committed", "save_in_progress": False}
+    reads = iter([OSError("mid-replace"), b"old"])
+
+    def flaky_read_bytes(path):
+        item = next(reads, b"old")
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(type(source), "read_bytes", flaky_read_bytes)
+    result = live_common.wait_for_transaction(_StatusClient([committed]), source, b"new", timeout=0.05)
+    monkeypatch.undo()
+
+    assert result.completed is False
+    assert result.source_error is None

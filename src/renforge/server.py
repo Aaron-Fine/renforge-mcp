@@ -73,12 +73,23 @@ def _instructions(toolsets: list[str]) -> str:
     if others:
         parts.append(
             "The " + ", ".join(others) + " toolsets keep the earlier tools for "
-            "existing workflows" + (" and the Live Editor" if "editor" in others else "") + "."
+            "existing workflows"
+            # Same rule as renforge_info's live_editor block: the workflow
+            # launches through renforge_launch (live) and edits through
+            # renforge_editor (editor).
+            + (" and the Live Editor" if "editor" in others and "live" in others else "")
+            + "."
         )
     parts.append(
         "RENFORGE_POLICY defaults to off; when set to enforce, destructive and "
-        "open-world operations (eval, quit, load, reload_script, mod writes, and "
-        "matching scenario steps) require authorize=true or an allowlist."
+        "open-world operations (eval, quit, load, reload_script, mod writes, "
+        "reading the player's saves, matching scenario steps, and any launch, "
+        "jump or new_game whose saves and HOME are not both in RenForge's own "
+        "folders, which by default includes one with no isolation options) require "
+        "authorize=true or an allowlist. Pass savedir=\"temporary\" (with home "
+        "omitted or auto, which then isolates HOME too) to launch, jump or start a "
+        "new game isolated without authorize; an explicit home must also be "
+        "RenForge's own."
     )
     return " ".join(parts)
 

@@ -65,3 +65,109 @@ def test_autopilot_launches_are_isolated_whatever_the_server_default(tmp_path, m
         pass
     assert seen.get("savedir") == "temporary"
     assert seen.get("home") == "temporary"
+
+
+def test_a_refused_choice_ends_the_run_and_is_reported(tmp_path, monkeypatch) -> None:
+    """A refused selection must not count as explored or keep re-queuing the menu."""
+    import renforge.autopilot as autopilot_module
+    from renforge.project import RenpyProject
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+
+    class _RefusingClient:
+        def poll_events(self, since=0):
+            return {"events": [], "cursor": since}
+
+        def list_menu_choices(self):
+            return [{"index": 0, "text": "Left"}, {"index": 1, "text": "Right"}]
+
+        def select_choice(self, **_kwargs):
+            return {"ok": False, "error": "ambiguous choice"}
+
+        def advance(self):
+            raise AssertionError("a refused choice must end the run")
+
+    class _Session:
+        client = _RefusingClient()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(autopilot_module, "launch_with_bridge", lambda *_a, **_k: _Session())
+    report = autopilot_module.autopilot(object(), RenpyProject(_DEMO), max_runs=2, max_steps=10, settle=0)
+    assert report["runs"] == 2
+    assert report["runs_pending"] == 0
+    assert report["choices_explored"] == 0
+    assert [item["choice"] for item in report["choice_errors"]] == ["Left", "Right"]
+    assert report["choice_errors"][0]["error"] == "ambiguous choice"
+
+
+def test_autopilot_does_not_follow_a_linked_state_folder(tmp_path, monkeypatch) -> None:
+    """The progress file goes where captures go: never through a link in the state tree."""
+    import os
+
+    import pytest
+
+    import renforge.autopilot as autopilot_module
+    from renforge.project import RenpyProject
+    from renforge.state import project_state_dir
+    from renforge.util.files import PrivatePathError
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project = RenpyProject(_DEMO)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    state = project_state_dir(project.root)
+    state.parent.mkdir(parents=True)
+    try:
+        os.symlink(elsewhere, state, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+    monkeypatch.setattr(autopilot_module, "launch_with_bridge",
+                        lambda *_a, **_k: pytest.fail("must not launch"))
+
+    with pytest.raises(PrivatePathError):
+        autopilot_module.autopilot(object(), project, max_runs=1)
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_autopilot_progress_does_not_follow_a_link_at_the_leaf(tmp_path, monkeypatch) -> None:
+    """A link planted at autopilot.json is refused, never written through."""
+    import os
+
+    import pytest
+
+    import renforge.autopilot as autopilot_module
+    from renforge.project import RenpyProject
+    from renforge.state import ensure_project_state_dir
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project = RenpyProject(_DEMO)
+    outside = tmp_path / "outside.json"
+    outside.write_text("keep", encoding="utf-8")
+    leaf = ensure_project_state_dir(project.root) / "autopilot.json"
+    try:
+        os.symlink(outside, leaf)
+    except OSError:
+        pytest.skip("symlinks are not available")
+
+    class _EmptyClient:
+        def poll_events(self, since=0):
+            return {"events": [], "cursor": since}
+
+        def list_menu_choices(self):
+            return []
+
+        def advance(self):
+            return None
+
+    class _Session:
+        client = _EmptyClient()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(autopilot_module, "launch_with_bridge", lambda *_a, **_k: _Session())
+    report = autopilot_module.autopilot(object(), project, max_runs=1, max_steps=2, settle=0)
+    assert report["runs"] == 1
+    assert outside.read_text(encoding="utf-8") == "keep"

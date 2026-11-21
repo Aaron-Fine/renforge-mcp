@@ -303,7 +303,10 @@ def test_api_live_launch_defaults_editor_true(tmp_path: Path, monkeypatch) -> No
     calls = {}
 
     def fake_launch(project_path: str, **kwargs):
-        calls.update(project_path=project_path, **{k: kwargs.get(k) for k in ("version", "warp", "editor")})
+        calls.update(
+            project_path=project_path,
+            **{k: kwargs.get(k) for k in ("version", "warp", "editor", "language")},
+        )
         return {
             "ok": True,
             "ready": True,
@@ -317,7 +320,7 @@ def test_api_live_launch_defaults_editor_true(tmp_path: Path, monkeypatch) -> No
     client = TestClient(app)
     response = client.post(
         "/api/live/launch?token=token",
-        json={"version": "stable"},
+        json={"version": "stable", "language": " japanese "},
     )
 
     assert response.status_code == 200
@@ -328,6 +331,7 @@ def test_api_live_launch_defaults_editor_true(tmp_path: Path, monkeypatch) -> No
     assert body.get("editor") is True
     assert calls["project_path"] == str(project)
     assert calls.get("editor") is True
+    assert calls.get("language") == "japanese"
 
 
 @pytest.mark.skipif(TestClient is None, reason="starlette not installed")
@@ -357,6 +361,30 @@ def test_api_live_launch_rejects_non_boolean_editor(tmp_path: Path, monkeypatch)
 
 
 @pytest.mark.skipif(TestClient is None, reason="starlette not installed")
+def test_api_live_launch_rejects_invalid_language(tmp_path: Path, monkeypatch) -> None:
+    import renforge.ui.server as server
+
+    project = _project_root(tmp_path)
+    monkeypatch.setattr(
+        server.live,
+        "launch_game",
+        lambda *_args, **_kwargs: pytest.fail("launch_game should not run for an invalid language"),
+    )
+    app = create_ui_app(project, ui_token="token")
+    client = TestClient(app)
+    response = client.post(
+        "/api/live/launch?token=token",
+        json={"version": "stable", "language": "ja/panese"},
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["error_code"] == "launch_language_invalid"
+    assert payload["details"] == {"language": "ja/panese"}
+
+
+@pytest.mark.skipif(TestClient is None, reason="starlette not installed")
 def test_api_live_stop_dispatches_runtime_stop(tmp_path: Path, monkeypatch) -> None:
     import renforge.ui.server as server
 
@@ -375,6 +403,50 @@ def test_api_live_stop_dispatches_runtime_stop(tmp_path: Path, monkeypatch) -> N
     assert response.status_code == 200
     assert response.json() == {"ok": True, "was_running": True}
     assert calls == {"project_path": str(project)}
+
+
+@pytest.mark.skipif(TestClient is None, reason="starlette not installed")
+def test_api_live_saves_import_runs_in_the_dashboard_process(tmp_path: Path, monkeypatch) -> None:
+    import renforge.ui.server as server
+
+    project = _project_root(tmp_path)
+    calls = {}
+
+    def fake_saves(*args, **kwargs):
+        calls.update(args=args, kwargs=kwargs)
+        return {"ok": True, "imported": ["1-1"]}
+
+    monkeypatch.setattr(server.live, "saves", fake_saves)
+    client = TestClient(create_ui_app(project, ui_token="token"))
+    response = client.post("/api/live/saves/import?token=token", json={"slots": ["1-1"]})
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "imported": ["1-1"]}
+    assert calls == {
+        "args": (str(project), "import"),
+        "kwargs": {"slot": None, "slots": ["1-1"], "pattern": None},
+    }
+
+
+@pytest.mark.skipif(TestClient is None, reason="starlette not installed")
+def test_api_live_saves_import_rejects_a_malformed_selection(tmp_path: Path, monkeypatch) -> None:
+    import renforge.ui.server as server
+
+    project = _project_root(tmp_path)
+    listed = []
+    monkeypatch.setattr(server.live, "select_host_slots", lambda *a, **k: listed.append(1), raising=False)
+    client = TestClient(create_ui_app(project, ui_token="token"))
+    response = client.post("/api/live/saves/import?token=token", json={"slots": "1-1"})
+
+    # The saves shape, with the code the MCP side relays (not a bare 400).
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": False,
+        "code": "SAVE_IMPORT_INVALID",
+        "error": "slots must be a list of slot names",
+        "files_touched": [],
+    }
+    assert listed == []
 
 
 @pytest.mark.skipif(TestClient is None, reason="starlette not installed")
@@ -755,7 +827,12 @@ def test_api_live_launch_rejects_an_unknown_state_mode(tmp_path: Path, monkeypat
     ("route", "body", "code"),
     [
         ("/api/live/launch", {"timeout": True}, "launch_timeout_invalid"),
+        # A JSON integer too large for a float deadline is refused, not a 500.
+        ("/api/live/launch", {"timeout": 10**400}, "launch_timeout_invalid"),
+        ("/api/warp", {"target": "start", "timeout": -(10**400)}, "launch_timeout_invalid"),
         ("/api/live/launch", {"display": "natvie"}, "launch_display_invalid"),
+        # Every launch refuses display='none', so the dashboard does not offer it.
+        ("/api/live/launch", {"display": "none"}, "launch_display_invalid"),
         ("/api/live/launch", {"audio": 3}, "launch_audio_invalid"),
         ("/api/warp", {"target": "start", "timeout": "abc"}, "launch_timeout_invalid"),
         ("/api/warp", {"target": "start", "version": False}, "launch_version_invalid"),
@@ -813,3 +890,85 @@ def test_api_live_launch_treats_an_empty_warp_as_none(tmp_path: Path, monkeypatc
     client.post("/api/live/launch?token=token", json={"warp": "", "timeout": 0})
     assert seen["warp"] is None
     assert seen.get("timeout") is None
+
+
+@pytest.mark.skipif(TestClient is None, reason="starlette not installed")
+@pytest.mark.parametrize("field", ["persistent", "preferences"])
+@pytest.mark.parametrize("mode", ["auto", "existing", "empty"])
+def test_api_live_launch_forwards_supported_state_mode(
+    tmp_path: Path, monkeypatch, field: str, mode: str
+) -> None:
+    import renforge.ui.server as server
+
+    project = _project_root(tmp_path)
+    calls = {}
+
+    def fake_launch(project_path: str, **kwargs):
+        calls.update({k: kwargs.get(k) for k in ("persistent", "preferences")})
+        return {"ok": True, "ready": True, "already_running": False, "current_label": "start", "editor": True}
+
+    monkeypatch.setattr(server.live, "launch_game", fake_launch)
+    client = TestClient(create_ui_app(project, ui_token="token"))
+
+    response = client.post(
+        "/api/live/launch?token=token",
+        json={"version": "stable", "savedir": "temporary", field: mode},
+    )
+
+    assert response.status_code == 200
+    assert calls[field] == mode
+
+
+@pytest.mark.skipif(TestClient is None, reason="starlette not installed")
+@pytest.mark.parametrize("endpoint", ["/api/live/launch", "/api/warp"])
+@pytest.mark.parametrize("savedir", ["existing", None])
+@pytest.mark.parametrize("field", ["persistent", "preferences"])
+def test_empty_state_without_a_temporary_savedir_is_a_400_before_launch(
+    tmp_path: Path, monkeypatch, endpoint: str, savedir: str | None, field: str
+) -> None:
+    import renforge.ui.server as server
+
+    # Omitted savedir resolves to the user's saves unless this says otherwise.
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    project = _project_root(tmp_path)
+    monkeypatch.setattr(
+        server.live,
+        "launch_game",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not launch")),
+    )
+    client = TestClient(create_ui_app(project, ui_token="token"))
+    payload: dict[str, object] = {"target": "start", field: "empty"}
+    if savedir is not None:
+        payload["savedir"] = savedir
+
+    response = client.post(f"{endpoint}?token=token", json=payload)
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error_code"] == "launch_state_mode_conflict"
+    assert "savedir='temporary'" in body["error"]
+
+
+@pytest.mark.skipif(TestClient is None, reason="starlette not installed")
+def test_api_warp_leaves_unset_isolation_to_launch_game(tmp_path: Path, monkeypatch) -> None:
+    # launch_game keeps an isolated game's isolation on an all-auto relaunch,
+    # so the Warp route must pass omitted knobs through unresolved.
+    import renforge.ui.server as server
+
+    project = _project_root(tmp_path)
+    calls = {}
+
+    def fake_launch(project_path: str, **kwargs):
+        calls.update({k: kwargs.get(k) for k in ("savedir", "home", "persistent", "preferences", "warp")})
+        return {"ok": True, "ready": True, "already_running": False, "current_label": "start", "editor": True}
+
+    monkeypatch.setattr(server.live, "launch_game", fake_launch)
+    client = TestClient(create_ui_app(project, ui_token="token"))
+
+    response = client.post("/api/warp?token=token", json={"target": "start"})
+
+    assert response.status_code == 200
+    assert calls["warp"]
+    assert {k: calls[k] for k in ("savedir", "home", "persistent", "preferences")} == dict.fromkeys(
+        ("savedir", "home", "persistent", "preferences")
+    )

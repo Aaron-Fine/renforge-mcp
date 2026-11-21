@@ -7,36 +7,83 @@ versioning.
 
 ### Changed
 
-- `renforge_saves(action="import")` copies only into a temporary session's own
-  savedir. A session launched with `savedir=<path>` is refused with
-  `SAVE_IMPORT_NOT_ISOLATED`: launching there and importing are each
-  mutating, so under `RENFORGE_POLICY=enforce` the two together copied the
-  player's saves into any folder without `authorize=true`.
-- `list_user` and `import` read the player's saves only from one folder of
-  the Ren'Py save root named by the game's `config.save_directory`; a name
-  like `../OtherGame` is ignored, as is a `game/saves` that links out of the
-  project.
+- Under `RENFORGE_POLICY=enforce`, `renforge_validate` with `staged` bytes
+  needs `authorize=true`: lint runs their init code, like `renforge_eval`.
 - Under `RENFORGE_POLICY=enforce`, reading the player's own saves needs
   `authorize=true`: `renforge_saves` `list_user` and `import` and
   `renforge_session` `import` are destructive, and `renforge_session list`
   leaves out `player_slots` (with `player_slots_hidden`) unless authorized.
-  A launch whose `savedir` or `home` is a path outside the RenForge state
-  folder is destructive too (the shared temp dir is not RenForge's), since
-  the game writes its saves, persistent data, and config there. The policy
-  reads the path the launch uses, stripped and expanded.
-- A launch reuses a running game only when it matches the request:
-  `SESSION_ISOLATION_MISMATCH` when a launch that needs no authorization
-  would get a game keeping its saves or HOME outside RenForge's own folders
-  (the player's saves or HOME, or a folder an earlier launch was authorized
-  for), and `SESSION_EVAL_MISMATCH` when a play-only server would get a
+  A launch that keeps the player's saves or HOME is destructive, and so is
+  one whose `savedir` or `home` is a path outside the RenForge state folder
+  (the shared temp dir is not RenForge's), since the game writes its saves,
+  persistent data, and config there. With isolation opt-in (0.7.6), that
+  includes a launch that passes none of the isolation options unless
+  `RENFORGE_ISOLATION=temporary`, and a `savedir` path with `home` omitted
+  (it keeps the player's HOME); pass `savedir=temporary` to launch without
+  `authorize`. A `renforge_jump` or `renforge_new_game` is judged by its own
+  arguments, so one with no isolation options needs `authorize` even when it
+  would inherit an isolated game's isolation. `renforge_launch`,
+  `renforge_jump` and `renforge_new_game` keep their `authorize` parameter
+  for this, and a denied launch's `next_step` names `savedir="temporary"`
+  first. The policy reads the path the launch uses, stripped and expanded.
+- A launch reuses a running game only when it matches the request. On top
+  of 0.7.6's per-component check, it is refused with
+  `SESSION_ISOLATION_MISMATCH` when the launch keeps its saves or HOME in
+  RenForge's own folders and the game keeps that one elsewhere (the
+  player's saves or HOME, or a folder an earlier launch was authorized
+  for). Saves and HOME are judged apart, so `savedir=temporary` with
+  `home=existing` is never handed a game whose saves are elsewhere. It is
+  refused with `SESSION_EVAL_MISMATCH` when a play-only server would get a
   bridge that runs code. The policy gate and this check share one rule. A
   launch that arrives while another starts is refused the same way instead
   of being told to poll it, and `renforge_launch_status` reports `isolated`
   and `eval_enabled`. A game this server did not start answers the new
   bridge command `session_info` (its eval switch, savedir, and HOME); one
-  that cannot is assumed to match neither. Launches through the dashboard
+  that cannot is assumed to match neither, and one that answers without
+  `eval_enabled` (an upstream bridge) is assumed to run code. A game this
+  server did not start counts as in RenForge's own folders only when its
+  HOME and every save location it reports are (the state folder, where
+  `renforge_session` keeps its saves, or a session root) and none of them
+  resolves into the player's save tree; a `renforge_session` game started by
+  another server is reused and reported as isolated. Launches through the dashboard
   pass the calling server's `bridge_eval`, so a play-only server's game
   refuses eval even when the dashboard's own toolsets allow it.
+- The fork's wider "might be the player's" test (any game's `game/saves`,
+  host paths compared case-insensitively, a HOME whose Ren'Py folder links
+  into the host tree) applies to what a running game exposes, the policy
+  gate, import destinations, and reports. What a launch request gives up,
+  and what a `renforge_jump`, `renforge_new_game`, or Warp relaunch inherits
+  from the game it replaces, use 0.7.6's narrower test, so neither hands out
+  more of the player's storage than 0.7.6 does for the same arguments.
+- `renforge_session` `save`, `load`, and `list` act only on a game whose
+  saves and HOME are in RenForge's own folders (the state folder or a
+  session root, by what its bridge reports). Any other running game, such as
+  one `renforge_launch` started on the player's saves, is refused with
+  `SESSION_NOT_ISOLATED` before a slot is written, loaded, or listed, so
+  these actions keep their promise of never touching the player's saves.
+  `renforge_session(action="launch")` is refused the same way, before
+  anything starts, when its saves folder in the state folder, or any folder
+  on the way to it, is a link, even one to another folder there. So are
+  `renforge_launch`, `renforge_jump`, `renforge_new_game`, and the Python
+  launcher for a `savedir` path that passes through the state folder,
+  judged as the launcher resolves it, so through a link to that folder or a
+  `..` after a link too (phase `preparing_isolation`).
+- `renforge_validate` (0.7.5) is in the `project` toolset.
+- Write receipts (0.7.4) for files in the state folder (captures, scene
+  snapshots, the activity log's `files_touched_file` sidecar) are absolute
+  paths, since that folder is outside the project.
+- The `files_touched` receipts of a `renforge_saves` save (the savedir) and
+  of a `renforge_saves` or `renforge_session` import (the copied save files)
+  now use `/` on Windows too, like every other receipt; `savedir` keeps the
+  platform's own form.
+- `renforge_session(action="import")` returns a `files_touched` write
+  receipt and passes on the import's own failure codes; a missing slot is
+  `NO_MATCHING_SAVE_SLOTS`. It copies the slot to where the running game
+  keeps its saves; a running game whose saves are in a folder this server
+  did not create is refused with `SESSION_SAVES_ELSEWHERE`. A game this
+  server did not start whose bridge does not answer (busy, or still
+  starting) gets a retryable error and nothing is copied, instead of the
+  slot landing in a folder the game does not read.
 - `renforge_autopilot` always launches isolated; `RENFORGE_ISOLATION=existing`
   gave it the player's saves, and it takes no `authorize`.
 - Tools that need a running game say so when none is: `code="NO_RUNNING_GAME"`
@@ -45,9 +92,11 @@ versioning.
 - `renforge_act` on an id the screen does not list adds a `message` and the
   current observation to `error="missing"`.
 - `renforge_info` lists the server's `toolsets` and, when `play` is listed,
-  the play loop's steps; it leaves out the Live Editor block when the `editor`
-  toolset is not listed. The server instructions likewise name only the
-  listed tools, and say what each `forward` value asks of the agent.
+  the play loop's steps; it leaves out the Live Editor block unless both the
+  `editor` and `live` toolsets are listed, since its workflow launches with
+  `renforge_launch`. The server instructions likewise name only the
+  listed tools (the Live Editor too only with both), and say what each
+  `forward` value asks of the agent.
 - The `renforge_observe` description leads with `forward` and what to call
   next. It said the PNG's SHA-256 is `frame_id` (it is `frame_hash`) and that
   keyboard shortcuts are not inventoried (`keys` lists them). Compact
@@ -59,6 +108,18 @@ versioning.
 - RenForge keeps its per-project state outside the game folder, under
   `RENFORGE_STATE_DIR` or `~/.local/state/renforge/projects/<name>-<hash>/`.
   Opening or launching a project no longer creates `<project>/.renforge`.
+  On a case-insensitive volume every spelling of a project path shares one
+  state folder, one bridge lock, one dashboard and one owned session, so a
+  game launched through one spelling is this server's own through another.
+  A Live Editor save, undo or rollback of a game on another filesystem than
+  the state folder (a second drive) stages its exchange files in
+  `.renforge/editor-exchange/` on the game folder's own filesystem instead
+  (under the project, or, for a game folder mounted from elsewhere, under
+  that mounted folder), because the atomic exchange cannot cross
+  filesystems, and removes them when it is done; a
+  conflict keeps them as evidence.
+  `RenpyProject.cache_dir` is gone; `renforge.state.project_state_dir`
+  names the folder.
 - Launches in a Wayland session use `SDL_VIDEODRIVER=wayland,x11` so games
   start while the screen is locked. The startup deadline defaults to 180 s and
   reads `RENFORGE_STARTUP_TIMEOUT`.
@@ -96,9 +157,15 @@ versioning.
   controls carry `values` for the variables their conditions read. Values
   skip loop variables and attribute roots, show enums as `Day.SUNDAY`, and
   read class-level defaults. A long list or dict says it is cut short
-  (`size`, `truncated`) instead of silently dropping entries. `explain(source=...)` on a menu, `if`, or
-  `while` lists what each branch does, and label and screen entries name
-  their file only when it differs from the result's own.
+  (`size`, `truncated`) instead of silently dropping entries. `variables`
+  is passed alone (with another selector it is refused) and reads at most
+  100 names, saying `truncated` when given more. A dotted path never steps
+  into a module or a private (`_`) field after its first name, so
+  `renpy.os.environ` (the game's environment) cannot be read.
+  `explain(source=...)` on a menu, `if`, or `while` lists what each branch
+  does, and label and screen entries name their file only when it differs
+  from the result's own. Search lists a screen's matches in source order
+  with whole snippets.
 - Acting with an observation that is slightly out of date is accepted when
   only unrelated parts of the screen changed (a notification closing) and the
   target control is unchanged. Menu captions are read without text tags,
@@ -117,7 +184,9 @@ versioning.
   the engine restarts into the save.
 - `renforge_session(action="launch", label=...)` starts the story at a label
   for testing and modding, also in archive-only games; observations carry
-  `started_at_label` because earlier story state never ran.
+  `started_at_label` because earlier story state never ran. The label is
+  applied only at startup, so such a launch always starts a fresh game: one
+  this server runs is replaced, one started elsewhere is refused.
 - Play sessions keep their saves across launches in the project's RenForge
   state folder. Continuing skips through pauses, clicks past a line that only
   has optional buttons beside it, ignores HUD buttons on `show screen` screens
@@ -129,7 +198,9 @@ versioning.
 - Lint, compile dumps, translation runs, and shadow lint run Ren'Py with a
   disposable HOME and one disposable save location. Ren'Py writes a game's
   persistent data on every start, so these used to rewrite the player's
-  `~/.renpy/<game>/persistent` and `game/saves/persistent`.
+  `~/.renpy/<game>/persistent` and `game/saves/persistent`. RenForge's
+  save and JSON-dump adapters ship as `.rpe` archives, so Ren'Py 8.0-8.2,
+  which ignore `.rpe.py` files, load them too.
 - Lint reads Ren'Py 8's `file.rpy:12 message` lines. `renforge_mod(action="lint")`
   used to report every mod clean.
 - `renforge_mod(action="reload")` takes no mod name: it reloads every script,
@@ -323,7 +394,7 @@ versioning.
   whose Ren'Py save folder resolves into the player's tree counts too, as
   does a save path inside any game's `game/saves`, not only this project's.
 - A reply that times out while the game's main thread is busy (entering a
-  scene that decodes large images) no longer ends `act` or `advance_until`
+  scene that decodes large images) no longer ends `act`
   with `stop="timeout"`: progression and the final observation ask again
   while budget remains.
 - `renforge_mod` moves to its own `mod` toolset. Writing and reloading a mod
@@ -357,6 +428,12 @@ versioning.
 - Runtime compatibility checks reject games/SDKs below Ren'Py 8.0 with
   `UNSUPPORTED_RENPY_VERSION` before download, injection, or launch. Explicit
   SDK overrides do not bypass a legacy game's engine requirement.
+- With `version="stable"` (the default) the SDK follows the game's own
+  engine: a `renpy_version` pin in the project's `renforge.json`
+  (`{"renpy_version": "8.3.7"}`, a file Ren'Py never reads, for source
+  projects), else the shipped engine's version, else
+  `game/script_version.txt`. A `version` that is neither `stable` nor
+  `X.Y.Z` returns `INVALID_RENPY_VERSION`.
 - Engine-based ending evidence in gameplay observations and progression:
   `stop="end"` confirms a root script return at the main menu; `main_menu`
   distinguishes initial menus and explicit restarts. Evidence persists until a
@@ -368,10 +445,10 @@ versioning.
 
 - Simplified shared discovery: owning screen instances supply named widget IDs,
   and the collector assigns IDs/facts once for observation and actions. Removed
-  obsolete discovery helpers and scene placement calculations; both host
-  progression modes now live in `progression.py`, with compatibility exports.
+  obsolete discovery helpers and scene placement calculations; host
+  progression lives in `progression.py`.
 - Updated gameplay/tool guidance for clipped menu entries, incomplete discovery,
-  content-based frame guards, process-exit status, and unavailable text overflow.
+  content-based frame guards, and process-exit status.
   Historical harness proposals are distinguished from current TODOs.
 - Unified gameplay and legacy UI discovery around one control collector and
   canonical IDs. Engine menu actions expose clipped choices on custom layers;
@@ -381,8 +458,8 @@ versioning.
 - Scene geometry uses completed renders and composes transforms/clipping.
   Repeated placements retain render paths; alpha inspection uses cached renders.
   Bounded focus probes find usable points on partially covered/masked controls.
-- Unsupported custom event handlers are explicit input candidates and stop both
-  progression modes. Conditional custom eligibility remains unknown.
+- Unsupported custom event handlers are explicit input candidates and stop
+  progression. Conditional custom eligibility remains unknown.
 - Owned process termination distinguishes clean exits from nonzero exits while
   preserving historical observations and leaving story completion unconfirmed.
 - Observations wait for active screens to appear in the completed render;
@@ -394,10 +471,10 @@ versioning.
 
 - Session storage initialization handles an absent save scanner thread and an
   absent Emscripten flag while preserving the single isolated save location.
-- Default progression uses bounded native skip, with interaction-level guards,
+- Progression uses bounded native skip, with interaction-level guards,
   time/step leases, temporary unread-text and presentation preferences, and
-  guaranteed restoration while the engine is responsive. `mode="dismiss"`
-  preserves guarded dismissal; both modes stop before actionable UI.
+  guaranteed restoration while the engine is responsive. It stops before
+  actionable UI.
 - Standalone progression accepts `screenshot=false`. Gameplay PNGs are bounded
   for MCP transport and report scaling metadata with hashes of returned bytes.
 - Frame timeouts, transport failures, verified runtime errors, and uncertain
@@ -409,10 +486,9 @@ versioning.
 - Host and injected bridge now share one gameplay contract for IDs,
   classification, text cleanup, operations, and guards. Discovery reuses one
   bounded scene inventory, and action guards reuse its widget references.
-- `renforge_act` returns the next stable observation by default, with optional
-  `advance=true` progression, `submit=false` input editing, and session and
-  observation guards. Action success remains separate from follow-up status;
-  `observe=false` preserves the previous action-only response.
+- `renforge_act` returns the next stable observation, guarded by the
+  observation it acts on. Action success remains separate from follow-up
+  status.
 - Custom overlay hubs remain gameplay controls. Held keys can be released after
   interaction changes; viewport axes are validated before mutation; drag
   capabilities and target eligibility are checked before callbacks run.
@@ -423,24 +499,45 @@ versioning.
 - Autopilot now identifies choices from active Ren'Py menu `items`, including
   custom-named and one-item menus, without inferring narrative intent from
   arbitrary focusable screen controls.
-- `renforge_launch`, `renforge_jump`, `renforge_new_game`, and dashboard
-  launches now isolate the running game from the user's Ren'Py state by
-  default. Each session gets a disposable save directory (`savedir=temporary`,
-  native `--savedir` plus `RENFORGE_SAVEDIR` / `RENPY_PATH_TO_SAVES` /
-  `RENPY_MULTIPERSISTENT`), a private HOME/XDG/temp tree, empty persistent
-  data, and reset preferences. Ready payloads include `session_id` and an
-  `isolation` object so an agent can see the mode. Pass `savedir=existing`
-  (which also keeps host HOME unless `home` is set) or set
-  `RENFORGE_ISOLATION=existing` to use the user's files; that is classified
-  destructive and needs `authorize=true` when `RENFORGE_POLICY=enforce`.
-  `renforge_saves` gains `list_user` (observational host listing) and `import`
-  (copy selected host slots into the isolated session; never bind-mounts the
-  user tree). This is application-layer isolation, not the Linux
-  Bubblewrap/FUSE contract suite, which remains test-only and is not on the
-  MCP launch path.
 
 ### Fixed
 
+- `renforge_mod` writes work when the project path goes through a symlink
+  (a linked games library, macOS `/var`, `/home` -> `/var/home`); only links
+  under `game/` are refused. `write` no longer takes over a file it did not
+  create: a `game/mods/<name>/` folder without a manifest, or a file (or a
+  `.rpy`'s `.rpyc`) the manifest does not list, is refused, because `remove`
+  would then delete it. The manifest name is refused in any case or folder,
+  removal uses the same junction-aware link check as writes, and `package`
+  skips an invalid manifest entry under `missing` as `list` and `remove` do.
+  `remove` refuses a mod whose own folder, `game/mods` or `game` is a link,
+  instead of deleting the manifest and empty folders in the link's target,
+  and never enters a linked folder (a Windows junction) inside the mod.
+- `renforge_mod(action="lint")` lints a temporary shadow copy, as
+  `renforge_validate` does, so it no longer writes `.rpyc` or cache files
+  in the game. It lints with the game's own engine version, as
+  `version="stable"` does elsewhere (the `renforge.json` pin, the shipped
+  engine, then `script_version.txt`), never an SDK found in the project.
+  It keeps Ren'Py parse errors (`File "...", line N:`), passes on
+  `timed_out` and a bounded `raw_tail` when it fails with nothing in the
+  mod, and reports an unknown mod instead of linting the whole project.
+- `renforge_mod` `write`, `remove`, and `package` return
+  `files_touched`/`files_deleted`, so the activity journal records them
+  (the packaged zip as a POSIX path, like every other receipt), and
+  `reload` returns a compact observation like the other play tools.
+- `RENFORGE_TOOLSETS` is parsed once: a value naming no group (`,`) or a
+  mis-cased name stops the server, instead of listing no tools while
+  `renforge_info`, the instructions, and the bridge eval switch described
+  every group (the eval switch fails closed). `renforge_info` is listed by
+  every server, and `renforge_estimate_translation` (an image-shift
+  estimate) moves from `translation` to `live`.
+- `renforge_mod` is annotated `destructiveHint=true` and
+  `openWorldHint=true`, and `renforge_session` `openWorldHint=true`, matching
+  their riskiest actions.
+- `renforge_capture_screenshot` failed with a `ValueError` since captures
+  moved to the state folder outside the game. Its `relative_path` and
+  `files_touched` receipt now name the capture's absolute path there, as
+  the activity log's `files_touched_file` does.
 - `renforge_set_var` and the dashboard's set-var refuse a name that is not a
   Python identifier. The bridge stored `""` or a dotted name such as
   `_preferences.skip_unseen` under that literal name, changed nothing the game
@@ -448,15 +545,333 @@ versioning.
   is refused, and an `advance` step fails on a count outside its schema
   (`"3"`, `0`, `2.9`) instead of advancing once.
 - The dashboard answers malformed requests with a 400 naming the field instead
-  of acting on a coerced value: a boolean, zero or negative launch `timeout`,
+  of acting on a coerced value: a boolean, zero or negative launch `timeout`
+  (or an integer too large to be a deadline, which was a 500),
   an unknown `display`/`audio`, a non-boolean `cleanup_on_stop` on `/api/warp`,
   a non-string `expr`, a boolean or negative screenshot size, a choice `index`
   that is not an integer or an empty choice `text`, an unknown control action,
   and a translation `language` that is not a name. `{"warp": ""}` on
   `/api/live/launch` no longer restarts the running game.
+- `renforge_generate_translations`, `renforge_translation_stats` and
+  `renforge_export_dialogue` refuse a `language` that is not a Ren'Py language
+  name with `LANGUAGE_INVALID` before running Ren'Py, which joins it into
+  `game/tl/<language>/` unchecked, so `../..` wrote translation files outside
+  the project. The dashboard's translation routes use the same check.
+- Play loop: continuing clicks past a line held by a pause that never ends
+  (the bridge refused that click as unstable) and keeps to the caller's
+  time budget. A speaker defined as `character.e`, quoted, or a dynamic name
+  is reported as `who`; a soft pause no longer repeats the last line as
+  `dialogue`; words stay apart across `{p=N}`, `{space=N}` and `{vspace=N}`.
+  An `Input` with `length=0` takes any length, an input callback's error is
+  reported instead of success, a hover lands where a click would, a queued
+  `load_slot` reports the load once, and the ending is confirmed at the main
+  menu's first interaction even before anything observes. A game's own
+  subclass of an engine bar, viewport, drag or button is classified like
+  the engine widget.
+- Autopilot ends a run when the bridge refuses a choice and lists it under
+  `choice_errors`, instead of counting the menu as explored.
+- A running game that reports a relative save location or HOME is never
+  treated as isolated: the game resolves it from its own working directory.
+- A stop whose cleanup fails no longer lists a dangling link it left behind
+  in `files_deleted`.
+- A stop that fails partway through removing the bridge files still lists
+  the ones it deleted in `files_deleted`.
+- Save listing no longer reads `config.save_directory` from a script outside
+  the project that a linked `game/*.rpy` points to.
+- `renforge_launch_status` drops a launch's language-mismatch message once
+  the game reports the requested language.
+- A ready `renforge_launch_status` for a launch task (an owned game or a
+  reused external one) includes `isolated` and `eval_enabled`, as documented.
+- A Live Editor save of a file under `game/game/` names that file in
+  `files_touched`, not `game/<file>`.
+- On POSIX, a `renforge-session-*` folder in the temp dir counts as a
+  session root only if it exists and this user owns it, so a running game
+  using one another user made is not treated as isolated.
+- A `save` or `load` slot that is a path rather than a slot name (absolute,
+  with a drive, a `/` or `\` separator, a `:` (on Windows `page:name`
+  writes a stream of the file `page`), or `.`/`..`) is refused with
+  `SAVE_SLOT_INVALID` before the game is asked, in `renforge_saves`,
+  `renforge_session`, scenario steps and the dashboard. Ren'Py joins the
+  slot onto its save folder, so such a slot reached any folder; a
+  `renforge_session` save, which needs no `authorize`, could write into the
+  player's own saves. The bridge's `save_slot` and `load_slot` refuse such a
+  slot themselves too, with the same code.
+- Project scans (`renforge_scan_project`, `renforge_assets`,
+  `renforge_find_references`, and the dashboard's script list, story map and
+  translation strings) no longer walk into a folder under `game/` that is a
+  Windows junction and read the scripts in the tree it points to; symlinked
+  folders were already skipped. Stopping a session likewise lists a
+  junction in its session root without walking the tree it points to.
+- Autopilot's `autopilot.json` progress report is written without
+  following a link at the file itself; one planted there is refused.
+- `renforge_mod` `write` records a new path as pending, with a digest of
+  its content, before writing it, and lists it once the content is on
+  disk. A file that appears at that path after a failed write is no longer
+  taken over by a retry or deleted by `remove`; a file published before the
+  last manifest update failed is listed as `pending`, finished by a retry,
+  and deleted by `remove`.
+- The play loop's stuck-pause click is timed from the pause's first frame:
+  a long transition before a short pause no longer makes that pause look
+  stuck and clicked the moment it appears.
+- `renforge_session` `import` refuses a running game whose bridge cannot
+  report its save folder with `SESSION_SAVES_UNKNOWN`, before copying
+  anything. It used to treat that game as no game, copy the slot into the
+  session's saves folder, and say to load it, which that game could not.
+- `renforge_session` `load` attaches the restored game's observation only
+  when it is stable; at the wait's timeout it returns `next` (observe, do
+  not load again) instead of an unstable observation offered for
+  `renforge_act`. `renforge_mod` `reload` reports `settled: false` and
+  `next` when the screen had not settled, keeping the reload's result.
+- Continuing with `renforge_act` and no control holds its first
+  observation, the click past a line, and the wait after that click to
+  the step's own `timeout`, so a short timeout is no longer overrun before
+  progression starts. A click accepted in time is still reported.
+- The dashboard's script list and story map no longer list the scripts of
+  a `game/` folder that is a link leading out of the project, as the other
+  scans already refused; a `game/` link that stays inside the project is
+  still scanned. A folder listed without search permission is skipped
+  instead of aborting the whole scan.
+- The launch guidance describes the HOME a launch resolves to:
+  `savedir=temporary` isolates HOME unless `home` is `existing` or a path
+  (`home=existing` keeps the user's HOME and needs `authorize` under
+  enforce), and under `RENFORGE_ISOLATION=temporary` a `savedir` path with
+  `home` omitted gets a temporary HOME and needs no `authorize`. The
+  `savedir` parameter, the launch policy and `authorize` texts, and the
+  server instructions said otherwise.
+- A dashboard stays discoverable after its project folder is renamed only
+  in case on a case-insensitive volume: a client started after the rename
+  accepts the record's earlier spelling of the same folder. Relative paths
+  and paths that lead to another folder are still refused.
+- A game this server runs keeps its bridge lock, metadata and session key
+  after a case-only rename of its folder even once the bounded spelling
+  cache fills and is cleared: the spelling it started with is pinned while
+  the session lives.
+- A launch with `display="none"` is refused with `DISPLAY_UNAVAILABLE`
+  also when a running game would be reused; only a fresh launch refused it
+  before, and reuse reported success for a launch that could never start.
+- `RENFORGE_TOOLSETS` with an unknown name beside `all` (`all,projecct`)
+  stops the server at startup like any unknown name, instead of listing
+  every group.
+- `renforge_validate`'s schema admits `checks` only as `["lint"]` (or
+  omitted or `null`), as its description says, and its `timeout` text
+  states the accepted 0-600 range instead of promising to clamp values the
+  schema refuses.
+- `renforge_run_scenario`'s `files_touched` names the save folder a `save`
+  step wrote to, beside its captures, so a report that fails after a save
+  no longer leaves the save out.
+- On Windows a read through a drive or share root that allows traversal but
+  denies listing (save listing, source reads) no longer fails at the root:
+  the read-only chain asks the root for list access only when it is the
+  folder being listed.
+- The dashboard's recent activity still shows history a pre-release build
+  recorded under a project spelling that differs from the disk only in
+  case (that build gave such a spelling its own state folder). It is read
+  in place, and an unreadable earlier file is skipped; new activity goes to
+  the shared folder.
+- The activity journal keeps an entry whose receipt holds an undecodable
+  path past the first 32, and pruning never deletes the sidecar just
+  written, even after the clock moved backward.
+- A shadow lint (`renforge_validate`, the Live Editor gate) whose shadow
+  folder already exists fails without deleting that folder.
+- A shadow lint that fails and then cannot remove its shadow reports the
+  lint error, with `cleanup_error` in its details, not `SHADOW_CLEANUP_FAILED`.
+- A linked directory under `game/` holding an orphan `.rpyc`/`.rpymc` or a
+  `*_ren.py` script makes the shadow incomplete (`linked_directory_with_source`)
+  instead of being skipped or replaced by an empty placeholder.
+- On Windows a `renforge_validate` `staged` key spelled `Game/...` names the
+  project's `game/` file, as `game/...` does, not a nested `game/game/` one.
+- The shadow's linked-directory scans share one 50,000-entry, 5-second
+  budget, so many links (even to one folder) no longer multiply the scan
+  time; a link scanned after it runs out is `linked_directory_uninspectable`.
+- A bounded command (shadow lint) whose descendant keeps its pipes open
+  keeps the output already printed, and waits one 5-second grace for both
+  streams instead of 5 seconds each. The capture is still marked truncated.
+
+## [0.7.6] - 2026-11-18
+
+### Added
+
+- Opt-in launch isolation for `renforge_launch`, `renforge_jump`,
+  `renforge_new_game`, and dashboard launches. Pass `savedir=temporary`, or
+  set `RENFORGE_ISOLATION=temporary` for every launch of a server; launches
+  that don't pass `savedir`, `home`, `persistent` or `preferences` use the
+  game's normal saves, as before. An isolated session gets a disposable save
+  directory (native `--savedir` plus `RENFORGE_SAVEDIR` /
+  `RENPY_PATH_TO_SAVES` / `RENPY_MULTIPERSISTENT`), a private HOME/XDG/temp
+  tree (new `home` knob), empty persistent data, and reset preferences (new
+  `preferences` knob). Ready payloads include `session_id` and an
+  `isolation` object so an agent can see the mode. A launch is refused with
+  `SESSION_ISOLATION_MISMATCH` rather than handed a running game that uses
+  the user's saves or HOME where the launch isolates them (each checked
+  separately), including one started elsewhere (another RenForge process or
+  the dashboard). An external game's HOME counts as isolated only when it
+  reports one inside a RenForge session root, and its saves only when every
+  active save location it reports is inside one; anything else, including a
+  bridge that cannot report them, counts as the user's. A reused external
+  game's ready and status payloads carry what it reported as `isolation`. A
+  launch whose state modes a fresh launch would reject (`empty` without
+  `savedir=temporary`) fails with `LAUNCH_STATE_MODE_CONFLICT` before reuse.
+  A `renforge_jump`, `renforge_new_game` or dashboard Warp relaunch whose
+  isolation knobs are all omitted or `auto` keeps the saves and HOME
+  isolation of the game it replaces (resolved by the process that owns the
+  game, unless this server's `RENFORGE_ISOLATION=temporary` already isolates
+  it); it gets a fresh session, so imported slots are not carried over.
+  Mode tokens (`auto`, `existing`, `default`, `temporary`, `empty`) are
+  matched case-insensitively, so `savedir=Temporary` isolates instead of
+  creating a folder of that name. This is application-layer isolation, not
+  an OS sandbox. (#125)
+- `renforge_saves` gains `list_user` (observational host listing) and
+  `import` (copy selected host slots into the savedir of a session launched
+  with `savedir=temporary`, never into a `savedir=<path>` folder; never
+  bind-mounts the user tree). `list_user` filters by `pattern`, a glob
+  matched against the whole slot name; `import` selects by name, by
+  `pattern`, or both; `list` keeps its `regexp`, which Ren'Py applies.
+  `pattern` and each slot name are capped at 256 characters and `slots` at
+  1000 names (`SAVE_IMPORT_INVALID`, checked before anything is listed).
+  Both read only the folder that the game's `config.save_directory` names
+  directly under the Ren'Py save root, plus a `game/saves` inside the
+  project; they open the game's scripts without following links or
+  blocking, skip one over 4 MiB, and list before an import holds the
+  session, so a stop never waits on a listing. A save folder swapped for a
+  link lists nothing, and `list_user` writes nothing, not even `.renforge`.
+  Import resolves none of the session's own folders, so a session root or
+  savedir swapped for a link is refused with `SAVE_IMPORT_FAILED` instead of
+  followed, and never recreates a stopped session's folders. On every
+  platform, folders are listed and slot files read and copied at handles
+  that do not follow links or junctions. A slot file import will not copy
+  (a link, a FIFO or other non-regular file, one over the size cap, or an
+  unreadable one), or a slot whose host folder was swapped for a link, is
+  listed in `refused` with a reason, never dropped; a slot counts as
+  imported only when its save file was copied, and an import that copied
+  nothing fails with `NO_MATCHING_SAVE_SLOTS`.
+  Import returns a `files_touched` write receipt (absolute paths of the
+  copied files, also on `SAVE_IMPORT_FAILED`). Its other codes are
+  `NO_ISOLATED_SESSION`, `SAVE_IMPORT_NOT_ISOLATED` and
+  `PROJECT_PATH_UNAVAILABLE`. A stop waits for an import in progress, and an
+  import never starts on a stopped session or one whose game has exited.
+  Copied slots are removed with a temporary savedir on stop, unless
+  `cleanup_on_stop=false` or the cleanup fails. A failed save rescan is
+  reported as `rescan_error` instead of leaving a stale slot list
+  unexplained. (#125)
+- `renforge_saves(action="import")` reaches an isolated session that the
+  dashboard launched: the request goes to the dashboard that owns the
+  session (new token-checked `POST /api/live/saves/import`), and that
+  dashboard's answer, code and shape included, is final; only an unreachable
+  dashboard gives `DASHBOARD_REQUEST_FAILED`. The MCP side waits up to 300 s
+  for a delegated import (launch and stop keep 45 s). (#125)
+- `language` composes with isolation. The "changed the stored preference"
+  warning follows the resolved save directory, so an isolated launch (or
+  `RENFORGE_ISOLATION=temporary`) does not raise it, and
+  `SESSION_ISOLATION_MISMATCH` reports `requested_language` and
+  `language_applied: false` like `SESSION_MODE_MISMATCH`. Dashboard launches
+  keep forwarding `language`, now together with the isolation options. (#125)
+
+### Changed
+
+- `savedir=temporary` and `savedir=<path>` now pass native `--savedir` and
+  keep a single save location (no `game/saves` or `config.extra_savedirs`).
+  With `savedir=temporary`, persistent and preferences default to empty,
+  and `persistent=existing` means the selected save directory's own state,
+  not the player's. `savedir=<path>` also sets `RENPY_PATH_TO_SAVES` and
+  `RENPY_MULTIPERSISTENT=<path>/multipersistent`, which it creates. In 0.7.5
+  `savedir=temporary` only set `RENFORGE_SAVEDIR`, and `persistent` defaulted
+  to `existing`. (#125)
+- The `savedir` and `persistent` schema defaults are now `auto` (they were
+  `""` and `existing`); with isolation off they resolve exactly as before. (#125)
+- Dashboard launch and Warp validate the isolation options: `persistent`
+  and `preferences` must be `auto`, `existing` or `empty` (HTTP 400
+  `launch_persistent_invalid` / `launch_preferences_invalid`, which now also
+  rejects `copy` and `fixture`), `home` must be a string
+  (`launch_home_invalid`), and a combination a launch would refuse is a 400
+  `launch_state_mode_conflict`. (#125)
+- Breaking: `persistent` no longer accepts `copy` or `fixture` (they only set
+  an environment marker and copied or loaded nothing); the tool schema
+  rejects them, launches return `LAUNCH_STATE_MODE_CONFLICT`, and the
+  dashboard answers 400 `launch_persistent_invalid`. Use
+  `renforge_saves(action="import")` to bring in real slots. `persistent=empty`
+  (like `preferences=empty`) now requires `savedir=temporary`: it selects a
+  fresh temporary location and never deletes files, where before it unlinked
+  `persistent` in whatever save location the game used. (#125)
+
+### Fixed
+
+### Thanks
+
+- Thanks to @Aaron-Fine for #125.
+
+## [0.7.5] - 2026-11-14
+
+### Added
+
+- Public `renforge_validate` tool: lint a clean shadow copy with optional staged
+  text, measured quotas, skipped linked directories, an explicit Ren'Py
+  `version`, and the resolved `sdk_version` in the result. (#107, #118)
+
+### Changed
+
+- Shadow lint (validation and editor commit/undo) plans the tree before copying,
+  reports quota breaches with measured totals including staged changes and the
+  largest contributor, skips linked directories with a recorded reason, and
+  mirrors media files as zero-byte placeholders so asset-heavy projects fit the
+  default byte quota. (#106, #118)
+
+### Fixed
+
+- `renforge_validate` refuses to report success on reported lint errors,
+  timeouts, or truncated transcripts. The lenient editor commit/undo gate still
+  fails on timeouts and treats a long transcript as diagnostic; set
+  `RENFORGE_SHADOW_STRICT_LINT=1` to make reported lint errors and truncation
+  block that gate too. A validation exception marks the editor transaction
+  failed. (#106, #107, #118)
+
+### Thanks
+
+- Thanks to @AxelBeary for #118.
+
+## [0.7.4] - 2026-11-12
+
+### Added
+
+- `renforge_launch(language=...)` sets `RENPY_LANGUAGE` for a fresh game
+  process. Results report `language_applied` (`true`/`false`, or `null` when the
+  bridge does not report a language) and a `warning` when the default savedir
+  lets the preference persist. (#112, #121)
+- Activity log write receipts: mutating tools report `files_touched` /
+  `files_deleted`, `stop` lists the paths it removed, and path lists too large
+  for the journal spill to 0600 sidecars capped at the newest 200. (#104, #116)
+- Live Editor: `renforge_editor(action="save", dry_run=true)` previews a
+  unified source diff without writing files, reloading, or creating a
+  transaction. Older bridges fail closed with `DRY_RUN_UNSUPPORTED`. (#119)
+- Live Editor: optional `RENFORGE_ALLOW_PATHS` narrows saves and undo to
+  game-relative POSIX glob patterns. Out-of-scope targets and invalid patterns
+  are refused before a transaction is written. (#120)
+
+### Changed
+
+- `renforge_scene_tree(include=["overflow"])`: dropped the `clipped` alias
+  (it duplicated `overflow`), added per-axis `overflow_axes` and `wrapped`
+  values, and now reports `overflow` only for actual vertical clipping.
+  Horizontal wrapping is reported in `overflow_axes.x` / `wrapped.x`, not as
+  overflow. Verdicts also cover text inside `button` and `input` nodes, and
+  `include=["style"]` now includes integer `xmaximum`/`ymaximum`.
+  (#105, #108, #117)
+- MCP documentation covers scripted and non-interactive tool calls through
+  the FastMCP CLI, JSON arguments and results, explicit project selection,
+  policy authorization, and session ownership. (#122)
+
+### Fixed
+
+- A failed launch no longer reports `language_applied: true` just because the
+  requested language was already active in another session. (#112, #121)
 - Live Editor Save keeps polling after `reload_script` resets the bridge
   connection, instead of failing the status read with "Connection reset by
-  peer".
+  peer". (#123)
+- Bridge reload poll deadline test uses a virtual clock instead of the OS
+  timer, avoiding flaky failures on Windows. (#124)
+
+### Thanks
+
+- Thanks to @AxelBeary for #116, #117, #119, #120, #121 and #122.
 
 ## [0.7.3] - 2026-10-07
 

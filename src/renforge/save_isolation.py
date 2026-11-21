@@ -1,33 +1,53 @@
 """Application-layer isolation of Ren'Py saves, preferences, and HOME.
 
-MCP and dashboard launches default to a disposable session root so a running
-game cannot read or write the user's normal Ren'Py state (saves, persistent
-data, preferences, and ``$HOME/.renpy``). Pass ``savedir=existing`` /
-``home=existing`` / ``RENFORGE_ISOLATION=existing`` to use the user's files.
+Isolation is opt-in. By default MCP and dashboard launches use the user's own
+saves and HOME, as they always have. Pass ``savedir=temporary`` (or set
+``RENFORGE_ISOLATION=temporary``) to start the game in a disposable session root
+so it cannot read or write the user's normal Ren'Py state (saves, persistent
+data, preferences, and ``$HOME/.renpy``).
 
 Selected host slots can be copied into an isolated session with
-``renforge_session(action="import")`` or ``renforge_saves(action="import")``.
-One-shot Ren'Py commands (lint, compile, translate) run under
-``renpy_tool_environment``. This module never bind-mounts the user tree.
+``renforge_saves(action="import")``, or into a play session's saves with
+``renforge_session(action="import")``. One-shot Ren'Py commands (lint,
+compile, translate) run under :func:`renpy_tool_environment`. This module
+never bind-mounts the user tree.
 
-This is not the Linux Bubblewrap/FUSE sandbox. That helper stays test-only
-and is not on the MCP launch path.
+Under ``RENFORGE_POLICY=enforce`` a launch that leaves RenForge's own folders
+needs authorization; :func:`launch_owned_components` is the rule the policy
+gate (both components, :func:`launch_request_is_renforge_owned`) and session
+reuse (component by component) share.
+
+This is application-layer isolation, not an OS sandbox: the game still runs
+as the user and can reach any path it names explicitly.
 """
 
 from __future__ import annotations
 
+import errno
+import fnmatch
 import json
 import os
 import re
 import shutil
+import stat
+import sys
 import tempfile
+import zipfile
 from collections.abc import Iterator
+from itertools import islice
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
-from .util.files import read_text_nofollow
+from .util.files import (
+    list_directory_nofollow,
+    make_directory_at_nofollow,
+    open_regular_at_nofollow,
+    receipt_path,
+    replace_file_at_nofollow,
+    scan_directory_nofollow,
+)
 
 EXISTING_TOKENS: frozenset[str] = frozenset({"existing", "default"})
 TEMPORARY_TOKENS: frozenset[str] = frozenset({"", "temporary"})
@@ -42,20 +62,46 @@ SESSION_ID_PREFIX: str = "sess_"
 MULTIPERSISTENT_DIRNAME: str = "multipersistent"
 SAVES_DIRNAME: str = "saves"
 HOME_DIRNAME: str = "home"
+# Storage components a launch either isolates or leaves on the player's own.
+SAVEDIR_COMPONENT: str = "savedir"
+HOME_COMPONENT: str = "home"
+ALL_COMPONENTS: frozenset[str] = frozenset({SAVEDIR_COMPONENT, HOME_COMPONENT})
 SAVE_DIRECTORY_RE: re.Pattern[str] = re.compile(
-    r"^\s*define\s+config\.save_directory\s*=\s*[\"']([^\"']+)[\"']",
+    r"^[ \t]*define[ \t]+config\.save_directory[ \t]*=[ \t]*[\"']([^\"'\r\n]+)[\"']",
     re.MULTILINE,
 )
 SLOT_FILE_RE: re.Pattern[str] = re.compile(
-    r"^(?P<slot>.+)-[A-Za-z]{2}\d+\.save(?P<json>\.json)?$"
+    r"^(?P<slot>.+)-[A-Za-z]{2}\d+\.save(?P<json>\.json)?\Z"
 )
+# Per-file caps on what an import copies and what list_user parses.
+SLOT_FILE_MAX_BYTES: int = 256 * 1024 * 1024
+SIDECAR_MAX_BYTES: int = 1024 * 1024
+# Caps on caller selectors: fnmatch compiles a glob in time quadratic in its
+# length, and every slot name is checked against the pattern.
+SELECTOR_MAX_CHARS: int = 256
+SELECTOR_MAX_SLOTS: int = 1000
+# config.save_directory is read from game/*.rpy; a larger script is skipped.
+RPY_SCAN_MAX_BYTES: int = 4 * 1024 * 1024
+
+
+_KNOWN_TOKENS: frozenset[str] = AUTO_TOKENS | EXISTING_TOKENS | TEMPORARY_TOKENS | {"empty"}
+
+
+def _token(value: Any) -> str:
+    """*value* stripped, and lower-cased when it is a mode token in any case.
+
+    ``Temporary`` must select the temporary mode, not become a save folder of
+    that name in the server's working directory; a path keeps its case.
+    """
+    token = str(value).strip()
+    return token.lower() if token.lower() in _KNOWN_TOKENS else token
 
 
 def classify_token(value: str | None, *, omitted: str) -> str:
     """Return ``existing``, ``temporary``, ``empty``, or ``path``."""
     if value is None:
         return omitted
-    token = str(value).strip()
+    token = _token(value)
     if token in AUTO_TOKENS:
         return omitted
     if token in EXISTING_TOKENS:
@@ -74,37 +120,31 @@ def classify_savedir(savedir: str | None) -> str:
 
 
 def configured_isolation_mode(environ: Mapping[str, str] | None = None) -> str:
-    """Server-wide default: ``temporary`` unless ``RENFORGE_ISOLATION=existing``."""
+    """Server-wide default: the user's own saves unless ``RENFORGE_ISOLATION=temporary``.
+
+    Isolation is opt-in: changing every launch's default to isolated saves,
+    persistent data, preferences and HOME is a separate contract decision.
+    A single launch opts in with ``savedir=temporary``.
+    """
     source = os.environ if environ is None else environ
-    token = str(source.get(ISOLATION_ENV, "temporary") or "temporary").strip()
-    if token in EXISTING_TOKENS:
-        return "existing"
-    return "temporary"
+    token = _token(source.get(ISOLATION_ENV, "") or "")
+    if token == "temporary":
+        return "temporary"
+    return "existing"
 
 
 def default_launch_value(
     value: str | None,
     *,
-    field: str,
     environ: Mapping[str, str] | None = None,
 ) -> str:
     """Fill an omitted MCP/dashboard isolation field from configuration."""
-    token = None if value is None else str(value).strip()
+    token = None if value is None else _token(value)
     if token and token not in AUTO_TOKENS:
         return token
     if configured_isolation_mode(environ) == "existing":
         return "existing"
-    if field in {"persistent", "preferences"}:
-        return "empty"
     return "temporary"
-
-
-def default_launch_savedir(
-    savedir: str | None,
-    environ: Mapping[str, str] | None = None,
-) -> str:
-    """Coerce omitted MCP/dashboard savedir values to the configured default."""
-    return default_launch_value(savedir, field="savedir", environ=environ)
 
 
 def apply_launch_isolation_defaults(
@@ -117,21 +157,24 @@ def apply_launch_isolation_defaults(
 ) -> dict[str, str]:
     """Resolve MCP/dashboard isolation knobs.
 
-    Omitted fields follow ``RENFORGE_ISOLATION`` (default ``temporary``).
+    Omitted fields follow ``RENFORGE_ISOLATION`` (default ``existing``).
     ``savedir=existing`` also selects ``home=existing`` unless *home* was set
     explicitly, so user saves under ``~/.renpy`` remain reachable. Explicit
     ``savedir=temporary`` isolates HOME the same way unless *home* is set.
     """
-    home_explicit = home is not None and bool(str(home).strip()) and str(home).strip() not in AUTO_TOKENS
-    resolved_savedir = default_launch_value(savedir, field="savedir", environ=environ)
-    resolved_home = default_launch_value(home, field="home", environ=environ)
-    savedir_mode = classify_savedir(resolved_savedir)
-    if not home_explicit and savedir_mode in ("existing", "temporary"):
-        resolved_home = savedir_mode
-    state_default = "empty" if savedir_mode == "temporary" else "existing"
+    home_explicit = home is not None and _token(home) not in {"", "auto"}
+    resolved_savedir = default_launch_value(savedir, environ=environ)
+    resolved_home = default_launch_value(home, environ=environ)
+    if not home_explicit:
+        savedir_mode = classify_savedir(resolved_savedir)
+        if savedir_mode == "existing":
+            resolved_home = "existing"
+        elif savedir_mode == "temporary":
+            resolved_home = "temporary"
+    state_default = "empty" if classify_savedir(resolved_savedir) == "temporary" else "existing"
 
     def state_mode(value: str | None) -> str:
-        token = "auto" if value is None else str(value).strip()
+        token = "auto" if value is None else _token(value)
         return state_default if token in {"", "auto"} else token
 
     return {
@@ -140,6 +183,45 @@ def apply_launch_isolation_defaults(
         "persistent": state_mode(persistent),
         "preferences": state_mode(preferences),
     }
+
+
+def isolation_knobs_unset(*values: str | None) -> bool:
+    """True when every launch isolation knob was omitted or left ``auto``."""
+    return all(value is None or _token(value) in {"", "auto"} for value in values)
+
+
+def _state_mode(value: str | None) -> str:
+    mode = classify_token(value, omitted="existing")
+    return "empty" if mode == "temporary" else mode
+
+
+def launch_state_mode_error(
+    *,
+    savedir: str | None = None,
+    home: str | None = None,
+    persistent: str | None = None,
+    preferences: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    """Why these launch knobs cannot be combined, or None.
+
+    The dashboard checks this before any launch work starts, and
+    :func:`resolve_launch_isolation` raises it, so both reject the same
+    requests.
+    """
+    resolved = apply_launch_isolation_defaults(
+        savedir=savedir, home=home, persistent=persistent,
+        preferences=preferences, environ=environ,
+    )
+    modes = {_state_mode(resolved["persistent"]), _state_mode(resolved["preferences"])}
+    if not modes <= {"existing", "empty"}:
+        return "Persistent/preferences modes must be 'auto', 'existing', or 'empty'."
+    if classify_savedir(resolved["savedir"]) != "temporary" and "empty" in modes:
+        return (
+            "Empty persistent/preferences state requires savedir='temporary'; "
+            "use 'existing' state modes to reuse a save directory."
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -155,22 +237,25 @@ class LaunchIsolation:
     session_root: Path | None
     cleanup: bool
 
-    @property
-    def mode(self) -> str:
-        """Backward-compatible alias for :attr:`savedir_mode`."""
-        return self.savedir_mode
+    def exposes_user_saves(self, project_path: str | Path | None = None) -> bool:
+        """Whether this launch can read or write the player's saves or HOME."""
+        return bool(self.exposed_components(project_path))
 
-    @property
-    def exposes_user_saves(self) -> bool:
-        """Whether this launch can read or write the host Ren'Py save tree."""
-        if self.savedir_mode == "existing" or self.home_mode == "existing":
-            return True
-        if self.savedir_mode == "path" and self.savedir is not None:
-            if path_exposes_user_saves(self.savedir):
-                return True
-        if self.home_mode == "path" and self.home is not None:
-            return home_exposes_user_saves(self.home)
-        return False
+    def exposed_components(
+        self, project_path: str | Path | None = None, *, certain: bool = False
+    ) -> frozenset[str]:
+        """Which of ``savedir`` / ``home`` reach the player's own storage.
+
+        ``certain`` picks the narrow answer; see :func:`_exposed_components`.
+        """
+        return _exposed_components(
+            savedir_mode=self.savedir_mode,
+            home_mode=self.home_mode,
+            savedir=self.savedir,
+            home=self.home,
+            project_path=project_path,
+            certain=certain,
+        )
 
     def command_args(self) -> list[str]:
         if self.savedir is None:
@@ -189,15 +274,6 @@ class LaunchIsolation:
         return env
 
 
-def resolve_save_isolation(
-    savedir: str | None,
-    *,
-    cleanup_on_stop: bool = True,
-) -> LaunchIsolation:
-    """Savedir-focused resolver used by the low-level launcher tests."""
-    return resolve_launch_isolation(savedir, cleanup_on_stop=cleanup_on_stop)
-
-
 def resolve_launch_isolation(
     savedir: str | None = None,
     *,
@@ -209,35 +285,25 @@ def resolve_launch_isolation(
 ) -> LaunchIsolation:
     """Create or select isolated save/home directories for one Ren'Py process.
 
-    All launch paths use the same isolated defaults. ``savedir=existing``
-    opts into the game's normal locations and state; HOME follows that mode.
+    Omitted fields follow :func:`apply_launch_isolation_defaults`, so every
+    launch path resolves them the same way. HOME follows the savedir mode.
     """
+    error = launch_state_mode_error(
+        savedir=savedir, home=home, persistent=persistent,
+        preferences=preferences, environ=host_env,
+    )
+    if error is not None:
+        raise ValueError(error)
     resolved = apply_launch_isolation_defaults(
         savedir=savedir, home=home, persistent=persistent,
         preferences=preferences, environ=host_env,
     )
     savedir, home = resolved["savedir"], resolved["home"]
     persistent, preferences = resolved["persistent"], resolved["preferences"]
-    savedir_mode = classify_savedir(savedir)
-    home_mode = classify_token(home, omitted="temporary")
-    if home_mode == "empty":
-        home_mode = "temporary"
+    savedir_mode, home_mode = _location_modes(resolved)
 
-    persistent_mode = classify_token(persistent, omitted="existing")
-    if persistent_mode == "temporary":
-        persistent_mode = "empty"
-    preferences_mode = classify_token(preferences, omitted="existing")
-    if preferences_mode == "temporary":
-        preferences_mode = "empty"
-
-    if not {persistent_mode, preferences_mode} <= {"existing", "empty"}:
-        raise ValueError("Persistent/preferences modes must be 'auto', 'existing', or 'empty'.")
-
-    if savedir_mode != "temporary" and "empty" in {persistent_mode, preferences_mode}:
-        raise ValueError(
-            "Empty persistent/preferences state requires savedir='temporary'; "
-            "use 'existing' state modes to reuse a save directory."
-        )
+    persistent_mode = _state_mode(persistent)
+    preferences_mode = _state_mode(preferences)
 
     needs_session = savedir_mode == "temporary" or home_mode == "temporary"
     session_root: Path | None = None
@@ -305,11 +371,7 @@ def isolation_report(
     project_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """JSON object attached to launch/status so agents can see isolation."""
-    exposes = isolation.exposes_user_saves
-    if isolation.savedir_mode == "path" and isolation.savedir is not None:
-        exposes = exposes or path_exposes_user_saves(
-            isolation.savedir, project_path=project_path
-        )
+    exposes = isolation.exposes_user_saves(project_path)
     return {
         "session_id": session_id,
         "isolation": {
@@ -324,6 +386,145 @@ def isolation_report(
     }
 
 
+def launch_exposed_components(
+    *,
+    savedir: str | None = None,
+    home: str | None = None,
+    persistent: str | None = None,
+    preferences: str | None = None,
+    project_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    certain: bool = False,
+) -> frozenset[str]:
+    """Which of ``savedir`` / ``home`` the resolved launch leaves on the player's storage.
+
+    ``certain`` picks the narrow answer; see :func:`_exposed_components`.
+    """
+    resolved = apply_launch_isolation_defaults(
+        savedir=savedir,
+        home=home,
+        persistent=persistent,
+        preferences=preferences,
+        environ=environ,
+    )
+    savedir_mode, home_mode = _location_modes(resolved)
+    return _exposed_components(
+        savedir_mode=savedir_mode,
+        home_mode=home_mode,
+        savedir=resolved["savedir"],
+        home=resolved["home"],
+        project_path=project_path,
+        certain=certain,
+    )
+
+
+def _location_modes(resolved: Mapping[str, str]) -> tuple[str, str]:
+    """``(savedir_mode, home_mode)`` of knobs from apply_launch_isolation_defaults."""
+    home_mode = classify_token(resolved["home"], omitted="temporary")
+    return classify_savedir(resolved["savedir"]), "temporary" if home_mode == "empty" else home_mode
+
+
+def _exposed_components(
+    *,
+    savedir_mode: str,
+    home_mode: str,
+    savedir: str | Path | None,
+    home: str | Path | None,
+    project_path: str | Path | None,
+    certain: bool = False,
+) -> frozenset[str]:
+    """Which storage components reach the player's own, asked one of two ways.
+
+    An ``existing`` component always counts. A ``path`` component is where
+    the two answers differ, and each caller must take the one whose mistakes
+    err toward isolation:
+
+    - By default, a component counts when it *might* be the player's:
+      ``savedir`` in the host Ren'Py save tree (compared case-insensitively)
+      or in any game's ``game/saves``; ``home`` that is the host HOME or a
+      HOME whose Ren'Py save folder resolves into the host tree. Use it for
+      what a running game exposes, for the policy gate, for import
+      destinations, and for reports: counting more there refuses more.
+    - With ``certain=True``, a component counts only when it *certainly* is
+      the player's: ``savedir`` inside the host save tree or this project's
+      ``game/saves`` as the filesystem spells them, ``home`` that is the host
+      HOME (upstream RenForge's rule). Use it for what a launch request gives
+      up and for what a relaunch inherits: counting more there would hand a
+      request a game on the player's saves, or send a relaunch to them.
+    """
+    def savedir_is_players(value: str | Path) -> bool:
+        if certain:
+            return _path_is_user_save_root(value, project_path)
+        return path_exposes_user_saves(value, project_path=project_path)
+
+    def home_is_players(value: str | Path) -> bool:
+        return _path_is_host_home_as_spelled(value) if certain else home_exposes_user_saves(value)
+
+    exposed: set[str] = set()
+    if savedir_mode == "existing" or (
+        savedir_mode == "path" and savedir is not None and savedir_is_players(savedir)
+    ):
+        exposed.add(SAVEDIR_COMPONENT)
+    if home_mode == "existing" or (
+        home_mode == "path" and home is not None and home_is_players(home)
+    ):
+        exposed.add(HOME_COMPONENT)
+    return frozenset(exposed)
+
+
+def _path_is_user_save_root(savedir: str | Path, project_path: str | Path | None) -> bool:
+    """*savedir* is inside the host save tree or this project's ``game/saves``, case as spelled."""
+    try:
+        path = Path(savedir).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    for root in user_save_roots(project_path):
+        try:
+            if path.is_relative_to(root.expanduser().resolve()):
+                return True
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return False
+
+
+def _path_is_host_home_as_spelled(value: str | Path) -> bool:
+    """*value* is the host HOME, compared with the platform's own case rule only."""
+    try:
+        path = Path(value).expanduser().resolve()
+        host = Path.home().expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return os.path.normcase(str(path)) == os.path.normcase(str(host))
+
+
+def reuse_keeps_isolation(
+    requested_exposed: frozenset[str], running_exposed: frozenset[str]
+) -> bool:
+    """Whether a running game may serve a launch with these exposed components.
+
+    Every component the launch isolates must be isolated in the running game
+    too; a game that isolates more than asked is harmless to reuse. Owned and
+    external sessions both go through this rule.
+    """
+    return running_exposed <= requested_exposed
+
+
+def launch_exposes_user_saves(
+    *,
+    savedir: str | None = None,
+    home: str | None = None,
+    persistent: str | None = None,
+    preferences: str | None = None,
+    project_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """True when the resolved launch can read or write the player's saves or HOME."""
+    return bool(launch_exposed_components(
+        savedir=savedir, home=home, persistent=persistent, preferences=preferences,
+        project_path=project_path, environ=environ,
+    ))
+
+
 def launch_explicit_paths(
     *,
     savedir: str | None = None,
@@ -336,10 +537,11 @@ def launch_explicit_paths(
     value that :func:`resolve_launch_isolation` passes to the game.
     """
     resolved = apply_launch_isolation_defaults(savedir=savedir, home=home, environ=environ)
+    savedir_mode, home_mode = _location_modes(resolved)
     paths = []
-    if classify_savedir(resolved["savedir"]) == "path":
+    if savedir_mode == "path":
         paths.append(Path(resolved["savedir"]).expanduser().resolve())
-    if classify_token(resolved["home"], omitted="temporary") == "path":
+    if home_mode == "path":
         paths.append(Path(resolved["home"]).expanduser().resolve())
     return paths
 
@@ -355,23 +557,95 @@ def location_is_renforge_owned(path: str | Path) -> bool:
     try:
         resolved = Path(path).expanduser().resolve()
         root = state_root().expanduser().resolve()
-        temp = Path(tempfile.gettempdir()).resolve()
     except (OSError, RuntimeError, ValueError):
         return False
     if resolved != root and resolved.is_relative_to(root):
         return True
-    if resolved != temp and resolved.is_relative_to(temp):
-        return resolved.relative_to(temp).parts[0].startswith(SESSION_PREFIX)
-    return False
+    return path_in_session_root(resolved)
 
 
-def isolation_is_renforge_owned(isolation: LaunchIsolation) -> bool:
+def isolation_owned_components(
+    isolation: LaunchIsolation, project_path: str | Path | None = None
+) -> frozenset[str]:
+    """Which of a running session's ``savedir`` / ``home`` are in RenForge's own folders.
+
+    The state folder and session roots count; a location there that still
+    reaches the player's storage (through a link) does not.
+    """
+    exposed = isolation.exposed_components(project_path)
+    owned: set[str] = set()
+    for component, mode, location in ((SAVEDIR_COMPONENT, isolation.savedir_mode, isolation.savedir),
+                                      (HOME_COMPONENT, isolation.home_mode, isolation.home)):
+        if (mode != "existing" and location is not None and component not in exposed
+                and location_is_renforge_owned(location)):
+            owned.add(component)
+    return frozenset(owned)
+
+
+def isolation_is_renforge_owned(
+    isolation: LaunchIsolation, project_path: str | Path | None = None
+) -> bool:
     """Whether a running session keeps its saves and HOME in RenForge's own folders."""
-    if isolation.savedir_mode == "existing" or isolation.home_mode == "existing":
+    return isolation_owned_components(isolation, project_path) == ALL_COMPONENTS
+
+
+def storage_is_renforge_owned(
+    path: Any, *, home: bool, project_path: str | Path | None = None
+) -> bool:
+    """Whether a save location (or, with ``home=True``, a HOME) a game reports is RenForge's own.
+
+    It must be under the state folder or in a session root, and must not
+    reach the player's storage anyway. Anything else, or anything that is
+    not a usable path, counts as the player's. So does a relative path: the
+    game resolves it against its own working directory, not the server's.
+    """
+    if not (isinstance(path, str) and path and Path(path).is_absolute()):
         return False
-    if isolation.savedir is None or isolation.home is None:
+    if not location_is_renforge_owned(path):
         return False
-    return location_is_renforge_owned(isolation.savedir) and location_is_renforge_owned(isolation.home)
+    if home:
+        return not home_exposes_user_saves(path)
+    return not path_exposes_user_saves(path, project_path=project_path)
+
+
+def launch_owned_components(
+    *,
+    savedir: str | None = None,
+    home: str | None = None,
+    persistent: str | None = None,
+    preferences: str | None = None,
+    project_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> frozenset[str]:
+    """Which of ``savedir`` / ``home`` a launch keeps in RenForge's own folders.
+
+    A temporary component is in a session root; an explicit path counts only
+    under the state folder (the temp dir is shared); neither may reach the
+    player's storage anyway. Session reuse asks this per component, so a
+    request is never handed a game keeping a component elsewhere that the
+    request keeps in RenForge's folders.
+    """
+    from .state import state_root
+
+    exposed = launch_exposed_components(savedir=savedir, home=home, persistent=persistent,
+                                        preferences=preferences, project_path=project_path, environ=environ)
+    resolved = apply_launch_isolation_defaults(savedir=savedir, home=home, environ=environ)
+    savedir_mode, home_mode = _location_modes(resolved)
+    owned: set[str] = set()
+    for component, mode, value in ((SAVEDIR_COMPONENT, savedir_mode, resolved["savedir"]),
+                                   (HOME_COMPONENT, home_mode, resolved["home"])):
+        if component in exposed or mode == "existing":
+            continue
+        if mode == "path":
+            try:
+                path = Path(value).expanduser().resolve()
+                root = state_root().expanduser().resolve()
+            except (OSError, RuntimeError, ValueError, TypeError):
+                continue
+            if path == root or not path.is_relative_to(root):
+                continue
+        owned.add(component)
+    return frozenset(owned)
 
 
 def launch_request_is_renforge_owned(
@@ -387,51 +661,45 @@ def launch_request_is_renforge_owned(
 
     The policy gate and session reuse both ask this, so a request that would
     need authorize can never be satisfied by handing back a running session.
-    Explicit paths count only under the state folder: the temp dir is shared.
+    It holds when :func:`launch_owned_components` covers both components.
     """
-    from .state import state_root
+    return launch_owned_components(savedir=savedir, home=home, persistent=persistent, preferences=preferences,
+                                   project_path=project_path, environ=environ) == ALL_COMPONENTS
 
-    if launch_exposes_user_saves(savedir=savedir, home=home, persistent=persistent,
-                                 preferences=preferences, project_path=project_path, environ=environ):
-        return False
+
+def path_in_session_root(value: str | Path) -> bool:
+    """True only for a path inside a session root this module creates.
+
+    Session roots are ``tempfile.mkdtemp(prefix=SESSION_PREFIX)`` folders, so
+    nothing outside one is session-private. A path that cannot be resolved
+    is not either: callers deciding whether storage is isolated must treat an
+    unknown location as the player's.
+    """
     try:
-        paths = launch_explicit_paths(savedir=savedir, home=home, environ=environ)
-        root = state_root().expanduser().resolve()
-    except (OSError, RuntimeError, ValueError):
+        resolved = Path(value).expanduser().resolve()
+        temp = Path(tempfile.gettempdir()).resolve()
+        relative = resolved.relative_to(temp)
+    except (OSError, RuntimeError, ValueError, TypeError):
         return False
-    return all(path != root and path.is_relative_to(root) for path in paths)
+    if not (relative.parts and relative.parts[0].startswith(SESSION_PREFIX)):
+        return False
+    return _session_root_is_ours(temp / relative.parts[0])
 
 
-def launch_exposes_user_saves(
-    *,
-    savedir: str | None = None,
-    home: str | None = None,
-    persistent: str | None = None,
-    preferences: str | None = None,
-    project_path: str | Path | None = None,
-    environ: Mapping[str, str] | None = None,
-) -> bool:
-    """True when the resolved launch can read or write the host save tree."""
-    resolved = apply_launch_isolation_defaults(
-        savedir=savedir,
-        home=home,
-        persistent=persistent,
-        preferences=preferences,
-        environ=environ,
-    )
-    savedir_mode = classify_savedir(resolved["savedir"])
-    home_mode = classify_token(resolved["home"], omitted="temporary")
-    if home_mode == "empty":
-        home_mode = "temporary"
-    if savedir_mode == "existing" or home_mode == "existing":
+def _session_root_is_ours(root: Path) -> bool:
+    """On POSIX, a root another user made in the shared temp dir is not one.
+
+    ``mkdtemp`` makes a session root as this user, so a root that is missing,
+    a link, not a folder, or someone else's fails closed. Windows keeps a
+    per-user temp dir and is not checked here.
+    """
+    if not hasattr(os, "getuid"):
         return True
-    if savedir_mode == "path" and path_exposes_user_saves(
-        resolved["savedir"], project_path=project_path
-    ):
-        return True
-    if home_mode == "path" and home_exposes_user_saves(resolved["home"]):
-        return True
-    return False
+    try:
+        st = root.lstat()
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid()
 
 
 def path_is_host_home(value: str | Path, *, home: Path | None = None) -> bool:
@@ -461,7 +729,7 @@ def home_exposes_user_saves(value: str | Path, *, home: Path | None = None) -> b
     # <home>/AppData/Roaming on Windows (see _home_paths).
     if os.name == "nt":
         implied = launch_home / "AppData" / "Roaming" / "RenPy"
-    elif sys_platform() == "darwin":
+    elif sys.platform == "darwin":
         implied = launch_home / "Library" / "RenPy"
     else:
         implied = launch_home / ".renpy"
@@ -474,7 +742,7 @@ def path_exposes_user_saves(
     *,
     home: Path | None = None,
 ) -> bool:
-    """True when *savedir* is the host Ren'Py tree or the project's ``game/saves``."""
+    """True when *savedir* is the host Ren'Py tree or any game's ``game/saves``."""
     try:
         path = Path(savedir).expanduser().resolve()
     except (OSError, RuntimeError, ValueError):
@@ -492,17 +760,17 @@ def path_exposes_user_saves(
     return any(parts[i] == "game" and parts[i + 1] == "saves" for i in range(len(parts) - 1))
 
 
-def _path_key(path: Path) -> str:
-    # Case-folded: on a case-insensitive filesystem (Windows, macOS)
+def _path_key(path: Path) -> tuple[str, ...]:
+    # Case-folded parts: on a case-insensitive filesystem (Windows, macOS)
     # ~/library/renpy is the player's ~/Library/RenPy, and resolve() does not
     # fold case there. Folding everywhere errs toward asking for authorization.
-    return os.path.normcase(str(path)).casefold()
+    return tuple(part.casefold() for part in path.parts)
 
 
 def _inside(path: Path, root: Path) -> bool:
     """*path* is *root* or below it, compared case-insensitively."""
     key, root_key = _path_key(path), _path_key(root)
-    return key == root_key or key.startswith(root_key.rstrip(os.sep) + os.sep)
+    return key[: len(root_key)] == root_key
 
 
 def user_save_roots(
@@ -529,36 +797,36 @@ def host_renpy_root(*, home: Path | None = None) -> Path:
         if appdata:
             return Path(appdata) / "RenPy"
         return host_home / "AppData" / "Roaming" / "RenPy"
-    if sys_platform() == "darwin":
+    if sys.platform == "darwin":
         return host_home / "Library" / "RenPy"
     return host_home / ".renpy"
 
 
-def sys_platform() -> str:
-    """Indirection so tests can monkeypatch the platform check."""
-    import sys
-
-    return sys.platform
-
-
 def parse_save_directory(project_root: str | Path) -> str | None:
-    """Return ``config.save_directory`` from ``game/*.rpy``, if defined."""
+    """Return ``config.save_directory`` from ``game/*.rpy``, if defined.
+
+    Each script is opened without following links and without blocking, must
+    be a regular file, and is read only up to :data:`RPY_SCAN_MAX_BYTES`: the
+    game folder is the game's own, so a FIFO swapped in or a huge sparse file
+    must not hang or exhaust an observational listing.
+    """
     game_dir = Path(project_root) / "game"
     if not game_dir.is_dir():
+        return None
+    # Resolve the folder only (a linked game library is fine); the script
+    # itself is opened without following a link out of the project.
+    try:
+        game_dir = game_dir.resolve()
+    except (OSError, RuntimeError, ValueError):
         return None
     candidates = [game_dir / "options.rpy", *sorted(game_dir.glob("*.rpy"))]
     seen: set[Path] = set()
     for path in candidates:
-        try:
-            resolved = path.resolve()
-        except (OSError, RuntimeError, ValueError):
+        if path in seen:
             continue
-        if resolved in seen or not path.is_file():
-            continue
-        seen.add(resolved)
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        seen.add(path)
+        text = _read_script_bounded(path)
+        if text is None:
             continue
         match = SAVE_DIRECTORY_RE.search(text)
         if match:
@@ -566,6 +834,38 @@ def parse_save_directory(project_root: str | Path) -> str | None:
             if name:
                 return name
     return None
+
+
+def _read_script_bounded(path: Path) -> str | None:
+    try:
+        fd, st = open_regular_at_nofollow(path.parent, path.name)
+    except (OSError, ValueError):
+        return None
+    try:
+        if st.st_size > RPY_SCAN_MAX_BYTES:
+            return None
+        data = _read_at_most(fd, RPY_SCAN_MAX_BYTES)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    if data is None:
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _read_at_most(fd: int, limit: int) -> bytes | None:
+    """Read *fd* to the end, or return None once it holds more than *limit* bytes."""
+    data = b""
+    while len(data) <= limit:
+        chunk = os.read(fd, limit + 1 - len(data))
+        if not chunk:
+            break
+        data += chunk
+    return None if len(data) > limit else data
 
 
 def host_save_directories(
@@ -577,60 +877,137 @@ def host_save_directories(
     """Existing host directories that may contain this project's user saves.
 
     ``save_name`` is the game's ``config.save_directory`` when the caller
-    already knows it (from the running game); otherwise it is read from the
-    game's loose ``.rpy`` files.
+    already knows it (from the running game, which also covers games shipped
+    only as archives); otherwise it is read from the game's loose ``.rpy``
+    files. Either way it must name one folder directly under the Ren'Py root.
+
+    Each directory is returned resolved, once. Later opens walk these paths
+    component by component without following links, so a folder swapped for
+    a link after this point is refused instead of followed; a link that was
+    already there (a ``~/.renpy`` moved to another disk) was followed here.
     """
     directories: list[Path] = []
     save_name = save_name or parse_save_directory(project_root)
     # The name comes from the game, so it must stay one folder of the Ren'Py
     # root: "../OtherGame" would read another game's (or any) saves.
-    if save_name and save_name not in (".", "..") and PurePath(save_name).name == save_name \
-            and PureWindowsPath(save_name).name == save_name:
-        root = host_renpy_root(home=home)
+    if (
+        save_name
+        and save_name not in (".", "..")
+        and PurePath(save_name).name == save_name
+        and PureWindowsPath(save_name).name == save_name
+    ):
+        # The root is resolved once and the folder found through that result,
+        # so the containment check and the returned path agree.
+        root = host_renpy_root(home=home).resolve()
         host_dir = root / save_name
-        if host_dir.is_dir() and host_dir.resolve().parent == root.resolve():
-            directories.append(host_dir)
-    project_saves = Path(project_root) / "game" / "saves"
-    if (project_saves.is_dir() and project_saves not in directories
-            and project_saves.resolve().is_relative_to(Path(project_root).resolve())):
-        directories.append(project_saves)
+        if host_dir.is_dir():
+            resolved_host = host_dir.resolve()
+            if resolved_host.parent == root:
+                directories.append(resolved_host)
+    project = Path(project_root).resolve()
+    project_saves = project / "game" / "saves"
+    if project_saves.is_dir():
+        resolved_saves = project_saves.resolve()
+        if resolved_saves not in directories and resolved_saves.is_relative_to(project):
+            directories.append(resolved_saves)
     return directories
+
+
+def selector_error(*, slot: Any = None, slots: Any = None, pattern: Any = None) -> str | None:
+    """Why ``list_user``/``import`` selectors are malformed, or None.
+
+    Lengths are capped before anything is listed or compiled: see
+    :data:`SELECTOR_MAX_CHARS` and :data:`SELECTOR_MAX_SLOTS`.
+    """
+    entries: list[Any] = [] if slot is None else [slot]
+    if slots is not None:
+        if isinstance(slots, (str, bytes)) or not isinstance(slots, (list, tuple)):
+            return "slots must be a list of slot names"
+        if len(slots) > SELECTOR_MAX_SLOTS:
+            return "slots must list at most %d names" % SELECTOR_MAX_SLOTS
+        entries.extend(slots)
+    for value in entries:
+        if not isinstance(value, str) or not value.strip():
+            return "slot names must be non-empty strings"
+        if len(value) > SELECTOR_MAX_CHARS:
+            return "slot names must be at most %d characters" % SELECTOR_MAX_CHARS
+    return _slot_pattern_error(pattern)
+
+
+def slot_name_error(slot: str) -> str | None:
+    """Why *slot* cannot name a save slot in the running game's save folder, or None.
+
+    Ren'Py builds a save file's path as ``os.path.join(directory, slot +
+    suffix)``, so a slot that is a path (absolute, with a drive, with either
+    separator, or ``.``/``..``) would read or write a file outside the
+    game's save folder, the player's own saves included. Such a slot is
+    refused on every OS, whatever separators the host uses. A colon is
+    refused too: on Windows ``page:name`` is stream syntax, writing a stream
+    of the file ``page`` rather than a save file. The bridge's
+    ``_renforge_slot_name_error`` keeps the same rule.
+    """
+    # Both separators on every OS (os.sep and os.altsep are among them), a
+    # colon, and a Windows drive such as "C:", which os.path.join honours there.
+    if (any(char in slot for char in ("/", "\\", "\x00", ":")) or slot.strip() in {".", ".."}
+            or PureWindowsPath(slot).drive):
+        return "slot must be a save slot name such as 1-1 or quick-1, not a path"
+    return None
+
+
+def _slot_pattern_error(pattern: Any) -> str | None:
+    if pattern is not None and not isinstance(pattern, str):
+        return "pattern must be a string"
+    if pattern is not None and len(pattern) > SELECTOR_MAX_CHARS:
+        return "pattern must be at most %d characters" % SELECTOR_MAX_CHARS
+    return None
+
+
+def _matches(name: str, pattern: str) -> bool:
+    # A glob, not a regex: matching cannot backtrack catastrophically on a long
+    # slot name. Compiling the glob is quadratic in the pattern's length, which
+    # is why selector_error caps it at SELECTOR_MAX_CHARS.
+    return fnmatch.fnmatchcase(name, pattern)
 
 
 def list_host_slots(
     project_root: str | Path,
     *,
-    regexp: str | None = None,
+    pattern: str | None = None,
     home: Path | None = None,
     save_name: str | None = None,
 ) -> dict[str, Any]:
-    """List host save slots without touching a running game or writing files."""
-    compiled = None
-    if regexp is not None:
-        if not isinstance(regexp, str):
-            return {"ok": False, "error": "regexp must be a string"}
-        try:
-            compiled = re.compile(regexp)
-        except re.error as exc:
-            return {"ok": False, "error": f"invalid regexp: {exc}"}
+    """List host save slots without touching a running game or writing files.
+
+    ``pattern`` is a glob matched against the whole slot name (``1-*``).
+    """
+    error = _slot_pattern_error(pattern)
+    if error is not None:
+        return {"ok": False, "code": "SAVE_IMPORT_INVALID", "error": error}
 
     directories = host_save_directories(project_root, home=home, save_name=save_name)
+    keep = None if pattern is None else (lambda name: _matches(name, pattern))
+    return {
+        "ok": True,
+        "slots": _list_slots(directories, keep=keep, with_extra_info=True),
+        "directories": [str(path) for path in directories],
+    }
+
+
+def _list_slots(
+    directories: Iterable[Path],
+    *,
+    keep: Callable[[str], bool] | None,
+    with_extra_info: bool,
+) -> list[dict[str, Any]]:
+    """Slots across *directories*; the first folder that has a name wins."""
     slots: list[dict[str, Any]] = []
     seen: set[str] = set()
     for directory in directories:
-        for slot in _slots_in_directory(directory):
-            name = slot["name"]
-            if name in seen:
-                continue
-            if compiled is not None and compiled.search(name) is None:
-                continue
-            seen.add(name)
-            slots.append(slot)
-    return {
-        "ok": True,
-        "slots": slots,
-        "directories": [str(path) for path in directories],
-    }
+        for slot in _slots_in_directory(directory, keep=keep, with_extra_info=with_extra_info):
+            if slot["name"] not in seen:
+                seen.add(slot["name"])
+                slots.append(slot)
+    return slots
 
 
 def import_host_slots(
@@ -639,177 +1016,238 @@ def import_host_slots(
     *,
     slot: str | None = None,
     slots: Iterable[str] | None = None,
-    regexp: str | None = None,
+    pattern: str | None = None,
     home: Path | None = None,
     save_name: str | None = None,
 ) -> dict[str, Any]:
-    """Copy selected host slot files into an isolated session savedir."""
-    dest = Path(destination).expanduser().resolve()
+    """Copy selected host slot files into an isolated session savedir.
+
+    The same as :func:`select_host_slots` followed by
+    :func:`import_selected_slots`.
+    """
+    selection = select_host_slots(
+        project_root, slot=slot, slots=slots, pattern=pattern, home=home, save_name=save_name
+    )
+    if not selection.get("ok"):
+        return selection
+    return import_selected_slots(selection, destination, project_root=project_root, home=home)
+
+
+def select_host_slots(
+    project_root: str | Path,
+    *,
+    slot: str | None = None,
+    slots: Iterable[str] | None = None,
+    pattern: str | None = None,
+    home: Path | None = None,
+    save_name: str | None = None,
+) -> dict[str, Any]:
+    """Resolve import selectors to host slot records with one listing.
+
+    Reads only (a game's scripts and save folders), so callers run it before
+    holding a session open: a slow listing must never delay a stop.
+    """
+    if slots is not None and not isinstance(slots, (str, bytes)) and isinstance(slots, Iterable):
+        # One past the cap is enough for selector_error to refuse it.
+        slots = list(islice(slots, SELECTOR_MAX_SLOTS + 1))
+    error = selector_error(slot=slot, slots=slots, pattern=pattern)
+    if error is None and slot is None and not slots and pattern is None:
+        error = "import requires slot, slots, or pattern"
+    if error is not None:
+        # A dashboard relays this answer; the code keeps it from reading as
+        # a transport failure.
+        return {"ok": False, "code": "SAVE_IMPORT_INVALID", "error": error}
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for value in ([] if slot is None else [slot]) + list(slots or []):
+        token = value.strip()
+        if token not in seen:
+            seen.add(token)
+            names.append(token)
+
+    def keep(name: str) -> bool:
+        return name in seen or (pattern is not None and _matches(name, pattern))
+
+    directories = host_save_directories(project_root, home=home, save_name=save_name)
+    available = _list_slots(directories, keep=keep, with_extra_info=False)
+    by_name = {record["name"]: record for record in available}
+    selected = [by_name[name] for name in names if name in by_name]
+    missing = [name for name in names if name not in by_name]
+    selected.extend(record for record in available if record["name"] not in seen)
+    return {"ok": True, "slots": selected, "missing": missing}
+
+
+def import_selected_slots(
+    selection: Mapping[str, Any],
+    destination: str | Path,
+    *,
+    project_root: str | Path,
+    home: Path | None = None,
+) -> dict[str, Any]:
+    """Copy the slots :func:`select_host_slots` picked into *destination*.
+
+    *destination* is used as given, never resolved: the session's own folders
+    are walked without following links, so a session root or savedir swapped
+    for a link (at any time since launch) is refused, not followed. Callers
+    pass a canonical path (:func:`renforge.tools.live.saves` resolves only the
+    shared temp folder). Only the ``files_touched`` receipt is resolved
+    (:func:`renforge.util.files.receipt_path`): if the savedir is swapped for
+    a link mid-import, the receipt names the link's target, where nothing was
+    written.
+    """
+    dest = Path(destination).expanduser()
     if path_exposes_user_saves(dest, project_path=project_root, home=home):
         return {
             "ok": False,
             "code": "SAVE_IMPORT_NOT_ISOLATED",
             "error": "import refuses to copy into the user's save tree; launch an isolated session first",
         }
-    dest.mkdir(parents=True, exist_ok=True)
-
-    resolved = select_host_slot_names(
-        project_root, slot=slot, slots=slots, regexp=regexp, home=home, save_name=save_name
-    )
-    if not resolved.get("ok"):
-        return resolved
-    selected = list(resolved.get("names") or [])
-    missing = list(resolved.get("missing") or [])
-    listed = list_host_slots(project_root, regexp=None, home=home, save_name=save_name)
-    if not listed.get("ok"):
-        return listed
-    available = {item["name"]: item for item in listed.get("slots", [])}
-
-    imported: list[dict[str, Any]] = []
-    for name in selected:
-        record = available.get(name)
-        if record is None:
-            continue
-        directory = Path(record["directory"])
-        copied = _copy_slot_files(directory, dest, name)
-        if not copied:
-            missing.append(name)
-            continue
-        imported.append({"name": name, "files": copied, "directory": str(directory)})
-
-    if not imported:
+    # Stopping the session removes its root. Creating it again here, after a
+    # concurrent stop, would leave copies of the player's saves in a folder
+    # nothing cleans up, so only the savedir itself is ever created.
+    try:
+        make_directory_at_nofollow(dest)
+    except FileNotFoundError:
         return {
             "ok": False,
-            "error": "no matching host save slots",
-            "missing": missing,
-            "savedir": str(dest),
+            "code": "NO_ISOLATED_SESSION",
+            "error": "the session's save folder is gone; the session has stopped",
         }
+    except (OSError, ValueError) as exc:
+        # A linked root or savedir, a savedir that is a file, no permission.
+        return {
+            "ok": False,
+            "code": "SAVE_IMPORT_FAILED",
+            "error": str(exc),
+            "imported": [],
+            "savedir": str(dest),
+            "files_touched": [],
+        }
+
+    missing = list(selection.get("missing") or [])
+    imported: list[dict[str, Any]] = []
+    refused: list[dict[str, Any]] = []
+    # The write receipt (#116) of every file published so far, by the shared
+    # receipt rule: absolute POSIX paths, since the savedir is outside the project.
+    touched: list[str] = []
+
+    def _receipts(names: Iterable[str]) -> list[str]:
+        return [receipt_path(project_root, dest / name) for name in names]
+
+    def _failed(code: str, error: str) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "ok": False,
+            "code": code,
+            "error": error,
+            "imported": imported,
+            "savedir": str(dest),
+            "files_touched": touched,
+        }
+        if refused:
+            result["refused"] = refused
+        return result
+
+    for record in selection.get("slots") or []:
+        name = record["name"]
+        directory = Path(record["directory"])
+        try:
+            copied, slot_refused = _copy_slot_files(directory, dest, name)
+        except (OSError, ValueError) as exc:
+            touched.extend(_receipts(getattr(exc, "slot_files_copied", [])))
+            if isinstance(exc, FileNotFoundError) and not dest.is_dir():
+                # The session stopped mid-copy and its savedir went with it.
+                return _failed(
+                    "NO_ISOLATED_SESSION",
+                    "the session's save folder is gone; the session has stopped",
+                )
+            # A linked savedir, a full disk, a temp file removed before its
+            # rename: nothing was written outside the session, but the
+            # import is incomplete.
+            return _failed("SAVE_IMPORT_FAILED", str(exc))
+        touched.extend(_receipts(copied))
+        refused.extend(slot_refused)
+        if copied:
+            imported.append({"name": name, "files": copied, "directory": str(directory)})
+        elif not slot_refused:
+            missing.append(name)  # its files vanished since the listing
+
+    if not imported:
+        failure = _failed(
+            "NO_MATCHING_SAVE_SLOTS",
+            "no host save slot was imported; see refused" if refused else "no matching host save slots",
+        )
+        del failure["imported"]
+        failure["missing"] = missing
+        return failure
     result: dict[str, Any] = {
         "ok": True,
         "imported": imported,
         "savedir": str(dest),
+        "files_touched": touched,
     }
     if missing:
         result["missing"] = missing
+    if refused:
+        result["refused"] = refused
     return result
 
 
-def select_host_slot_names(
-    project_root: str | Path,
+def _slots_in_directory(
+    directory: Path,
     *,
-    slot: str | None = None,
-    slots: Iterable[str] | None = None,
-    regexp: str | None = None,
-    home: Path | None = None,
-    save_name: str | None = None,
-) -> dict[str, Any]:
-    """Resolve import selectors to host slot names."""
-    names: list[str] = []
-    seen: set[str] = set()
+    keep: Callable[[str], bool] | None = None,
+    with_extra_info: bool = True,
+) -> list[dict[str, Any]]:
+    """Slots in one folder; *keep* filters names before any sidecar is read.
 
-    def _add(value: Any) -> str | None:
-        if not isinstance(value, str) or not value.strip():
-            return "slot names must be non-empty strings"
-        token = value.strip()
-        if token not in seen:
-            seen.add(token)
-            names.append(token)
-        return None
-
-    if slot is not None:
-        error = _add(slot)
-        if error is not None:
-            return {"ok": False, "error": error}
-    if slots is not None:
-        if isinstance(slots, (str, bytes)) or not isinstance(slots, Iterable):
-            return {"ok": False, "error": "slots must be a list of slot names"}
-        for item in slots:
-            error = _add(item)
-            if error is not None:
-                return {"ok": False, "error": error}
-
-    compiled = None
-    if regexp is not None:
-        if not isinstance(regexp, str):
-            return {"ok": False, "error": "regexp must be a string"}
-        try:
-            compiled = re.compile(regexp)
-        except re.error as exc:
-            return {"ok": False, "error": f"invalid regexp: {exc}"}
-
-    if not names and compiled is None:
-        return {"ok": False, "error": "import requires slot, slots, or regexp"}
-
-    listed = list_host_slots(project_root, regexp=None, home=home, save_name=save_name)
-    if not listed.get("ok"):
-        return listed
-    available = [item["name"] for item in listed.get("slots", [])]
-    selected: list[str] = []
-    missing: list[str] = []
-    if names:
-        available_set = set(available)
-        for name in names:
-            if name in available_set:
-                selected.append(name)
-            else:
-                missing.append(name)
-    if compiled is not None:
-        for name in available:
-            if name in selected:
-                continue
-            if compiled.search(name) is not None:
-                selected.append(name)
-    return {
-        "ok": True,
-        "names": selected,
-        "missing": missing,
-        "directories": listed.get("directories", []),
-    }
-
-
-def _slots_in_directory(directory: Path) -> list[dict[str, Any]]:
-    slots: list[dict[str, Any]] = []
+    Names and metadata come from one no-follow scan of the folder, resolved
+    once by :func:`host_save_directories`, so a folder swapped for a link
+    since then lists nothing rather than the link target's slots and mtimes.
+    """
     try:
-        entries = list(directory.iterdir())
-    except OSError:
-        return slots
+        entries = scan_directory_nofollow(directory)
+    except (OSError, ValueError):
+        return []
     by_name: dict[str, dict[str, Any]] = {}
-    for entry in entries:
-        try:
-            if not entry.is_file() or entry.is_symlink():
-                continue
-        except OSError:
+    for file_name, st in entries:
+        # lstat metadata: a linked entry is not a regular file.
+        if not stat.S_ISREG(st.st_mode):
             continue
-        match = SLOT_FILE_RE.match(entry.name)
+        match = SLOT_FILE_RE.match(file_name)
         if match is None or match.group("json"):
             continue
         name = match.group("slot")
-        sidecar = entry.with_name(entry.name + ".json")
-        extra_info = extra_info_from_sidecar(sidecar)
-        try:
-            mtime = entry.stat().st_mtime
-        except OSError:
-            mtime = None
-        previous = by_name.get(name)
-        if previous is not None and (previous.get("mtime") or 0) >= (mtime or 0):
+        if keep is not None and not keep(name):
             continue
-        by_name[name] = {
-            "name": name,
-            "extra_info": extra_info,
-            "mtime": mtime,
-            "directory": str(directory),
-        }
-    slots.extend(by_name[name] for name in sorted(by_name))
-    return slots
+        mtime = st.st_mtime
+        previous = by_name.get(name)
+        if previous is not None and previous["mtime"] >= mtime:
+            continue
+        record: dict[str, Any] = {"name": name}
+        if with_extra_info:
+            record["extra_info"] = extra_info_from_sidecar(directory / (file_name + ".json"))
+        record["mtime"] = mtime
+        record["directory"] = str(directory)
+        by_name[name] = record
+    return [by_name[name] for name in sorted(by_name)]
 
 
 def extra_info_from_sidecar(path: Path) -> str:
-    # A linked sidecar could point at any JSON file this process can read.
+    # A linked sidecar could point at any JSON file this process can read, so
+    # the leaf is opened without following links at an anchored directory.
+    # The parent was resolved once by host_save_directories; resolving it
+    # again here would follow a folder swapped for a link since then.
     try:
-        if path.is_symlink() or not path.is_file():
+        fd, _st = open_regular_at_nofollow(path.parent, path.name)
+        try:
+            data = _read_at_most(fd, SIDECAR_MAX_BYTES)
+        finally:
+            os.close(fd)
+        if data is None:
             return ""
-        payload = json.loads(read_text_nofollow(path))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = json.loads(data.decode("utf-8"))
+    except (OSError, ValueError, RuntimeError):  # RuntimeError: link loops, deep JSON
         return ""
     if isinstance(payload, dict):
         value = payload.get("_save_name", payload.get("extra_info", ""))
@@ -822,35 +1260,103 @@ def extra_info_from_sidecar(path: Path) -> str:
     return ""
 
 
-def _copy_slot_files(source_dir: Path, dest_dir: Path, slot: str) -> list[str]:
+def _copy_slot_files(
+    source_dir: Path, dest_dir: Path, slot: str
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Copy one slot's files; return the names copied and the files refused.
+
+    A sidecar (``.save.json``) is copied only with its own save file, so a
+    slot is never left as a sidecar alone. A file that vanished since the
+    listing is skipped; one that is a link, not a regular file, too large or
+    unreadable is refused and named, never silently dropped.
+    """
     pattern = re.compile(
-        r"^%s-[A-Za-z]{2}\d+\.save(?:\.json)?$" % (re.escape(slot),)
+        r"^%s-[A-Za-z]{2}\d+\.save(?:\.json)?\Z" % (re.escape(slot),)
     )
     copied: list[str] = []
-    dest_root = dest_dir.resolve()
-    source_root = source_dir.resolve()
+    refused: list[dict[str, Any]] = []
+    # Both directories are used as given and never resolved: the listing and
+    # every open walk them without following links, so a directory or file
+    # swapped for a link after the check is refused, not followed.
     try:
-        entries = list(source_dir.iterdir())
+        names = sorted(list_directory_nofollow(source_dir))
+    except ValueError:
+        # The slot's folder was swapped for a link since the listing.
+        refused.append({"name": slot, "file": None, "reason": "link"})
+        return copied, refused
     except OSError:
-        return copied
-    for entry in entries:
-        if pattern.match(entry.name) is None:
-            continue
-        try:
-            if entry.is_symlink() or not entry.is_file():
+        return copied, refused
+    saves = [name for name in names if pattern.match(name) and not name.endswith(".json")]
+    sidecars = {name for name in names if pattern.match(name) and name.endswith(".json")}
+    try:
+        for save_name in saves:
+            if not _copy_one_slot_file(source_dir, dest_dir, slot, save_name, copied, refused):
                 continue
-            source = entry.resolve()
-        except OSError:
-            continue
-        if not source.is_relative_to(source_root):
-            continue
-        destination = (dest_root / source.name).resolve()
-        if destination.parent != dest_root:
-            continue
-        shutil.copy2(source, destination)
-        copied.append(source.name)
-    copied.sort()
-    return copied
+            sidecar = save_name + ".json"
+            if sidecar in sidecars:
+                _copy_one_slot_file(source_dir, dest_dir, slot, sidecar, copied, refused)
+    except (OSError, ValueError) as exc:
+        # The caller's write receipt names what this slot already published.
+        exc.slot_files_copied = list(copied)  # type: ignore[union-attr]
+        raise
+    return copied, refused
+
+
+def _copy_one_slot_file(
+    source_dir: Path,
+    dest_dir: Path,
+    slot: str,
+    name: str,
+    copied: list[str],
+    refused: list[dict[str, Any]],
+) -> bool:
+    """Copy *name*; record it in *copied* or *refused*. True when copied.
+
+    Source-side problems are refusals. A destination failure (a linked
+    savedir, a full disk) raises: the import cannot go on.
+    """
+    try:
+        fd, st = open_regular_at_nofollow(source_dir, name)
+    except FileNotFoundError:
+        return False  # vanished since the listing
+    except (OSError, ValueError) as exc:
+        refused.append({"name": slot, "file": name, "reason": _refusal_reason(exc)})
+        return False
+    try:
+        if st.st_size > SLOT_FILE_MAX_BYTES:
+            refused.append({"name": slot, "file": name, "reason": "too_large"})
+            return False
+        try:
+            replace_file_at_nofollow(
+                dest_dir,
+                name,
+                fd,
+                mode=stat.S_IMODE(st.st_mode),
+                mtime_ns=st.st_mtime_ns,
+                max_bytes=SLOT_FILE_MAX_BYTES,
+            )
+        except OSError as exc:
+            if exc.errno != errno.EFBIG:
+                raise
+            # It grew past the cap during the copy; nothing was published.
+            refused.append({"name": slot, "file": name, "reason": "too_large"})
+            return False
+    finally:
+        os.close(fd)
+    copied.append(name)
+    return True
+
+
+def _refusal_reason(exc: BaseException) -> str:
+    """Short token for why a source file was not opened."""
+    if isinstance(exc, ValueError):
+        return "link"  # a folder on the way was swapped for a link
+    code = getattr(exc, "errno", None)
+    if code in {errno.ELOOP, getattr(errno, "EMLINK", errno.ELOOP)}:
+        return "link"
+    if code in {errno.EINVAL, errno.ENXIO, errno.ENODEV, errno.ENOTDIR, errno.EISDIR}:
+        return "not_regular"
+    return "unreadable"
 
 
 def _prepare_isolated_home(home: Path) -> None:
@@ -903,7 +1409,9 @@ def _preserve_x11_auth(host_env: Mapping[str, str]) -> dict[str, str]:
 
 # Loaded by Ren'Py from RENPY_SEARCHPATH before it reads persistent data or
 # sets up save locations. Sessions do the same from a ``python early`` file.
-TOOL_SAVES_ADAPTER_FILENAME = "renforge_tool_saves.rpe.py"
+# A .rpe zip (its autorun.py runs) loads on every Ren'Py 8; the plain .rpe.py
+# form loads only from 8.3 on.
+TOOL_SAVES_ADAPTER_FILENAME = "renforge_tool_saves.rpe"
 TOOL_SAVES_ADAPTER_SOURCE = """\
 import os
 import renpy
@@ -925,6 +1433,17 @@ renpy.savelocation.init = _renforge_one_save_location
 """
 
 
+def write_renpy_extension(path: Path, source: str) -> Path:
+    """Write *source* as a Ren'Py ``.rpe`` extension at *path* and return it.
+
+    Ren'Py runs the zip's ``autorun.py`` when it finds the file on its search
+    path, early in startup; every Ren'Py 8 release loads this form.
+    """
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as extension:
+        extension.writestr("autorun.py", source)
+    return path
+
+
 @contextmanager
 def renpy_tool_environment() -> Iterator[dict[str, str]]:
     """Environment for a one-shot Ren'Py command run against a game.
@@ -939,7 +1458,7 @@ def renpy_tool_environment() -> Iterator[dict[str, str]]:
         base = Path(root)
         adapter_dir = base / "adapter"
         adapter_dir.mkdir()
-        (adapter_dir / TOOL_SAVES_ADAPTER_FILENAME).write_text(TOOL_SAVES_ADAPTER_SOURCE, encoding="utf-8")
+        write_renpy_extension(adapter_dir / TOOL_SAVES_ADAPTER_FILENAME, TOOL_SAVES_ADAPTER_SOURCE)
         home = base / HOME_DIRNAME
         _prepare_isolated_home(home)
         saves = base / SAVES_DIRNAME
@@ -949,4 +1468,3 @@ def renpy_tool_environment() -> Iterator[dict[str, str]]:
         existing = os.environ.get("RENPY_SEARCHPATH", "")
         env["RENPY_SEARCHPATH"] = f"{adapter_dir}::{existing}" if existing else str(adapter_dir)
         yield env
-

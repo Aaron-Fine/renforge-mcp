@@ -7,9 +7,7 @@ import difflib
 import ipaddress
 import json
 import os
-import shutil
 import socket
-import stat
 import threading
 import time
 import uuid
@@ -25,8 +23,10 @@ from .constants import (
     MAX_INTENTS,
     MAX_PATH_BYTES,
     MAX_STRING_BYTES,
+    PROJECT_EXCHANGE_DIRNAME,
     PROTOCOL_NAME,
     PROTOCOL_VERSION,
+    RENFORGE_DIRNAME,
     TRANSACTION_DIRNAME,
 )
 from .exceptions import EditorError
@@ -37,10 +37,12 @@ from .paths import (
     fsync_directory,
     hash_file_nofollow,
     resolve_game_path,
+    same_filesystem,
     sha256_bytes,
+    write_exclusive_bytes,
 )
 from .runtime import RuntimeProbe
-from .shadow import ShadowLintResult, build_shadow_project, run_shadow_lint
+from .shadow import ShadowLintResult, validate_shadow_project
 from .source import (
     BAR_SIZE_MODE_XSIZE_YSIZE,
     DEFAULT_ALIGN_PARENT_SIZE,
@@ -79,7 +81,8 @@ from .source import (
     textbutton_patch_kwargs,
     uses_runtime_delta_position,
 )
-from ..state import project_state_dir
+from ..state import ensure_project_state_dir
+from ..util.files import PrivatePathError, ensure_nofollow_directory
 from .scope import require_in_scope
 
 
@@ -90,6 +93,29 @@ def expected_measurement_method(statement_kind: str) -> str:
     if statement_kind in ("add", "frame"):
         return "scene_tree_displayable"
     return "focus_list"
+
+
+# ReplaceFileW's ERROR_UNABLE_TO_MOVE_REPLACEMENT_2: the source has already
+# been renamed to the backup name, and the replacement kept its own name.
+_WIN32_PARTIAL_REPLACE_ERRORS = frozenset({1177})
+
+
+def _exchange_may_have_moved(exc: EditorPathError, source: Path, displaced: Path) -> bool:
+    """Whether a failed publication may have moved files, so none may be discarded.
+
+    A known partial-progress Win32 error, a source that is no longer there, or
+    a displaced file that now exists each mean the exchange got part way.
+    """
+    details = exc.details or {}
+    if details.get("win32_error") in _WIN32_PARTIAL_REPLACE_ERRORS:
+        return True
+    source_path, displaced_path = Path(source), Path(displaced)
+    try:
+        present = source_path.exists() or source_path.is_symlink()
+        return not present or displaced_path.exists() or displaced_path.is_symlink()
+    except OSError:
+        # Unknown either way: keep every candidate.
+        return True
 
 
 @dataclass(frozen=True)
@@ -298,8 +324,7 @@ class EditorCoordinator:
         self._lock = threading.RLock()
         self._request_lock = threading.Lock()
 
-        self._transaction_root = project_state_dir(self._project.root) / TRANSACTION_DIRNAME
-        self._transaction_root.mkdir(parents=True, exist_ok=True)
+        self._transaction_root = ensure_project_state_dir(self._project.root, TRANSACTION_DIRNAME)
         fsync_directory(self._transaction_root.parent)
         fsync_directory(self._transaction_root)
 
@@ -1535,7 +1560,23 @@ class EditorCoordinator:
             self._transactions[transaction_id] = transaction
         self._persist_transaction(transaction)
 
-        lint_result = self._validate_shadow(transaction)
+        try:
+            lint_result = self._validate_shadow(transaction)
+        except EditorError as exc:
+            transaction.state = "failed"
+            transaction.diagnostics = {
+                "validation_error": {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "details": dict(exc.details),
+                }
+            }
+            self._persist_transaction(transaction)
+            raise EditorError(
+                "VALIDATION_FAILED",
+                "Ren'Py lint validation could not complete",
+                details={"transaction_id": transaction_id, "cause": exc.code},
+            ) from exc
         if not lint_result.ok:
             transaction.state = "failed"
             transaction.diagnostics = self._lint_diagnostics(lint_result)
@@ -1550,7 +1591,12 @@ class EditorCoordinator:
         self._publish_transaction_bytes(transaction)
         self._schedule_attestation_timeout(transaction)
 
-        return {"transaction_id": transaction_id, "state": "published", "reload_required": True}
+        return {
+            "transaction_id": transaction_id,
+            "state": "published",
+            "reload_required": True,
+            "source_relative_path": transaction.source_relative_path,
+        }
 
     def _expected_target_for_intent(
         self,
@@ -1715,7 +1761,23 @@ class EditorCoordinator:
             self._transactions[transaction_id] = transaction
         self._persist_transaction(transaction)
 
-        lint_result = self._validate_shadow(transaction)
+        try:
+            lint_result = self._validate_shadow(transaction)
+        except EditorError as exc:
+            transaction.state = "failed"
+            transaction.diagnostics = {
+                "validation_error": {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "details": dict(exc.details),
+                }
+            }
+            self._persist_transaction(transaction)
+            raise EditorError(
+                "VALIDATION_FAILED",
+                "Ren'Py lint validation could not complete while validating product undo",
+                details={"transaction_id": transaction_id, "cause": exc.code},
+            ) from exc
         if not lint_result.ok:
             transaction.state = "failed"
             transaction.diagnostics = self._lint_diagnostics(lint_result)
@@ -1747,6 +1809,7 @@ class EditorCoordinator:
         return {
             "transaction_id": transaction_id,
             "state": record.state,
+            "source_relative_path": record.source_relative_path,
             "diagnostics": dict(record.diagnostics),
             "uncertain_paths": list(record.uncertain_paths),
         }
@@ -2256,54 +2319,36 @@ class EditorCoordinator:
 
     def _validate_shadow(self, transaction: _TransactionRecord) -> ShadowLintResult:
         tx_dir = self._transaction_root / transaction.transaction_id
-        shadow_root = tx_dir / "shadow"
-        try:
-            build_shadow_project(
-                self._project,
-                shadow_root=shadow_root,
-                staged_replacements={transaction.source_relative_path: transaction.staged_bytes},
-            )
-            try:
-                return run_shadow_lint(
-                    self._project,
-                    self._sdk,
-                    shadow_root=shadow_root,
-                    timeout=min(180.0, max(1.0, self._attestation_timeout * 3)),
-                )
-            except EditorError:
-                raise
-            except (OSError, ValueError) as exc:
-                raise EditorError(
-                    "SHADOW_LINT_FAILED",
-                    "could not run Ren'Py lint in the shadow project",
-                ) from exc
-        finally:
-            try:
-                # Windows marks some copied modes read-only; clear the bit so
-                # rmtree does not raise PermissionError after a successful lint.
-                def _clear_readonly(func: Any, path: str, _exc_info: Any) -> None:
-                    try:
-                        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
-                        func(path)
-                    except OSError:
-                        raise
-
-                shutil.rmtree(shadow_root, onerror=_clear_readonly)
-            except FileNotFoundError:
-                pass
-            except OSError as exc:
-                raise EditorError(
-                    "SHADOW_CLEANUP_FAILED",
-                    "could not remove the validation shadow project",
-                ) from exc
+        return validate_shadow_project(
+            self._project,
+            self._sdk,
+            shadow_root=tx_dir / "shadow",
+            # source_relative_path is game-relative. Prefixing it makes the
+            # overlay unambiguous when the project has both game/game/x.rpy
+            # and game/x.rpy.
+            staged_replacements={f"game/{transaction.source_relative_path}": transaction.staged_bytes},
+            timeout=min(180.0, max(1.0, self._attestation_timeout * 3)),
+            # A linked source directory is not linted; a green gate would lie.
+            require_source_complete=True,
+            # Pre-existing lint errors must not block an unrelated edit. Set
+            # RENFORGE_SHADOW_STRICT_LINT=1 to make this gate strict as well.
+            error_code=os.environ.get("RENFORGE_SHADOW_STRICT_LINT") == "1",
+        )
 
     def _lint_diagnostics(self, lint_result: ShadowLintResult) -> dict[str, Any]:
         return {
             "returncode": lint_result.returncode,
             "timed_out": lint_result.timed_out,
+            "truncated": lint_result.truncated,
+            "complete": lint_result.complete,
+            "degraded": lint_result.degraded,
+            "files": lint_result.files,
+            "bytes": lint_result.bytes,
+            "limits": dict(lint_result.limits),
+            "largest": dict(lint_result.largest) if lint_result.largest is not None else None,
+            "skipped_links": [dict(item) for item in lint_result.skipped_links],
             "stdout": lint_result.stdout,
             "stderr": lint_result.stderr,
-            "truncated": lint_result.truncated,
         }
 
     def _schedule_attestation_timeout(self, transaction: _TransactionRecord) -> None:
@@ -2328,8 +2373,10 @@ class EditorCoordinator:
 
     def _publish_transaction_bytes(self, transaction: _TransactionRecord) -> None:
         """CAS-publish staged bytes over the live source, retaining displaced evidence."""
-        exchange_dir = self._transaction_root / transaction.transaction_id / "exchange"
-        exchange_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            exchange_dir = self._exchange_dir(transaction)
+        except (OSError, PrivatePathError) as exc:
+            raise EditorError("SOURCE_CAS_UNAVAILABLE", f"cannot prepare exchange folder: {exc}") from exc
         replacement_path = exchange_dir / "replacement"
         displaced_path = exchange_dir / f"displaced-{uuid.uuid4().hex}"
         if replacement_path.exists() or replacement_path.is_symlink():
@@ -2338,10 +2385,9 @@ class EditorCoordinator:
             except OSError as exc:
                 raise EditorError("SOURCE_CAS_UNAVAILABLE", f"cannot prepare replacement path: {exc}") from exc
         try:
-            from .paths import write_exclusive_bytes
-
             write_exclusive_bytes(replacement_path, transaction.staged_bytes)
         except OSError as exc:
+            self._discard_project_exchange(exchange_dir, replacement_path)
             raise EditorError("SOURCE_CAS_UNAVAILABLE", f"cannot stage replacement bytes: {exc}") from exc
 
         transaction.state = "publishing"
@@ -2361,6 +2407,27 @@ class EditorCoordinator:
                 displaced_path=displaced_path,
             )
         except EditorPathError as exc:
+            # SOURCE_CAS_UNAVAILABLE is the only code the exchange step itself
+            # raises; the others come from checks made before it, which move
+            # nothing, so they stay clean failures.
+            if exc.code == "SOURCE_CAS_UNAVAILABLE" and _exchange_may_have_moved(
+                exc, transaction.source_absolute_path, displaced_path
+            ):
+                details = {
+                    **dict(exc.details or {}),
+                    "source": str(transaction.source_absolute_path),
+                    "replacement_path": str(replacement_path),
+                    "displaced_path": str(displaced_path),
+                    "uncertain_paths": [
+                        str(transaction.source_absolute_path),
+                        str(replacement_path),
+                        str(displaced_path),
+                    ],
+                }
+                exc = EditorPathError("SOURCE_EXCHANGE_CONFLICT", str(exc), details=details)
+            if exc.code != "SOURCE_EXCHANGE_CONFLICT":
+                # Nothing was exchanged; the staged bytes are in the journal.
+                self._discard_project_exchange(exchange_dir, replacement_path)
             if exc.code == "STALE_SOURCE":
                 transaction.state = "failed"
                 self._persist_transaction(transaction)
@@ -2384,6 +2451,8 @@ class EditorCoordinator:
             self._persist_transaction(transaction)
             raise EditorError(exc.code, str(exc), details=getattr(exc, "details", None)) from exc
 
+        # The displaced bytes were checked equal to the journal's original.
+        self._discard_project_exchange(exchange_dir, result.displaced_path)
         transaction.state = "published"
         transaction.diagnostics = {
             **dict(transaction.diagnostics or {}),
@@ -2428,13 +2497,21 @@ class EditorCoordinator:
                 return
 
         # Current disk matches staged: CAS original back into place.
-        exchange_dir = self._transaction_root / transaction.transaction_id / "exchange"
-        exchange_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            exchange_dir = self._exchange_dir(transaction)
+        except (OSError, PrivatePathError):
+            with self._lock:
+                transaction.state = "rollback_conflict"
+                transaction.uncertain_paths = [transaction.source_relative_path]
+                transaction.diagnostics = {
+                    **dict(transaction.diagnostics or {}),
+                    "rollback_error": "ROLLBACK_FILE_ERROR",
+                }
+                self._persist_transaction(transaction)
+            return
         original_candidate = exchange_dir / f"rollback-original-{uuid.uuid4().hex}"
         displaced_path = exchange_dir / f"rollback-displaced-{uuid.uuid4().hex}"
         try:
-            from .paths import write_exclusive_bytes
-
             write_exclusive_bytes(original_candidate, transaction.original_bytes)
             conditional_replace_file(
                 transaction.source_absolute_path,
@@ -2468,10 +2545,86 @@ class EditorCoordinator:
                 self._persist_transaction(transaction)
             return
 
+        # The displaced bytes were checked equal to the journal's staged copy.
+        self._discard_project_exchange(exchange_dir, displaced_path)
         with self._lock:
             transaction.state = "rolled_back"
             transaction.uncertain_paths = []
             self._persist_transaction(transaction)
+
+    def _exchange_dir(self, transaction: _TransactionRecord) -> Path:
+        """Return (creating it) the folder for one transaction's exchange files.
+
+        The atomic exchange only works within one filesystem. The journal and
+        shadow always stay in the state folder; when the source sits on another
+        filesystem (a game on a second drive), the replacement and displaced
+        files go to ``<project>/.renforge/editor-exchange/<transaction>`` on the
+        source's side instead (see ``_project_exchange_root``), and
+        ``_discard_project_exchange`` removes them once the exchange has
+        succeeded or never happened.
+        """
+        source = Path(transaction.source_absolute_path)
+        if same_filesystem(source, self._transaction_root):
+            return ensure_nofollow_directory(self._transaction_root / transaction.transaction_id / "exchange")
+        return ensure_nofollow_directory(self._project_exchange_root(source) / transaction.transaction_id)
+
+    def _project_exchange_root(self, source: Path) -> Path:
+        """``.renforge/editor-exchange`` in the highest project folder on the source's filesystem.
+
+        That is the project root, unless a folder inside it (``game`` mounted
+        from elsewhere) is on another filesystem than the root: then it is the
+        highest such folder above the source. When none matches, the project
+        root is returned and the exchange refuses to cross filesystems.
+        """
+        root = Path(self._project.root)
+        candidates = [root]
+        try:
+            relative = source.parent.resolve().relative_to(root.resolve())
+        except (OSError, ValueError):
+            relative = None
+        if relative is not None:
+            folder = root
+            for part in relative.parts:
+                folder = folder / part
+                candidates.append(folder)
+        chosen = next((folder for folder in candidates if same_filesystem(source, folder)), root)
+        return chosen / RENFORGE_DIRNAME / PROJECT_EXCHANGE_DIRNAME
+
+    def _is_project_exchange_root(self, folder: Path) -> bool:
+        """Whether ``folder`` is a ``.renforge/editor-exchange`` inside this project.
+
+        Only such a folder holds exchange files this coordinator may remove;
+        the state folder's exchange files are never discarded here.
+        """
+        if folder.name != PROJECT_EXCHANGE_DIRNAME or folder.parent.name != RENFORGE_DIRNAME:
+            return False
+        try:
+            folder.resolve().relative_to(Path(self._project.root).resolve())
+        except (OSError, ValueError):
+            return False
+        return True
+
+    def _discard_project_exchange(self, exchange_dir: Path, *paths: Path) -> None:
+        """Remove exchange files kept in the project, and their folders once empty.
+
+        Only called when the files hold no evidence the journal lacks. Files in
+        the state folder are left alone; a conflict keeps every file anywhere.
+        """
+        project_root = exchange_dir.parent
+        if not self._is_project_exchange_root(project_root):
+            return
+        for path in paths:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                return
+        # rmdir only removes empty folders, so a policy.json or a retained
+        # conflict keeps its parent.
+        for folder in (exchange_dir, project_root, project_root.parent):
+            try:
+                folder.rmdir()
+            except OSError:
+                return
 
     def _persist_transaction(self, transaction: _TransactionRecord) -> None:
         tx_dir = self._transaction_root / transaction.transaction_id

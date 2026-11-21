@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from .util.files import read_text_nofollow, resolves_inside
+from .util.files import read_text_nofollow, resolves_inside, walk_nofollow
 
 
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -143,7 +143,9 @@ def find_references(
     game = root / "game"
     occurrences: list[dict[str, Any]] = []
     if game.is_dir() and resolves_inside(game, root):
-        for path in sorted(game.rglob("*.rpy")):
+        for path in sorted(
+            Path(folder) / name for folder, _dirs, names in walk_nofollow(game) for name in names if name.endswith(".rpy")
+        ):
             relative = path.relative_to(root).as_posix()
             if file_glob and not fnmatch(relative, file_glob):
                 continue

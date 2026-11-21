@@ -129,8 +129,9 @@ def test_enforce_denies_open_world_and_destructive_without_authorize(monkeypatch
     denied_list_user = evaluate("renforge_saves", {"action": "list_user"})
     denied_import = evaluate("renforge_saves", {"action": "import", "slot": "1-1"})
     denied_session_import = evaluate("renforge_session", {"action": "import", "slot": "1-1"})
-    isolated_launch = evaluate("renforge_launch", {"savedir": "auto"})
+    isolated_launch = evaluate("renforge_launch", {"savedir": "temporary"})
     exposed_launch = evaluate("renforge_launch", {"savedir": "existing"})
+    default_launch = evaluate("renforge_launch", {"savedir": "auto"})
 
     assert denied_eval.allowed is False
     assert denied_eval.to_result()["code"] == "POLICY_DENIED"
@@ -146,6 +147,59 @@ def test_enforce_denies_open_world_and_destructive_without_authorize(monkeypatch
     assert isolated_launch.risk == RISK_MUTATING
     assert exposed_launch.allowed is False
     assert exposed_launch.risk == RISK_DESTRUCTIVE
+    # Isolation is opt-in, so a launch with no knobs uses the player's saves,
+    # which makes it destructive too.
+    assert default_launch.allowed is False
+    assert default_launch.risk == RISK_DESTRUCTIVE
+
+
+@pytest.mark.parametrize("isolation_env, params, risk", [
+    # The rule the launch tool descriptions state (tool_definitions._LAUNCH_POLICY).
+    (None, {}, RISK_DESTRUCTIVE),
+    (None, {"savedir": "auto", "home": "auto"}, RISK_DESTRUCTIVE),
+    (None, {"savedir": "temporary"}, RISK_MUTATING),
+    (None, {"savedir": "temporary", "home": "temporary"}, RISK_MUTATING),
+    (None, {"savedir": "temporary", "home": "existing"}, RISK_DESTRUCTIVE),
+    (None, {"savedir": "STATE/saves"}, RISK_DESTRUCTIVE),
+    (None, {"savedir": "STATE/saves", "home": "temporary"}, RISK_MUTATING),
+    (None, {"savedir": "STATE/saves", "home": "STATE/home"}, RISK_MUTATING),
+    ("temporary", {}, RISK_MUTATING),
+    ("temporary", {"savedir": "STATE/saves"}, RISK_MUTATING),
+    ("temporary", {"savedir": "existing"}, RISK_DESTRUCTIVE),
+])
+@pytest.mark.parametrize("tool", ["renforge_launch", "renforge_jump", "renforge_new_game"])
+def test_launch_policy_matches_the_rule_the_descriptions_state(
+    tmp_path, monkeypatch, isolation_env, params, risk, tool
+) -> None:
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    if isolation_env is not None:
+        monkeypatch.setenv("RENFORGE_ISOLATION", isolation_env)
+    knobs = {key: value.replace("STATE", str(tmp_path / "state" / "projects" / "p")) for key, value in params.items()}
+
+    decision = evaluate(tool, {"target": "start", **knobs} if tool == "renforge_jump" else knobs)
+
+    assert decision.risk == risk
+    assert decision.allowed is (risk == RISK_MUTATING)
+
+
+@pytest.mark.parametrize("tool, params", [
+    ("renforge_launch", {}),
+    ("renforge_jump", {"target": "start"}),
+    ("renforge_new_game", {}),
+    ("renforge_launch", {"savedir": "existing"}),
+])
+def test_a_denied_launch_points_to_an_isolated_launch_first(monkeypatch, tool, params) -> None:
+    """With isolation opt-in, the common denial is a launch with no knobs; most agents want isolation."""
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    decision = evaluate(tool, params)
+
+    assert decision.allowed is False
+    assert "no savedir" in decision.reason
+    assert 'savedir="temporary"' in decision.next_step
+    assert decision.next_step.index('savedir="temporary"') < decision.next_step.index("authorize=true")
+    # Other destructive operations keep the generic advice.
+    assert 'savedir="temporary"' not in evaluate("renforge_control", {"action": "quit"}).next_step
 
 
 def test_enforce_allows_authorized_and_allowlisted_calls(monkeypatch) -> None:
@@ -361,9 +415,11 @@ def test_a_launch_into_a_folder_outside_renforge_and_temp_needs_authorize(tmp_pa
         assert evaluate("renforge_launch", {**params, "authorize": True}).allowed is True
     inside = state / "projects" / "demo-0123" / "saves"
     for value in (str(inside), f"  {inside}  "):
-        decision = evaluate("renforge_launch", {"savedir": value})
+        # An explicit savedir keeps the host HOME unless home is set.
+        decision = evaluate("renforge_launch", {"savedir": value, "home": "temporary"})
         assert decision.risk == RISK_MUTATING, value
         assert decision.allowed is True
+        assert evaluate("renforge_launch", {"savedir": value}).risk == RISK_DESTRUCTIVE, value
     # The temp dir is shared with other apps, so it is not RenForge's own.
     temp = Path(tempfile.gettempdir())
     for params in ({"home": str(temp)}, {"savedir": str(temp / "other-app")}):
@@ -380,3 +436,37 @@ def test_launch_path_policy_reads_the_value_the_launch_uses(tmp_path, monkeypatc
     outside = tmp_path / "elsewhere"
     for params in ({"savedir": f" {outside}"}, {"home": f" {outside}"}, {"home": " ~/.ssh"}):
         assert evaluate("renforge_launch", params).risk == RISK_DESTRUCTIVE, params
+
+
+def test_validate_with_staged_source_needs_authorize_like_eval(monkeypatch, tmp_path) -> None:
+    """Lint runs staged init code with the server's privileges, so enforce denies it unapproved."""
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    from fastmcp import Client
+    from renforge.tools import validate
+
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    calls: list[object] = []
+    monkeypatch.setattr(validate, "validate_project",
+                        lambda project_path, **kwargs: calls.append(kwargs.get("staged")) or {"ok": True})
+
+    async def _call(**payload):
+        async with Client(create_app()) as client:
+            result = await client.call_tool(
+                "renforge_validate", {"project_path": str(tmp_path), **payload}, raise_on_error=False
+            )
+        return json.loads(next(block.text for block in result.content if block.type == "text"))
+
+    staged = {"game/zz.rpy": "init python:\n    import os\n"}
+    denied = asyncio.run(_call(staged=staged))
+    assert calls == []
+    assert denied["code"] == "POLICY_DENIED"
+    assert denied["policy"]["operation"] == "renforge_validate.staged"
+    assert denied["policy"]["risk"] == RISK_OPEN_WORLD
+
+    assert asyncio.run(_call(staged=staged, authorize=True)) == {"ok": True}
+    # Without staged source, lint runs only the project's own code, as a launch does.
+    assert asyncio.run(_call()) == {"ok": True}
+    assert calls == [staged, None]
+    # Like renforge_mod lint, which lints the same kind of shadow.
+    assert classify("renforge_validate", {"staged": []}) == ("renforge_validate", RISK_OBSERVATIONAL)
+    assert classify("renforge_mod", {"action": "lint"})[1] == RISK_OBSERVATIONAL

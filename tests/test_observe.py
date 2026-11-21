@@ -1,20 +1,15 @@
-"""Classifier tests for observe, act, and advance_until. No Ren'Py process."""
+"""Classifier and host play-loop tests for observe, act, and advance_until. No Ren'Py process."""
 
 from __future__ import annotations
 
 import base64
 import hashlib
+from types import SimpleNamespace
 
 import pytest
 
-from renforge.observe import (
-    apply_screenshot,
-    classify,
-    crossed_transcript,
-    guard_act,
-    guard_dismiss,
-    run_advance_until,
-)
+from renforge.interaction import classify, crossed_transcript, guard_act, guard_dismiss, progression_boundary
+from renforge.observe import apply_screenshot
 
 
 def _element(**overrides):
@@ -59,6 +54,41 @@ def _ids(snapshot, bucket="controls"):
     return [item["id"] for item in snapshot[bucket]]
 
 
+class _FakeBridge:
+    """A bridge client for host-side play tests, without a game.
+
+    ``observe`` returns what *observe* gives (or raises what it raises); the
+    default is to fail the test, for flows that never observe. ``poll_events``
+    returns no events unless *poll* answers for a cursor. ``send_act`` records
+    each payload in ``acts`` and answers with *act(payload)*.
+    """
+
+    def __init__(self, token, *, observe=None, poll=None, act=None):
+        self.config = SimpleNamespace(host="127.0.0.1", port=1, token=token)
+        self._observe = observe
+        self._poll = poll
+        self._act = act
+        self.acts = []
+
+    def send_act(self, payload, **_kwargs):
+        self.acts.append(payload)
+        return self._act(payload)
+
+    def observe(self, **_kwargs):
+        if self._observe is None:
+            raise AssertionError("this flow must not observe")
+        return self._observe()
+
+    def poll_events(self, cursor, **_kwargs):
+        if self._poll is not None:
+            return self._poll(cursor)
+        return {"ok": True, "events": [], "cursor": cursor}
+
+
+def _raise(error):
+    raise error
+
+
 def test_dialogue_what_drops_text_tags():
     shown = classify(
         _raw(dialogue={"who": "JACKIE", "what": "{alpha=0.5}{i}Hello{/i}{w=2.0}{nw}"})
@@ -67,6 +97,14 @@ def test_dialogue_what_drops_text_tags():
 
     paragraph = classify(_raw(dialogue={"who": None, "what": "One{p}Two"}))
     assert paragraph["dialogue"]["what"] == "One\nTwo"
+
+
+def test_timed_paragraphs_and_spacing_tags_keep_words_apart():
+    from renforge.interaction import strip_text_tags
+    assert strip_text_tags("Hello.{p=1.0}World") == "Hello.\nWorld"
+    assert strip_text_tags("a{space=10}b") == "a b"
+    assert strip_text_tags("a{vspace=10}b") == "a\nb"
+    assert strip_text_tags("{i}a{/i}{w=0.5}b") == "ab"
 
     tags_only = classify(_raw(dialogue={"who": None, "what": "{w}{nw}"}))
     assert tags_only["dialogue"] is None
@@ -164,15 +202,15 @@ def test_hard_pause_imagebuttons_choose_by_idle_image_name():
     snapshot = classify(
         _raw(
             say_dismiss="dismiss_hard_pause",
-            label="cabins",
-            screens=[{"name": "freeroam_cabins", "layer": "master", "modal": False}],
+            label="hub",
+            screens=[{"name": "hub", "layer": "master", "modal": False}],
             elements=[
                 _element(
-                    screen="freeroam_cabins",
+                    screen="hub",
                     role="imagebutton",
                     text=None,
                     widget_id=None,
-                    image_name="images/button_cabin_door_1.png",
+                    image_name="images/button_door_1.png",
                     action="Function",
                     ordinal=3,
                 )
@@ -182,8 +220,8 @@ def test_hard_pause_imagebuttons_choose_by_idle_image_name():
 
     assert snapshot["forward"] == "choose"
     assert snapshot["screens"][0]["modal"] is False
-    assert _ids(snapshot) == ["freeroam_cabins/Function"]
-    assert snapshot["controls"][0]["image"] == "button_cabin_door_1.png"
+    assert _ids(snapshot) == ["hub/Function"]
+    assert snapshot["controls"][0]["image"] == "button_door_1.png"
     assert snapshot["controls"][0]["synthetic"] is False
     assert snapshot["controls"][0]["action"] == "Function"
     assert guard_dismiss(snapshot, 4) == "not_dismiss"
@@ -377,8 +415,8 @@ def test_action_names_the_control_and_image_only_splits_siblings():
                     screen="sandbox",
                     role="imagebutton",
                     text=None,
-                    image_name="images/button_time.png",
-                    action="Function(AdvanceTime)",
+                    image_name="images/button_clock.png",
+                    action="Function(NextHour)",
                     ordinal=0,
                 ),
                 _element(
@@ -426,7 +464,7 @@ def test_action_names_the_control_and_image_only_splits_siblings():
     )
 
     assert _ids(snapshot) == [
-        "sandbox/Function(AdvanceTime)",
+        "sandbox/Function(NextHour)",
         "sandbox/Function(ShowMap)",
         "map/Return/ok.png",
         "map/Return/cancel.png",
@@ -434,7 +472,7 @@ def test_action_names_the_control_and_image_only_splits_siblings():
         "map/Return/door.png#2",
     ]
     assert [item["image"] for item in snapshot["controls"]] == [
-        "button_time.png",
+        "button_clock.png",
         "button_map.png",
         "ok.png",
         "cancel.png",
@@ -527,66 +565,11 @@ def test_stale_covered_and_missing_act_guards():
     assert guard_act(snapshot, 4, "map/door") == "covered"
 
 
-class _Clock:
-    def __init__(self):
-        self.t = 0.0
-
-    def now(self):
-        return self.t
-
-    def sleep(self, delay):
-        self.t += delay
-
-
-def _run(frames, *, max_steps=5, timeout=2.0, advance_on_dismiss=True):
-    clock = _Clock()
-    index = {"i": 0}
-    dismisses = []
-
-    def fetch(_screenshot):
-        return frames[min(index["i"], len(frames) - 1)]
-
-    def dismiss(interaction):
-        dismisses.append(interaction)
-        if advance_on_dismiss and index["i"] + 1 < len(frames):
-            index["i"] += 1
-        return {"ok": True}
-
-    result = run_advance_until(
-        fetch,
-        dismiss,
-        max_steps=max_steps,
-        timeout=timeout,
-        sleep=clock.sleep,
-        now=clock.now,
-    )
-    return result, dismisses
-
-
-def test_advance_until_dismisses_say_and_stops_on_choice_without_clicking():
-    say = _raw(interaction=1, say_dismiss="dismiss")
-    choice = _raw(
-        interaction=2,
-        say_dismiss=None,
-        screens=[{"name": "choice", "layer": "screens", "modal": True}],
-        elements=[_element(screen="choice", text="Left", menu_index=0)],
-    )
-
-    result, dismisses = _run([say, choice])
-
-    assert result["stop"] == "choose"
-    assert result["steps"] == 1
-    assert dismisses == [1]
-    assert result["observation"]["controls"][0]["id"] == "choice/item/0"
-
-
 @pytest.mark.parametrize("phase,stop", [("ended", "end"), ("main_menu", "main_menu")])
-def test_dismiss_progression_stops_at_engine_menu_even_without_controls(phase, stop):
+def test_progression_stops_at_engine_menu_even_without_controls(phase, stop):
     raw = _raw(interaction=1, say_dismiss="dismiss")
     raw["lifecycle"] = {"phase": phase, "ending": {"reason": "script_return"} if phase == "ended" else None}
-    result, dismisses = _run([raw])
-    assert result["stop"] == stop
-    assert dismisses == []
+    assert progression_boundary(classify(raw)) == stop
 
 
 def test_screen_or_label_names_do_not_establish_ending():
@@ -598,24 +581,18 @@ def test_screen_or_label_names_do_not_establish_ending():
 
 @pytest.mark.parametrize("ready,keep_frame", [(True, True), (False, False), (False, True)])
 def test_progression_requires_settled_current_frame_to_report_end(monkeypatch, ready, keep_frame):
-    from types import SimpleNamespace
     from renforge.tools import live
 
     ending = {"id": 1, "reason": "script_return", "statement": {"file": "game/story.rpy", "line": 42}}
     final = classify(_raw(lifecycle={"phase": "ended", "ending": ending}))
-
-    class Client:
-        _config = SimpleNamespace(host="127.0.0.1", port=1, token="ending-test")
-
-        def poll_events(self, cursor, **kwargs):
-            return {"ok": True, "events": [], "cursor": cursor}
 
     monkeypatch.setattr(live, "run_native_skip", lambda *args, **kwargs: {
         "ok": True, "stop": "end", "observation": final, "steps": 1})
     monkeypatch.setattr(live, "settle", lambda *args, **kwargs:
                         (final, "ready", None) if ready else
                         (final if keep_frame else None, "timeout", "no frame"))
-    result = live._advance_with_client("/tmp/ending-frame", Client(), max_steps=10, timeout=2, screenshot=False)
+    result = live._advance_with_client("/tmp/ending-frame", _FakeBridge("ending-test"), max_steps=10, timeout=2,
+                                       screenshot=False)
     assert result["stop"] == ("end" if ready else "timeout")
     assert result["ending"] == (ending if ready else None)
     if not ready and not keep_frame:
@@ -626,69 +603,22 @@ def test_progression_requires_settled_current_frame_to_report_end(monkeypatch, r
 @pytest.mark.parametrize('initial_stop,unclassified,expected', [
     ('none', False, 'choose'), ('none', True, 'unsupported'), ('max_steps', False, 'max_steps')])
 def test_progression_reports_settled_boundary_without_replacing_budget_stop(monkeypatch, initial_stop, unclassified, expected):
-    from types import SimpleNamespace
     from renforge.tools import live
 
     final = classify(_raw(interaction=2, elements=[_element(screen='branch_picker', text='Next')],
                           omitted={'unclassified': unclassified}))
 
-    class Client:
-        _config = SimpleNamespace(host='127.0.0.1', port=1, token='settled-boundary')
-
-        def poll_events(self, cursor, **kwargs):
-            return {'ok': True, 'events': [], 'cursor': cursor}
-
     monkeypatch.setattr(live, 'run_native_skip', lambda *args, **kwargs: {
         'ok': True, 'stop': initial_stop, 'observation': classify(_raw()), 'steps': 0})
     monkeypatch.setattr(live, 'settle', lambda *args, **kwargs: (final, 'ready', None))
-    result = live._advance_with_client('/tmp/settled-boundary', Client(), max_steps=10, timeout=2, screenshot=False)
+    result = live._advance_with_client('/tmp/settled-boundary', _FakeBridge('settled-boundary'), max_steps=10,
+                                       timeout=2, screenshot=False)
     assert result['stop'] == expected
     assert result['observation'] == final
     assert result['steps'] == 0
 
 
-def test_advance_until_polls_through_wait_and_does_not_dismiss_it():
-    waiting = _raw(interaction=1, say_dismiss="dismiss_hard_pause", elements=[])
-    say = _raw(interaction=2, say_dismiss="dismiss")
-    choice = _raw(
-        interaction=3,
-        say_dismiss=None,
-        screens=[{"name": "choice", "layer": "screens", "modal": True}],
-        elements=[_element(screen="choice", text="Go", menu_index=0)],
-    )
-    clock = _Clock()
-    phase = {"name": "wait"}
-    dismisses = []
-
-    def fetch(_screenshot):
-        if phase["name"] == "wait" and clock.t >= 0.1:
-            phase["name"] = "say"
-        if phase["name"] == "wait":
-            return waiting
-        if phase["name"] == "say":
-            return say
-        return choice
-
-    def dismiss(interaction):
-        dismisses.append(interaction)
-        phase["name"] = "choice"
-        return {"ok": True}
-
-    result = run_advance_until(
-        fetch,
-        dismiss,
-        max_steps=5,
-        timeout=2,
-        sleep=clock.sleep,
-        now=clock.now,
-    )
-
-    assert result["stop"] == "choose"
-    assert dismisses == [2]
-    assert result["steps"] == 1
-
-
-def test_advance_until_does_not_dismiss_a_hard_pause_hub():
+def test_a_hard_pause_hub_is_a_choice_not_a_line():
     hub = _raw(
         interaction=7,
         say_dismiss="dismiss_hard_pause",
@@ -696,73 +626,43 @@ def test_advance_until_does_not_dismiss_a_hard_pause_hub():
         elements=[_element(screen="map", role="imagebutton", image_name="door.png")],
     )
 
-    result, dismisses = _run([hub])
+    snapshot = classify(hub)
 
-    assert result["stop"] == "choose"
-    assert result["steps"] == 0
-    assert dismisses == []
-    assert result["observation"]["controls"][0]["id"] == "map/Return"
-    assert result["observation"]["controls"][0]["image"] == "door.png"
-
-
-def test_advance_until_reports_stalled_when_dismiss_does_not_advance():
-    say = _raw(interaction=1, say_dismiss="dismiss")
-
-    result, dismisses = _run([say], advance_on_dismiss=False, timeout=0.2)
-
-    assert result["stop"] == "stalled"
-    assert result["steps"] == 1
-    assert dismisses == [1]
-
-
-def test_advance_until_stops_at_max_steps_without_another_dismiss():
-    frames = [
-        _raw(interaction=1, say_dismiss="dismiss"),
-        _raw(interaction=2, say_dismiss="dismiss"),
-        _raw(
-            interaction=3,
-            say_dismiss=None,
-            screens=[{"name": "choice", "layer": "screens", "modal": True}],
-            elements=[_element(screen="choice", text="Go", menu_index=0)],
-        ),
-    ]
-
-    result, dismisses = _run(frames, max_steps=1)
-
-    assert result["stop"] == "max_steps"
-    assert dismisses == [1]
-    assert result["observation"]["interaction"] == 2
+    assert snapshot["forward"] == "choose"
+    assert guard_dismiss(snapshot, 7) == "not_dismiss"
+    assert snapshot["controls"][0]["id"] == "map/Return"
+    assert snapshot["controls"][0]["image"] == "door.png"
 
 
 def test_crossed_transcript_keeps_labels_queued_before_the_first_frame():
     events = [
         {"seq": 0, "type": "label", "label": "_start"},
         {"seq": 1, "type": "label", "label": "advance_time"},
-        {"seq": 2, "type": "label", "label": "week1_challenge1_cliff"},
-        {"seq": 3, "type": "say", "who": "Chef", "what": "{b}Listen up!{/b}"},
+        {"seq": 2, "type": "label", "label": "chapter1_scene_a"},
+        {"seq": 3, "type": "say", "who": "Guide", "what": "{b}Line one.{/b}"},
         {"seq": 4, "type": "business", "name": "ignored"},
-        {"seq": 6, "type": "label", "label": "week1_challenge1_hottub"},
-        {"seq": 7, "type": "say", "who": None, "what": "Chris suddenly appears on the beach with you."},
+        {"seq": 6, "type": "label", "label": "chapter1_scene_b"},
+        {"seq": 7, "type": "say", "who": None, "what": "A stranger appears beside you."},
     ]
     frames = [
         {
             "event_seq": 5,
-            "label": "week1_challenge1_cliff",
-            "dialogue": {"who": "Chef", "what": "{b}Listen up!{/b}"},
+            "label": "chapter1_scene_a",
+            "dialogue": {"who": "Guide", "what": "{b}Line one.{/b}"},
         },
         {
             "event_seq": 8,
-            "label": "week1_challenge1_hottub",
-            "dialogue": {"who": None, "what": "Chris suddenly appears on the beach with you."},
+            "label": "chapter1_scene_b",
+            "dialogue": {"who": None, "what": "A stranger appears beside you."},
         },
     ]
 
     assert crossed_transcript(events, frames) == [
         {"type": "label", "label": "advance_time"},
-        {"type": "label", "label": "week1_challenge1_cliff"},
-        {"type": "say", "who": "Chef", "what": "Listen up!"},
-        {"type": "label", "label": "week1_challenge1_hottub"},
-        {"type": "say", "who": None, "what": "Chris suddenly appears on the beach with you."},
+        {"type": "label", "label": "chapter1_scene_a"},
+        {"type": "say", "who": "Guide", "what": "Line one."},
+        {"type": "label", "label": "chapter1_scene_b"},
+        {"type": "say", "who": None, "what": "A stranger appears beside you."},
     ]
 
 
@@ -785,68 +685,74 @@ def test_advance_until_returns_lines_queued_before_its_first_look(monkeypatch):
     frames = [
         _raw(
             interaction=1,
-            label="week1_challenge1_cliff",
-            dialogue={"who": "Chef", "what": "Listen up!"},
+            label="chapter1_scene_a",
+            dialogue={"who": "Guide", "what": "Line one."},
             event_seq=5,
             say_dismiss="dismiss",
         ),
         _raw(
             interaction=2,
-            label="week1_challenge1_hottub",
+            label="chapter1_scene_b",
             dialogue=None,
             event_seq=8,
             say_dismiss=None,
-            screens=[{"name": "minigame_hottub", "layer": "master", "modal": True}],
-            elements=[_element(screen="minigame_hottub", text="Skip")],
+            screens=[{"name": "minigame", "layer": "master", "modal": True}],
+            elements=[_element(screen="minigame", text="Skip")],
         ),
     ]
     index = {"i": 0}
 
     class Client:
         def __init__(self):
-            self._config = type("Cfg", (), {"host": "127.0.0.1", "port": 9, "token": "tok"})()
+            self.config = type("Cfg", (), {"host": "127.0.0.1", "port": 9, "token": "tok"})()
 
         def observe(self, screenshot=False, deadline=None):
             return frames[min(index["i"], len(frames) - 1)]
 
-        def dismiss_if(self, interaction, deadline=None):
-            index["i"] += 1
-            return {"ok": True}
+        def progression(self, action, operation_id, **_kwargs):
+            # The bridge skips past the line in one operation.
+            if action == "start":
+                index["i"] += 1
+                return {"ok": True, "progression": {"id": operation_id, "active": False,
+                                                    "stop": "choose", "steps": 1}}
+            return {"ok": True, "progression": {"id": operation_id, "steps": 1}}
 
         def poll_events(self, since=0, deadline=None):
             events = [
-                {"seq": 1, "type": "label", "label": "freeroam_cabins"},
+                {"seq": 1, "type": "label", "label": "hub"},
                 {"seq": 3, "type": "label", "label": "advance_time"},
-                {"seq": 4, "type": "label", "label": "week1_challenge1_cliff"},
-                {"seq": 6, "type": "label", "label": "week1_challenge1_hottub"},
+                {"seq": 4, "type": "label", "label": "chapter1_scene_a"},
+                {"seq": 6, "type": "label", "label": "chapter1_scene_b"},
             ]
             return {"events": [event for event in events if event["seq"] > since], "cursor": 8}
 
     client = Client()
     monkeypatch.setattr(live, "_client", lambda _path: client)
-    live._crossed_after[live._key("/tmp/renforge-crossed")] = (("127.0.0.1", 9, "tok"), 2)
+    monkeypatch.setitem(live._crossed_after, live._key("/tmp/renforge-crossed"), (("127.0.0.1", 9, "tok"), 2))
 
-    result = live.advance_until("/tmp/renforge-crossed", max_steps=5, timeout=2, mode="dismiss")
+    result = live.advance_until("/tmp/renforge-crossed", max_steps=5, timeout=2, screenshot=False)
 
     assert result["stop"] == "choose"
     assert result["steps"] == 1
     assert result["crossed"] == [
         {"type": "label", "label": "advance_time"},
-        {"type": "label", "label": "week1_challenge1_cliff"},
-        {"type": "say", "who": "Chef", "what": "Listen up!"},
-        {"type": "label", "label": "week1_challenge1_hottub"},
+        {"type": "label", "label": "chapter1_scene_a"},
+        {"type": "say", "who": "Guide", "what": "Line one."},
+        {"type": "label", "label": "chapter1_scene_b"},
     ]
     assert live._crossed_after[live._key("/tmp/renforge-crossed")][1] == 8
 
-    again = live.advance_until("/tmp/renforge-crossed", max_steps=1, timeout=2, mode="dismiss")
+    again = live.advance_until("/tmp/renforge-crossed", max_steps=1, timeout=2, screenshot=False)
     assert again["crossed"] == []
 
 
 def test_advance_until_rejects_bad_budgets():
-    result = run_advance_until(lambda _s: {}, lambda _i: {}, max_steps=0, timeout=1)
+    from renforge.tools import live
 
-    assert result["ok"] is False
-    assert result["stop"] == "invalid_arguments"
+    for budget in ({"max_steps": 0}, {"max_steps": True}, {"timeout": 0.0}, {"timeout": float("nan")}):
+        result = live.advance_until("/tmp/renforge-bad-budget", **budget)
+        assert result["ok"] is False
+        assert result["stop"] == "invalid_arguments"
 
 
 def test_apply_screenshot_rejects_invalid_payload():
@@ -895,58 +801,25 @@ def test_identity_guards_include_session_and_rebuilt_controls():
     assert guard_act(snapshot, 4, "say/go", observation_id="revision-b") == "stale"
 
 
-def test_act_returns_next_observation_without_advancing_or_consuming_transcript(monkeypatch):
-    from renforge.tools import live
-
-    calls = []
-
-    class Client:
-        def act(self, **kwargs):
-            calls.append(kwargs)
-            return {"ok": True, "operation": "click"}
-
-        def observe(self, **kwargs):
-            return _raw(interaction=5, session_id="a", observation_id="new")
-
-    client = Client()
-    monkeypatch.setattr(live, "_client", lambda path: client)
-    result = live.act("/tmp/action-flow", 4, "say/go", screenshot=False, session_id="a", observation_id="old")
-    assert result["ok"] and result["observation_status"] == "ready"
-    assert result["observation"]["interaction"] == 5
-    assert calls[0]["session_id"] == "a" and calls[0]["observation_id"] == "old"
-    assert "/tmp/action-flow" not in live._crossed_after
-
-
 def test_act_reports_followup_failure_without_retrying_successful_input(monkeypatch):
     from renforge.tools import live
     from renforge.bridge.client import BridgeError
 
-    actions = []
-
-    class Client:
-        def act(self, **kwargs):
-            actions.append(kwargs)
-            return {"ok": True, "operation": "click"}
-
-        def observe(self, **kwargs):
-            raise BridgeError("disconnected")
-
-    monkeypatch.setattr(live, "_client", lambda path: Client())
-    result = live.act("/tmp/action-flow", 4, "say/go")
+    client = _FakeBridge("followup", observe=lambda: _raise(BridgeError("disconnected")),
+                         act=lambda _payload: {"ok": True, "operation": "click"})
+    monkeypatch.setattr(live, "_client", lambda path: client)
+    result = live.act("/tmp/action-flow", 4, "say/go", timeout=1)
     assert result["ok"] is True
+    assert result["action_outcome"] == "succeeded"
     assert result["observation_status"] == "transport_error"
     assert result["observation"] is None
-    assert len(actions) == 1
+    assert len(client.acts) == 1
 
 
-def test_act_can_condense_action_and_progression(monkeypatch):
+def test_act_forwards_its_guard_then_progresses(monkeypatch):
     from renforge.tools import live
 
-    class Client:
-        def act(self, **kwargs):
-            return {"ok": True}
-
-    client = Client()
+    client = _FakeBridge("act-progress", act=lambda _payload: {"ok": True})
     monkeypatch.setattr(live, "_client", lambda path: client)
     calls = []
 
@@ -956,7 +829,8 @@ def test_act_can_condense_action_and_progression(monkeypatch):
                 "observation": classify(_raw()), "observation_status": "ready", "crossed": []}
 
     monkeypatch.setattr(live, "_advance_with_client", progress)
-    result = live.act("/tmp/action-flow", 4, "say/go", advance=True, screenshot=False)
+    result = live.act("/tmp/action-flow", 4, "say/go", screenshot=False, session_id="a", observation_id="old")
+    assert client.acts == [{"interaction": 4, "id": "say/go", "session_id": "a", "observation_id": "old"}]
     assert result["observation_status"] == "ready"
     assert result["progress"]["stop"] == "choose"
     assert result["progress"]["steps"] == 2
@@ -975,7 +849,7 @@ def test_lost_action_reply_is_explicitly_uncertain(monkeypatch):
     from renforge.util.frames import FRAME_TIMEOUT
 
     class Client:
-        def act(self, **kwargs):
+        def send_act(self, payload, **kwargs):
             raise BridgeProtocolError("timed out waiting for a frame", code=FRAME_TIMEOUT)
 
     monkeypatch.setattr(live, "_client", lambda path: Client())
@@ -989,7 +863,7 @@ def test_stale_action_returns_classified_fresh_observation(monkeypatch):
     from renforge.tools import live
 
     class Client:
-        def act(self, **kwargs):
+        def send_act(self, payload, **kwargs):
             return {"ok": False, "error": "stale", "observation": _raw(interaction=5)}
 
     monkeypatch.setattr(live, "_client", lambda path: Client())
@@ -1005,7 +879,7 @@ def test_an_unstable_refusal_reports_its_current_observation_as_ready(monkeypatc
     from renforge.tools import live
 
     class Client:
-        def act(self, **kwargs):
+        def send_act(self, payload, **kwargs):
             return {"ok": False, "error": "unstable",
                     "observation": _raw(stable=False, unstable_reason="pause", dialogue=None)}
 
@@ -1077,13 +951,41 @@ def test_settle_accepts_a_screen_that_keeps_changing_within_one_interaction():
     assert status == "ready" and result["unstable_reason"] == "pause"
 
 
+def test_settle_starts_a_new_run_when_the_screenshot_shows_a_new_interaction(monkeypatch):
+    """The old interaction's run of reads must not count for the next one."""
+    from renforge import progression
+    import time
+    monkeypatch.setattr(progression, "POLL_SECONDS", 0.001)
+    reads = []
+
+    def fetch(shot):
+        # Four changing reads of interaction 1, then interaction 2 changing on every read.
+        n = len(reads)
+        reads.append(n)
+        return _raw(interaction=1 if n < 4 else 2, observation_id="r%d" % n)
+
+    result, status, _error = progression.settle(fetch, time.monotonic() + 2, screenshot=True)
+    assert status == "ready" and result["interaction"] == 2
+    # A fresh interaction that never repeats needs a full run of plain reads plus the screenshot.
+    second = len(reads) - 4
+    assert second >= progression.SETTLE_SAME_INTERACTION + 1, second
+
+
 def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch):
-    """A {w=1.0}{nw} line stayed a "pause" until act ran out of time."""
+    """A {w=1.0}{nw} line still pausing after a short pause is clicked past, not waited out."""
     import time
     from renforge import progression
     monkeypatch.setattr(progression, "STUCK_PAUSE_SECONDS", 0.05)
-    nudges = []
-    stuck = _raw(interaction=7, stable=False, unstable_reason="pause", say_dismiss="dismiss")
+    stuck = _raw(interaction=7, stable=False, unstable_reason="pause", say_dismiss="dismiss",
+                 session_id="s1", observation_id="o1")
+    verdicts = []
+
+    def nudge(interaction):
+        # The bridge's own verdict on the fresh frame, as dismiss_if computes it.
+        snapshot = classify(stuck)
+        verdicts.append(guard_dismiss(snapshot, interaction, session_id="s1", observation_id="o1",
+                                      allow_pause=True))
+        return {"ok": verdicts[-1] is None, "error": verdicts[-1]}
 
     class Client:
         def progression(self, *args, **kwargs):
@@ -1091,37 +993,79 @@ def test_a_pause_that_outlasts_any_short_pause_is_clicked_past_once(monkeypatch)
 
     progression.run_native_skip(Client(), lambda shot: stuck, max_steps=5,
                                 deadline=time.monotonic() + 0.3, total_deadline=time.monotonic() + 0.4,
-                                nudge=nudges.append)
-    assert nudges == [7]
+                                nudge=nudge)
+    assert verdicts == [None]
     # Without a way to click (no nudge), it only waits.
-    progression.run_native_skip(Client(), lambda shot: stuck, max_steps=5,
-                                deadline=time.monotonic() + 0.1, total_deadline=time.monotonic() + 0.2)
+    waited = progression.run_native_skip(Client(), lambda shot: stuck, max_steps=5,
+                                         deadline=time.monotonic() + 0.1, total_deadline=time.monotonic() + 0.2)
+    assert waited["ok"] is True and waited["stop"] == "timeout"
+    assert verdicts == [None]
 
 
-def test_dismiss_progression_stops_before_unclassified_input():
+
+def test_the_stuck_pause_timer_starts_when_the_pause_appears(monkeypatch):
+    """A long transition before a short pause must not make that pause look stuck."""
+    from renforge import progression
+
+    # A fake clock: each read costs 10 ms and a sleep advances it, so no
+    # wall-clock stall on a busy runner can change what the loop sees.
+    clock = {"now": 1000.0}
+
+    def sleep(seconds):
+        clock["now"] += max(seconds, 0.001)
+
+    # Replace only progression's own ``time`` name: patching attributes of the
+    # shared time module would also stall threads other tests leaked.
+    monkeypatch.setattr(progression, "time", SimpleNamespace(monotonic=lambda: clock["now"], sleep=sleep))
+    monkeypatch.setattr(progression, "STUCK_PAUSE_SECONDS", 1.5)
+    transition = _raw(interaction=7, stable=False, unstable_reason="transition",
+                      session_id="s1", observation_id="t1")
+    pause = _raw(interaction=8, stable=False, unstable_reason="pause", say_dismiss="dismiss",
+                 session_id="s1", observation_id="p1")
+    other_pause = _raw(interaction=9, stable=False, unstable_reason="pause", say_dismiss="dismiss",
+                       session_id="s1", observation_id="p2")
+    start = clock["now"]
+    nudged_at = []
+
+    def fetch(_shot):
+        clock["now"] += 0.01
+        elapsed = clock["now"] - start
+        if elapsed < 2.0:
+            return transition          # longer than STUCK_PAUSE_SECONDS
+        if elapsed < 3.0:
+            return pause               # a fresh pause, shorter than it
+        return other_pause             # a new interaction: its own timer
+
+    class Client:
+        def progression(self, *args, **kwargs):
+            raise AssertionError("progression must not start from an unstable frame")
+
+    def nudge(interaction):
+        nudged_at.append((interaction, clock["now"] - start))
+        return {"ok": True}
+
+    progression.run_native_skip(Client(), fetch, max_steps=5, deadline=start + 6.0,
+                                total_deadline=start + 7.0, nudge=nudge)
+    # Only the last pause stayed a pause past the limit, measured from when it appeared.
+    assert len(nudged_at) == 1, nudged_at
+    interaction, when = nudged_at[0]
+    assert interaction == 9
+    assert 3.0 + 1.5 <= when < 3.0 + 1.5 + 0.1, when
+
+def test_progression_stops_before_unclassified_input():
     raw = _raw(omitted={'unclassified': True, 'focus_truncated': False})
-    result, dismisses = _run([raw])
-    assert result['stop'] == 'unsupported'
-    assert dismisses == []
+    assert progression_boundary(classify(raw)) == 'unsupported'
 
 
 @pytest.mark.parametrize('exit_code,expected', [(None, 'transport_error'), (0, 'exited'), (1, 'crash')])
 def test_process_failure_preserves_last_observation_without_confirming_an_end(monkeypatch, exit_code, expected):
-    from types import SimpleNamespace
     from renforge.tools import live
     from renforge.bridge.client import BridgeError
     from renforge.progression import failure_status
     last = classify(_raw(lifecycle={'phase': 'playing', 'ending': None}))
     process = SimpleNamespace(poll=lambda: exit_code)
 
-    class Client:
-        _config = SimpleNamespace(host='127.0.0.1', port=1, token='process-test')
-        def observe(self, **kwargs):
-            raise BridgeError('disconnected')
-        def poll_events(self, cursor, **kwargs):
-            return {'ok': True, 'events': [], 'cursor': cursor}
-
-    client = Client()
+    client = _FakeBridge('process-test', observe=lambda: _raise(BridgeError('disconnected')))
     monkeypatch.setitem(live._SESSIONS, live._key('/tmp/process-ending'), SimpleNamespace(client=client, process=process))
     monkeypatch.setattr(live, 'run_native_skip', lambda *args, **kwargs: {
         'ok': False, 'stop': 'transport_error', 'steps': 1, 'observation': last})
@@ -1137,22 +1081,17 @@ def test_process_failure_preserves_last_observation_without_confirming_an_end(mo
 
 def test_a_poll_that_fails_once_does_not_truncate_the_transcript(monkeypatch):
     """A busy main thread timed out one poll; the next resumed from the cursor."""
-    from types import SimpleNamespace
     from renforge.tools import live
     from renforge.bridge.client import BridgeError
     polls = []
 
-    class Client:
-        _config = SimpleNamespace(host='127.0.0.1', port=1, token='poll-test')
-        def observe(self, **kwargs):
-            return _raw(interaction=3, observation_id='same')
-        def poll_events(self, cursor, **kwargs):
-            polls.append(cursor)
-            if len(polls) == 1:
-                raise BridgeError('timed out waiting for a frame')
-            return {'ok': True, 'events': [], 'cursor': cursor + 1}
+    def poll(cursor):
+        polls.append(cursor)
+        if len(polls) == 1:
+            raise BridgeError('timed out waiting for a frame')
+        return {'ok': True, 'events': [], 'cursor': cursor + 1}
 
-    client = Client()
+    client = _FakeBridge('poll-test', observe=lambda: _raw(interaction=3, observation_id='same'), poll=poll)
     monkeypatch.setitem(live._SESSIONS, live._key('/tmp/poll-retry'), SimpleNamespace(client=client, process=None))
 
     def skip(_client, _fetch, *, between, **_kwargs):
@@ -1215,6 +1154,26 @@ def test_hud_buttons_kept_up_from_earlier_lines_do_not_hold_a_clickable_line():
     assert classify(_raw(elements=hud, screens=screens, dialogue=None))["forward"] == "choose"
 
 
+def test_the_dismiss_guard_agrees_with_classify_about_kept_up_hud_buttons():
+    """The bridge's dismiss_if spun on a kept-up HUD: classify said dismiss, the guard refused."""
+    hud = [_element(screen="phone_button", action="Show('Phone')", text="Phone")]
+    screens = [{"name": "say", "layer": "screens", "modal": False},
+               {"name": "phone_button", "layer": "screens", "modal": False, "kept_up": True}]
+    frames = [_raw(interaction=1, elements=hud, screens=screens),
+              _raw(interaction=2, say_dismiss=None, elements=[_element(screen="choice", menu_index=0, text="Go")],
+                   screens=[{"name": "choice", "layer": "screens", "modal": True}])]
+    line = classify(frames[0])
+    assert line["forward"] == "dismiss"
+    assert guard_dismiss(line, 1) is None
+    # The same HUD shown with this moment still stops the line.
+    called = classify(_raw(elements=hud, screens=[dict(s, kept_up=False) for s in screens]))
+    assert guard_dismiss(called, 4) == "not_dismiss"
+    # The menu after the line is a decision, which the guard never dismisses.
+    menu = classify(frames[1])
+    assert menu["forward"] == "choose"
+    assert guard_dismiss(menu, 2) == "not_dismiss"
+
+
 def test_a_first_pause_with_only_hud_buttons_is_clicked_past():
     # `show text "Title Card"` then `pause`, under a kept-up HUD button.
     hud = [_element(screen="character_menu_button", action="ShowMenu('character_info_menu')")]
@@ -1272,6 +1231,25 @@ def test_a_scrolling_panel_beside_a_line_does_not_hold_it():
     # A slider bound to a value is input, so it still stops the line.
     slider = [_element(screen="stream", role="bar", text="volume")]
     assert classify(_raw(elements=slider, screens=screens))["forward"] == "choose"
+
+
+def test_dismiss_on_a_pending_pause_needs_the_explicit_pause_opt_in():
+    """Only the stuck-pause nudge may click a frame that is still a pause."""
+    pause = classify(_raw(interaction=7, stable=False, unstable_reason="pause",
+                          session_id="s1", observation_id="o1"))
+    assert guard_dismiss(pause, 7) == "unstable"
+    assert guard_dismiss(pause, 7, allow_pause=True) is None
+    assert guard_dismiss(pause, None, observation_id="o1", allow_pause=True) is None
+    # The opt-in skips only the stability check.
+    assert guard_dismiss(pause, 7, session_id="other", allow_pause=True) == "stale"
+    assert guard_dismiss(pause, 7, observation_id="other", allow_pause=True) == "stale"
+    assert guard_dismiss(pause, 8, allow_pause=True) == "stale"
+    hard = classify(_raw(stable=False, unstable_reason="pause", say_dismiss="dismiss_hard_pause"))
+    assert guard_dismiss(hard, 4, allow_pause=True) == "not_dismiss"
+    transition = classify(_raw(stable=False, unstable_reason="transition"))
+    assert guard_dismiss(transition, 4, allow_pause=True) == "unstable"
+    not_ready = classify(_raw(stable=False, unstable_reason="not_ready"))
+    assert guard_dismiss(not_ready, 4, allow_pause=True) == "unstable"
 
 
 def test_dismiss_past_optional_controls_still_refuses_menus_and_modals():
@@ -1362,7 +1340,7 @@ def test_a_reply_that_times_out_while_the_game_is_busy_is_asked_again():
     replies = iter([busy, menu])
     progress = run_native_skip(None, lambda shot: next(replies), max_steps=5,
                                deadline=time.monotonic() + 2, total_deadline=time.monotonic() + 2)
-    assert progress["ok"] is True and progress["stop"] != "timeout"
+    assert progress["ok"] is True and progress["stop"] == "choose"
 
     # Out of budget, a timeout is still reported.
     stuck = iter([busy] * 100)

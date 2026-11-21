@@ -15,7 +15,7 @@ from typing import Any
 from .project import RenpyProject
 from .save_isolation import renpy_tool_environment
 from .sdk import RenpySdk
-from .util.files import read_text_nofollow, resolves_inside
+from .util.files import read_text_nofollow, resolves_inside, walk_nofollow
 from .util.subprocess import run_command
 
 _TL_DIR = "tl"
@@ -61,22 +61,49 @@ def list_languages(project_path: str | Path) -> list[str]:
     )
 
 
+def invalid_language(language: Any) -> dict[str, Any] | None:
+    """Return an ``ok: false`` payload if ``language`` is not a Ren'Py language name, else None.
+
+    A language name is a Python identifier (``french``; ``None`` means the
+    untranslated game). Ren'Py joins it into ``game/tl/<language>/`` unchecked
+    and writes there, so a ``/`` or ``..`` would leave the folder.
+    """
+    if isinstance(language, str) and language.isidentifier():
+        return None
+    return {
+        "ok": False,
+        "code": "LANGUAGE_INVALID",
+        "language": language,
+        "error": "language must be a Ren'Py language name (an identifier such as french)",
+    }
+
+
 def generate_translations(sdk: RenpySdk, project: RenpyProject, language: str, *, timeout: int = 180) -> dict[str, Any]:
     """Generate/update translation files for ``language`` (writes game/tl/<language>/)."""
+    refused = invalid_language(language)
+    if refused:
+        return refused
     command = project.renpy_command(sdk, ("translate", language))
     with renpy_tool_environment() as env:
         result = run_command(command, timeout=timeout, env=env)
-    return {
-        "ok": result.returncode == 0,
+    ok = result.returncode == 0
+    payload: dict[str, Any] = {
+        "ok": ok,
         "language": language,
         "returncode": result.returncode,
         "stdout": result.stdout,
         "stderr": result.stderr,
     }
+    if ok:
+        payload["files_touched"] = ["game/tl/%s" % language]
+    return payload
 
 
 def translation_stats(sdk: RenpySdk, project: RenpyProject, language: str, *, timeout: int = 180) -> dict[str, Any]:
     """Report missing dialogue/string counts for ``language`` (no files written)."""
+    refused = invalid_language(language)
+    if refused:
+        return refused
     command = project.renpy_command(sdk, ("translate", language, "--count"))
     with renpy_tool_environment() as env:
         result = run_command(command, timeout=timeout, env=env)
@@ -97,20 +124,30 @@ def translation_stats(sdk: RenpySdk, project: RenpyProject, language: str, *, ti
 
 def export_dialogue(sdk: RenpySdk, project: RenpyProject, language: str = "None", *, timeout: int = 180) -> dict[str, Any]:
     """Export the game's dialogue as plain text."""
+    refused = invalid_language(language)
+    if refused:
+        return refused
     command = project.renpy_command(sdk, ("dialogue", language, "--text"))
     with renpy_tool_environment() as env:
         result = run_command(command, timeout=timeout, env=env)
-    return {
-        "ok": result.returncode == 0,
+    ok = result.returncode == 0
+    payload: dict[str, Any] = {
+        "ok": ok,
         "language": language,
         "returncode": result.returncode,
         "stdout": result.stdout,
         "stderr": result.stderr,
     }
+    if ok:
+        # Ren'Py writes this file at the project root (see renforge_export_dialogue).
+        payload["files_touched"] = ["dialogue.txt"]
+    return payload
 
 
 def list_translation_strings(project_path: str | Path, language: str) -> list[dict[str, Any]]:
     """Parse real translation blocks (dialogue & strings) from game/tl/<language>/*.rpy."""
+    if invalid_language(language):
+        return []
     root = Path(project_path).expanduser().resolve()
     tl_dir = root / "game" / "tl" / language
     if not tl_dir.is_dir() or not resolves_inside(tl_dir, root):
@@ -134,7 +171,8 @@ def list_translation_strings(project_path: str | Path, language: str) -> list[di
     )
     
     # scan for any .rpy files under the language directory
-    for rpy_file in sorted(tl_dir.glob("**/*.rpy")):
+    rpy_files = (Path(folder) / name for folder, _dirs, names in walk_nofollow(tl_dir) for name in names)
+    for rpy_file in sorted(path for path in rpy_files if path.suffix == ".rpy"):
         try:
             content = read_text_nofollow(rpy_file)
         except Exception:
@@ -209,4 +247,4 @@ def list_translation_strings(project_path: str | Path, language: str) -> list[di
     return strings
 
 
-__all__ = ["list_languages", "generate_translations", "translation_stats", "export_dialogue", "list_translation_strings"]
+__all__ = ["invalid_language", "list_languages", "generate_translations", "translation_stats", "export_dialogue", "list_translation_strings"]

@@ -20,8 +20,9 @@ import subprocess
 import sys  # retained for tests that patch renforge.bridge.launcher.sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Iterator
 
 from .guard import guard_block, guard_rpy
 from ..launch_env import (
@@ -31,18 +32,22 @@ from ..launch_env import (
     resolve_display_strategy,
 )
 from ..project import RenpyProject
-from ..save_isolation import LaunchIsolation, resolve_launch_isolation
+from ..save_isolation import LaunchIsolation, classify_savedir, resolve_launch_isolation
 from ..sdk import RenpySdk, require_supported_runtime
 from .artifacts import (
     ArtifactOwnershipError,
     allocate_and_materialize,
+    bridge_basename,
+    editor_basename,
     remove_owned_artifacts,
+    session_init_basename,
 )
 from .client import BridgeClient, BridgeConfig, BridgeProtocolError
 from .control import read_bridge_info, write_starting_bridge_info
 from ..editor import BridgeRuntimeProbe, EditorCoordinator, EditorEndpoint
-from ..util.files import PrivatePathError, ensure_private_directory
-from ..state import control_dir
+from ..util.files import PrivatePathError, ensure_nofollow_directory, ensure_private_directory, is_link
+from ..session_registry import canonical_project_path
+from ..state import control_dir, state_root
 
 _BRIDGE_RESOURCE: Path = Path(__file__).parent / "bridge.rpy"
 _EDITOR_RESOURCE: Path = Path(__file__).parent / "editor.rpy"
@@ -63,6 +68,14 @@ VSYNC_ENV: str = "RENFORGE_VSYNC"
 # well over a minute building caches.
 DEFAULT_STARTUP_TIMEOUT: float = 180.0
 
+_BRIDGE_STARTUP_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "BRIDGE_MANIFEST_PUBLICATION_FAILED",
+        "BRIDGE_INFO_CONFLICT",
+        "BRIDGE_MANIFEST_IDENTITY_MISMATCH",
+    }
+)
+
 
 def default_startup_timeout() -> float:
     """Server-wide startup deadline: ``RENFORGE_STARTUP_TIMEOUT`` seconds, or 180."""
@@ -72,13 +85,6 @@ def default_startup_timeout() -> float:
     except ValueError:
         return DEFAULT_STARTUP_TIMEOUT
     return value if math.isfinite(value) and value > 0 else DEFAULT_STARTUP_TIMEOUT
-_BRIDGE_STARTUP_ERROR_CODES: frozenset[str] = frozenset(
-    {
-        "BRIDGE_MANIFEST_PUBLICATION_FAILED",
-        "BRIDGE_INFO_CONFLICT",
-        "BRIDGE_MANIFEST_IDENTITY_MISMATCH",
-    }
-)
 
 
 class _LockPathUnsafe(Exception):
@@ -236,9 +242,7 @@ class ProjectBridgeLock:
 
         from ..util import files as private_files
 
-        if self.path.is_symlink() or (
-            self.path.exists() and private_files._win_is_reparse(self.path)
-        ):
+        if private_files.is_link(self.path):
             raise _LockPathUnsafe(f"bridge lock must not be a reparse point: {self.path}")
 
         GENERIC_READ = 0x80000000
@@ -509,11 +513,63 @@ def _editor_environment(
     }
 
 
+def _existing_paths(root: Path) -> list[Path]:
+    """Every existing path under ``root``, so a partial delete can be reported.
+
+    A linked folder is listed but never walked: rmtree removes the link, not
+    what it points to. That includes a Windows junction, which os.walk would
+    otherwise descend into (a whole user profile, say) on every stop.
+    """
+    if not root.exists():
+        return []
+    paths: list[Path] = []
+    for current, directories, filenames in os.walk(root):
+        base = Path(current)
+        paths.append(base)
+        paths.extend(base / name for name in filenames)
+        linked = [name for name in directories if _is_link_or_unreadable(base / name)]
+        paths.extend(base / name for name in linked)
+        directories[:] = [name for name in directories if name not in linked]
+    return paths
+
+
+def _is_link_or_unreadable(path: Path) -> bool:
+    """A link or junction, or a path whose attributes cannot be read: not walked."""
+    try:
+        return is_link(path)
+    except PrivatePathError:
+        return True
+
+
+def _entry_gone(path: Path) -> bool:
+    """Whether the entry itself is gone; a dangling link left behind is not."""
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _deletion_receipt(project_root: Path, path: Path) -> str:
+    """Render a removed path for ``files_deleted``.
+
+    Paths inside the project stay project-relative POSIX; a temporary savedir
+    usually lives outside the project and stays absolute.
+    """
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return path.as_posix()
+
+
 def remove_bridge_artifacts(
     project_root: Path,
     *,
     expected_session_id: str | None = None,
     remove_bridge_info: bool = True,
+    removed: list[str] | None = None,
 ) -> bool:
     """Remove schema-3 owned session artifacts after full ownership validation.
 
@@ -521,12 +577,15 @@ def remove_bridge_artifacts(
     complete proven removal. Legacy fixed names, ``traceback.txt``,
     ``errors.txt``, and unowned pre-migration metadata are never touched.
     ``remove_bridge_info=False`` removes only source and asset artifacts.
+    When ``removed`` is given, deleted project-relative POSIX paths are
+    appended to it.
     """
     try:
         return remove_owned_artifacts(
             Path(project_root),
             expected_session_id=expected_session_id,
             remove_bridge_info=remove_bridge_info,
+            removed=removed,
         )
     except ArtifactOwnershipError as exc:
         # Preserve fail-closed cleanup for BridgeSession retries.
@@ -579,6 +638,10 @@ class BridgeSession:
         self._closed = False
         self._close_result: dict[str, Any] | None = None
 
+    @property
+    def project_root(self) -> Path:
+        return self._project_root
+
     def __enter__(self) -> "BridgeSession":
         return self
 
@@ -590,11 +653,32 @@ class BridgeSession:
         """Whether teardown completed and project ownership was released."""
         return self._closed
 
+    @contextmanager
+    def holding_open(self) -> Iterator[bool]:
+        """Keep :meth:`close` waiting while the caller writes into this session.
+
+        Yields ``False`` when the session is closed or its game has exited:
+        no game would read what the caller writes, and the next stop removes
+        it. Copying into the session root while a stop removes it would leave
+        files nothing cleans up, or make the removal fail and leave the
+        session half-closed.
+        """
+        with self._close_lock:
+            yield not self._closed and self.process.poll() is None
+
     def close(self, timeout: float = 10.0) -> dict[str, Any]:
         """Stop the game, Xvfb group if any, and temporary session files."""
         with self._close_lock:
             if self._closed:
-                return self._close_result or {"cleaned": self._cleaned, "failed": ["close"]}
+                result = dict(
+                    self._close_result
+                    or {"cleaned": self._cleaned, "failed": ["close"]}
+                )
+                # A receipt belongs to the call that performed the deletion.
+                # This call deleted nothing, so it must not claim the paths an
+                # earlier close already removed.
+                result["files_deleted"] = []
+                return result
             self._close_result = self._close_resources(timeout)
             ownership_failures = {
                 "process_alive",
@@ -621,6 +705,7 @@ class BridgeSession:
             "editor_coordinator": self._editor_coordinator is None,
         }
         failed: list[str] = []
+        removed: list[str] = []
 
         if self._editor_coordinator is not None:
             try:
@@ -655,7 +740,7 @@ class BridgeSession:
             if self.process.poll() is None:
                 failed.append("process_alive")
                 self._cleaned = cleaned
-                return {"cleaned": cleaned, "failed": failed}
+                return {"cleaned": cleaned, "failed": failed, "files_deleted": removed}
             cleaned["renpy_process"] = True
         else:
             # Already exited: reap it so it does not linger as a zombie.
@@ -671,32 +756,45 @@ class BridgeSession:
                 if self._project_lock is not None
                 else None
             )
-            remove_bridge_artifacts(self._project_root, expected_session_id=expected)
+            remove_bridge_artifacts(
+                self._project_root,
+                expected_session_id=expected,
+                removed=removed,
+            )
             cleaned["bridge_artifacts"] = True
         except Exception:
             failed.append("bridge_artifacts")
 
-        if self.cleanup_savedir and self.session_root is not None:
+        # An isolated session's root holds its savedir and HOME; without one,
+        # a temporary savedir stands alone.
+        cleanup_target = self.session_root if self.session_root is not None else self.temporary_savedir
+        if self.cleanup_savedir and cleanup_target is not None:
+            is_root = self.session_root is not None
+            # A failed rmtree may still have removed part of the tree, and the
+            # receipt has to name what is actually gone rather than nothing.
+            known_paths = _existing_paths(cleanup_target)
+            removed_all = True
             try:
-                shutil.rmtree(self.session_root, ignore_errors=False)
-                cleaned["session_root"] = True
-                cleaned["temporary_savedir"] = True
+                shutil.rmtree(cleanup_target, ignore_errors=False)
             except FileNotFoundError:
-                cleaned["session_root"] = True
-                cleaned["temporary_savedir"] = True
+                # Already gone: cleanup succeeded, but nothing was deleted.
+                pass
             except Exception:
-                failed.append("session_root")
-        elif self.cleanup_savedir and self.temporary_savedir is not None:
-            try:
-                shutil.rmtree(self.temporary_savedir, ignore_errors=False)
+                removed_all = False
+                for path in sorted(known_paths, key=lambda item: len(item.parts), reverse=True):
+                    if _entry_gone(path):
+                        removed.append(_deletion_receipt(self._project_root, path))
+            else:
+                removed.append(_deletion_receipt(self._project_root, cleanup_target))
+            if removed_all:
                 cleaned["temporary_savedir"] = True
-            except FileNotFoundError:
-                cleaned["temporary_savedir"] = True
-            except Exception:
-                failed.append("temporary_savedir")
+                if is_root:
+                    cleaned["session_root"] = True
+            else:
+                failed.append("session_root" if is_root else "temporary_savedir")
 
         self._cleaned = cleaned
-        result: dict[str, Any] = {"cleaned": cleaned}
+        result: dict[str, Any] = {"cleaned": cleaned, "files_deleted": removed}
         if failed:
             result["failed"] = failed
         return result
@@ -858,11 +956,16 @@ def _log_tail(project_root: Path, since_ns: int, lines: int = 8) -> list[str]:
     return [line.rstrip() for line in text.splitlines() if line.strip()][-lines:]
 
 
-def _scripts_compiled_since(project_root: Path, since_ns: int) -> bool:
-    """Whether Ren'Py wrote any .rpyc under game/ since ``since_ns``."""
+def _scripts_compiled_since(project_root: Path, since_ns: int, session_id: str) -> bool:
+    """Whether Ren'Py wrote any of the game's own .rpyc under game/ since ``since_ns``.
+
+    The scripts RenForge injects for ``session_id`` are new on every launch, so
+    Ren'Py always compiles them; they do not count.
+    """
+    own = {basename(session_id) + "c" for basename in (session_init_basename, bridge_basename, editor_basename)}
     for directory, _dirs, files in os.walk(project_root / "game"):
         for name in files:
-            if name.endswith(".rpyc"):
+            if name.endswith(".rpyc") and name not in own:
                 try:
                     if os.stat(os.path.join(directory, name)).st_mtime_ns >= since_ns:
                         return True
@@ -917,15 +1020,136 @@ def _raise_bridge_startup_error(code: str) -> None:
     )
 
 
+def normalize_language(language: str | None) -> str | None:
+    """Validate the optional ``RENPY_LANGUAGE`` override for the game process.
+
+    The value becomes a process environment entry, so anything a shell or an
+    encoding step could reinterpret (control or surrogate code points, path
+    separators) is rejected here instead of failing later in ``Popen``.
+    """
+    if language is None:
+        return None
+    if not isinstance(language, str):
+        raise LaunchError(
+            "LANGUAGE_INVALID",
+            "language must be a non-empty string.",
+            phase="detecting_environment",
+            suggested_fix="Pass a Ren'Py language code such as `japanese`, or omit the parameter.",
+        )
+    value = language.strip()
+    if (
+        not value
+        or len(value) > 64
+        or not value.isprintable()
+        or "/" in value
+        or "\\" in value
+    ):
+        raise LaunchError(
+            "LANGUAGE_INVALID",
+            "language must be 1-64 printable characters without '/' or '\\'.",
+            phase="detecting_environment",
+            suggested_fix="Pass a Ren'Py language code such as `japanese`, or omit the parameter.",
+        )
+    return value
+
+
+def _state_savedir_spelling(savedir: str) -> Path | None:
+    """Return ``savedir`` spelled from the resolved state folder, or None when no part of it is there.
+
+    The path is judged exactly as :func:`resolve_launch_isolation` will
+    resolve it: absolute, ``~`` expanded, and with no ``..`` collapsed by
+    text, since a link is followed before the ``..`` after it. Each prefix
+    of it is resolved in turn, so an alias of the state folder (an
+    unresolved ``RENFORGE_STATE_DIR``, or a linked ``/home``) and a ``..``
+    after a link both get no pass.
+
+    Only a path none of whose prefixes lands in the state folder is left to
+    the caller (None). Otherwise it must enter the state folder at its top,
+    and every longer prefix must land where its text says: a link inside
+    the tree, whether to elsewhere in it or out of it, is refused, wherever
+    the whole path ends up. The returned spelling starts at the resolved
+    :func:`state_root`, with the rest collapsed, ready for a no-follow
+    create. Refusals, and a path whose resolution raises, are
+    ``SESSION_NOT_ISOLATED``.
+    """
+    root = state_root()
+    parts = Path(savedir).expanduser().absolute().parts
+    expected: Path | None = None
+    try:
+        for depth in range(1, len(parts) + 1):
+            landed = Path(*parts[:depth]).resolve()
+            if expected is None:
+                if landed == root:
+                    expected = root
+                elif _is_within(landed, root):
+                    raise _state_savedir_refusal(f"{savedir!r} enters it through a link below its top")
+                continue
+            name = parts[depth - 1]
+            expected = expected.parent if name == ".." else expected / name
+            if not _is_within(expected, root) or landed != expected:
+                raise _state_savedir_refusal(f"{savedir!r} follows a link inside it")
+    except LaunchError:
+        raise  # a refusal above: LaunchError is a RuntimeError, so keep it from being wrapped again
+    except (OSError, RuntimeError) as exc:
+        raise _state_savedir_refusal(f"could not resolve {savedir!r}: {exc}") from exc
+    return expected
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """Return True when ``path`` is ``root`` or lexically below it."""
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _state_savedir_refusal(detail: str) -> LaunchError:
+    """Build the refusal for a savedir in the state folder that a link could redirect."""
+    return LaunchError(
+        "SESSION_NOT_ISOLATED",
+        f"The saves folder in the RenForge state folder is a link or not a folder ({detail}), "
+        "so the launch would not be isolated.",
+        phase="preparing_isolation",
+        suggested_fix="Remove the link from the RenForge state folder and launch again.",
+    )
+
+
+def _make_state_savedir(savedir: str | None) -> str | None:
+    """Make a savedir in RenForge's state folder without following links; return the savedir to use.
+
+    A link planted on the way (out of the state tree, or to another folder
+    of it) must not choose where the launch saves, so such a folder is made
+    here before :func:`resolve_launch_isolation` resolves it. Whether a
+    savedir passes through the state folder is judged prefix by prefix as
+    the launcher will resolve it, so a spelling through a link to the state
+    folder, or a ``..`` after a link, is caught too (see
+    :func:`_state_savedir_spelling`). A savedir that never passes through
+    it is returned unchanged: one the caller chose may sit behind a link.
+    Ren'Py still opens its save files by path later, so this narrows, but
+    cannot close, the window in which a link swapped in redirects them.
+    """
+    if savedir is None or classify_savedir(savedir) != "path":
+        return savedir
+    target = _state_savedir_spelling(savedir)
+    if target is None:
+        return savedir
+    try:
+        ensure_nofollow_directory(target)
+    except PrivatePathError as exc:
+        raise _state_savedir_refusal(exc.message) from exc
+    return str(target)
+
+
 def _launch_after_project_lock(
     sdk: RenpySdk,
     project: RenpyProject,
     *,
     project_lock: ProjectBridgeLock,
+    startup_timeout: float,
     token: str | None = None,
     port: int = 0,
     warp: str | None = None,
-    startup_timeout: float | None = None,
     cancel_event: threading.Event | None = None,
     extra_env: dict[str, str] | None = None,
     display: str = "auto",
@@ -937,6 +1161,7 @@ def _launch_after_project_lock(
     home: str | None = None,
     editor_endpoint: EditorEndpoint | None = None,
     editor_coordinator: EditorCoordinator | None = None,
+    language: str | None = None,
 ) -> BridgeSession:
     """Start ``project`` with the bridge and return a connected session.
 
@@ -947,9 +1172,14 @@ def _launch_after_project_lock(
     ``savedir='temporary'`` isolates saves under a disposable session directory
     that is removed on session close when ``cleanup_on_stop`` is true. Isolated
     launches also get a private HOME so preferences and ``~/.renpy`` writes miss
-    the user's files. All launch paths isolate by default; pass
-    savedir='existing' to opt into the game's normal locations.
+    the user's files. Isolation is opt-in: omitted values follow
+    ``RENFORGE_ISOLATION`` and otherwise use the game's normal locations.
+
+    ``language`` sets ``RENPY_LANGUAGE`` for this process. Ren'Py's
+    ``change_language`` persists the result as ``preferences.language``, so the
+    stored preference changes too; use an isolated savedir to contain it.
     """
+    language = normalize_language(language)
     started = time.monotonic()
     phases: list[dict[str, Any]] = []
     _raise_if_cancelled(cancel_event, phase="detecting_environment")
@@ -961,6 +1191,8 @@ def _launch_after_project_lock(
     _phase("detecting_environment")
     env = dict(os.environ)
     env.update(extra_env or {})
+    if language is not None:
+        env["RENPY_LANGUAGE"] = language
     capabilities = detect_environment(env)
 
     try:
@@ -973,7 +1205,7 @@ def _launch_after_project_lock(
 
     headless = display_mode == "xvfb"
     isolation = resolve_launch_isolation(
-        savedir,
+        _make_state_savedir(savedir),
         home=home,
         persistent=persistent,
         preferences=preferences,
@@ -984,6 +1216,7 @@ def _launch_after_project_lock(
     cleanup_savedir = isolation.cleanup
     try:
         env.update(isolation.environ(host_env=env))
+        env["RENFORGE_PERSISTENT_MODE"] = isolation.persistent_mode
         savedir_path = str(isolation.savedir) if isolation.savedir is not None else None
 
         # Token may be caller-supplied; session id is allocated with the artifact
@@ -1065,19 +1298,23 @@ def _launch_after_project_lock(
 
         env["RENFORGE_BRIDGE_TOKEN"] = token
         env["RENFORGE_BRIDGE_SESSION_ID"] = session_id
-        env["RENFORGE_BRIDGE_PROJECT_ROOT"] = str(project.root)
+        # The bridge checks this against the metadata, which spells the root as the disk lists it.
+        env["RENFORGE_BRIDGE_PROJECT_ROOT"] = canonical_project_path(project.root)
         env["RENFORGE_BRIDGE_CONTROL_DIR"] = str(control_dir(project.root))
         env["RENFORGE_BRIDGE_PORT"] = str(port)
         # Transitions only slow an agent down and leave half-drawn frames to wait
         # out. Turn them off when the session's preferences are its own (empty,
         # or in a save folder that is not the player's), so the change never
         # reaches the player's real preferences.
-        own_preferences = isolation.preferences_mode == "empty" or not isolation.exposes_user_saves
+        own_preferences = (
+            isolation.preferences_mode == "empty" or not isolation.exposes_user_saves(project.root)
+        )
         if own_preferences and env.get(TRANSITIONS_ENV, "").strip().lower() != "on":
             env["RENFORGE_BRIDGE_TRANSITIONS"] = "off"
         # Vsync makes every frame wait for the display. A hidden or locked-screen
-        # window is throttled (about 70 ms a frame here), and skipping draws at
-        # least one frame per line, so it capped skipping at ~7 lines a second.
+        # window can be throttled to tens of milliseconds a frame, and skipping
+        # draws at least one frame per line, so vsync caps skipping at a few
+        # lines a second.
         # Idle CPU is the same without it. RENPY_GL_VSYNC, if set, is respected.
         if "RENPY_GL_VSYNC" not in env and env.get(VSYNC_ENV, "").strip().lower() != "on":
             env["RENPY_GL_VSYNC"] = "0"
@@ -1158,8 +1395,6 @@ def _launch_after_project_lock(
             startup_event=startup_event,
             startup_code=startup_code,
         )
-        if startup_timeout is None:
-            startup_timeout = default_startup_timeout()
         deadline = time.time() + startup_timeout
         _phase("waiting_for_bridge", port=port or None)
 
@@ -1173,7 +1408,7 @@ def _launch_after_project_lock(
                 game_error = _new_game_error(project.root, error_stamps)
                 game_error_seen = time.monotonic()
                 if game_error is not None:
-                    game_error["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns)
+                    game_error["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns, session_id)
             elif time.monotonic() - game_error_seen >= _GAME_ERROR_GRACE_S:
                 _raise_game_error(game_error)
             if process.poll() is not None:
@@ -1199,7 +1434,8 @@ def _launch_after_project_lock(
                     phase="starting_renpy",
                     suggested_fix=suggested,
                     details={"stdout": out[-4000:], "stderr": err[-4000:], "returncode": process.returncode,
-                             "log_tail": _log_tail(project.root, spawned_ns)},
+                             "log_tail": _log_tail(project.root, spawned_ns),
+                             **({"video_driver": env["SDL_VIDEODRIVER"]} if env.get("SDL_VIDEODRIVER") else {})},
                 )
             try:
                 info = read_bridge_info(
@@ -1225,7 +1461,7 @@ def _launch_after_project_lock(
                 # parse-error screen; the game cannot be played.
                 parse_report = _new_game_error(project.root, error_stamps)
                 if parse_report is not None and parse_report["file"] == "errors.txt":
-                    parse_report["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns)
+                    parse_report["scripts_compiled"] = _scripts_compiled_since(project.root, spawned_ns, session_id)
                     _raise_game_error(parse_report)
                 startup_ms = int((time.monotonic() - started) * 1000)
                 phases.append(
@@ -1319,6 +1555,9 @@ def launch_with_bridge(sdk: RenpySdk, project: RenpyProject, **options: Any) -> 
     - A presplash with transparent corners opens a shaped window, which SDL's
       Wayland driver cannot create, so the game exits at once. X11 (XWayland)
       can.
+
+    When the second launch fails too, its error carries the first one in
+    ``details.first_attempt``.
     """
     try:
         return _launch_with_bridge_once(sdk, project, **options)
@@ -1332,16 +1571,23 @@ def launch_with_bridge(sdk: RenpySdk, project: RenpyProject, **options: Any) -> 
         else:
             raise
         first = exc
-    session = _launch_with_bridge_once(sdk, project, **options)
+    try:
+        session = _launch_with_bridge_once(sdk, project, **options)
+    except LaunchError as second:
+        second.details = {**second.details, "first_attempt": first.to_dict()}
+        raise
     session.startup_warning = f"{reason}: {first.message}"
     return session
 
 
 def _shaped_presplash_failed(exc: LaunchError, extra_env: dict[str, str] | None) -> bool:
+    """Whether a launch that used SDL's Wayland driver could not open its presplash window."""
     if exc.code not in ("DISPLAY_START_FAILED", "RENPY_PROCESS_EXITED"):
         return False
     if (extra_env or {}).get("SDL_VIDEODRIVER") or os.environ.get("SDL_VIDEODRIVER"):
         return False  # the user chose the driver
+    if not str((exc.details or {}).get("video_driver") or "").startswith("wayland"):
+        return False  # X11 is what the launch already used, or does not exist here
     stderr = str((exc.details or {}).get("stderr") or "")
     # Ren'Py 8.5 bundles its own pygame, whose error carries no message.
     return "presplash" in stderr and "Window" in stderr and (
@@ -1366,7 +1612,10 @@ def _launch_with_bridge_once(
     preferences: str | None = None,
     home: str | None = None,
     editor: bool = False,
+    language: str | None = None,
 ) -> BridgeSession:
+    """Launch a bridge while exclusively owning this project's artifacts."""
+    language = normalize_language(language)
     require_supported_runtime(sdk.version, project_root=project.abs_root)
     if startup_timeout is None:
         startup_timeout = default_startup_timeout()
@@ -1399,6 +1648,7 @@ def _launch_with_bridge_once(
             home=home,
             editor_endpoint=editor_endpoint,
             editor_coordinator=editor_coordinator,
+            language=language,
         )
         return session
     except BaseException:
@@ -1531,5 +1781,6 @@ __all__ = [
     "BridgeSession",
     "ProjectBridgeLock",
     "launch_with_bridge",
+    "normalize_language",
     "remove_bridge_artifacts",
 ]

@@ -8,6 +8,13 @@ MCP_PNG_MAX_BYTES = 384 * 1024
 
 
 def bounded_png(png: bytes) -> tuple[bytes, dict]:
+    """Return ``png`` at most ``MCP_PNG_MAX_BYTES`` long, with its size metadata.
+
+    A PNG under the limit comes back unchanged. A larger one is fitted within
+    1280x1280 and shrunk until it fits. The metadata gives ``width`` and
+    ``height`` (of the returned image), ``original_width``/``original_height``
+    and ``scaled``; it is empty for input under the limit that is not a PNG.
+    """
     metadata = {}
     if len(png) >= 24 and png[:8] == b"\x89PNG\r\n\x1a\n":
         width, height = struct.unpack(">II", png[16:24])
