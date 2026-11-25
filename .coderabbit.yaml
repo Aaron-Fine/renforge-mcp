@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Fork-only CodeRabbit settings. Upstream has no config, so it reviews with the
+# defaults; these keep the same review style and only widen what gets reviewed,
+# so upstream-bound work can be reviewed here (draft CI dry runs into a copy of
+# upstream main) before it is pushed upstream.
+reviews:
+  profile: chill
+  auto_review:
+    enabled: true
+    drafts: true
+    base_branches:
+      - ".*"
+    # Upstream pauses after 5 reviewed commits; never pause on the fork.
+    auto_pause_after_reviewed_commits: 0
