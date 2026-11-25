@@ -607,18 +607,27 @@ def _open_directory_chain_nofollow_posix(
     action: str = "atomic-write",
     create: bool = False,
 ) -> int:
-    """Open every directory component relative to the previously pinned one."""
+    """Open every directory component relative to the previously pinned one.
+
+    Only the last component is opened for reading (a caller lists it or
+    fsyncs it). Each ancestor is opened search-only where the platform has
+    such a handle, so a folder below an ancestor the user may traverse but
+    not list is still reached.
+    """
     target = _absolute_path(path)
     flags = _open_flags(os.O_RDONLY, getattr(os, "O_DIRECTORY", 0), getattr(os, "O_NOFOLLOW", 0))
+    ancestor_flags = _ancestor_open_flags(flags)
     anchor = Path(target.anchor) if target.anchor else Path.cwd()
-    fd = os.open(str(anchor), flags)
+    relative_parts = target.parts[1:] if target.anchor else target.parts
+    fd = _open_ancestor_posix(str(anchor), ancestor_flags if relative_parts else flags, flags)
     try:
-        relative_parts = target.parts[1:] if target.anchor else target.parts
         current_path = anchor
-        for part in relative_parts:
+        last = len(relative_parts) - 1
+        for index, part in enumerate(relative_parts):
             current_path = current_path / part
+            part_flags = flags if index == last else ancestor_flags
             try:
-                child_fd = os.open(part, flags, dir_fd=fd)
+                child_fd = _open_ancestor_posix(part, part_flags, flags, dir_fd=fd)
             except FileNotFoundError:
                 if not create:
                     raise
@@ -626,7 +635,7 @@ def _open_directory_chain_nofollow_posix(
                     os.mkdir(part, dir_fd=fd)
                 except FileExistsError:
                     pass
-                child_fd = os.open(part, flags, dir_fd=fd)
+                child_fd = _open_ancestor_posix(part, part_flags, flags, dir_fd=fd)
             except OSError as exc:
                 try:
                     child = os.stat(part, dir_fd=fd, follow_symlinks=False)
@@ -647,6 +656,31 @@ def _open_directory_chain_nofollow_posix(
     except Exception:
         os.close(fd)
         raise
+
+
+def _ancestor_open_flags(read_flags: int) -> int:
+    """Flags for a directory that is only traversed, never listed.
+
+    Linux has ``O_PATH`` and some other systems ``O_SEARCH``; both need only
+    search permission on the folder. With ``O_DIRECTORY`` and ``O_NOFOLLOW``
+    kept, a link in that place still fails the open. A platform with neither
+    opens the ancestor for reading, as before.
+    """
+    search = getattr(os, "O_PATH", 0) or getattr(os, "O_SEARCH", 0)
+    if not search:
+        return read_flags
+    return _open_flags(search, getattr(os, "O_DIRECTORY", 0), getattr(os, "O_NOFOLLOW", 0))
+
+
+def _open_ancestor_posix(name: str, flags: int, read_flags: int, *, dir_fd: int | None = None) -> int:
+    try:
+        return os.open(name, flags, dir_fd=dir_fd)
+    except OSError as exc:
+        # A kernel older than the headers Python was built with rejects the
+        # search-only flag itself; fall back to the read-only open.
+        if flags == read_flags or exc.errno != errno.EINVAL:
+            raise
+        return os.open(name, read_flags, dir_fd=dir_fd)
 
 
 def _lstat_at_posix(dir_fd: int, name: str) -> os.stat_result | None:

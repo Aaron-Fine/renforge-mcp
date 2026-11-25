@@ -714,3 +714,102 @@ def test_is_link_names_only_the_path_itself(tmp_path: Path) -> None:
     # A link above the path is not the path's own business.
     (real / "child").mkdir()
     assert is_link(tmp_path / "linked" / "child") is False
+
+
+def _search_only_flag() -> int:
+    return getattr(os, "O_PATH", 0) or getattr(os, "O_SEARCH", 0)
+
+
+def test_posix_chains_open_ancestors_search_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A save folder below an ancestor the player may traverse but not list
+    # must still be listed: only the listed folder is opened for reading.
+    if os.name == "nt" or not files_module._posix_dir_fd_supported():
+        pytest.skip("POSIX descriptor chain")
+    search = _search_only_flag()
+    if not search:
+        pytest.skip("no search-only directory handle on this platform")
+    saves = tmp_path / "ancestor" / "saves"
+    saves.mkdir(parents=True)
+    (saves / "1-1.save").write_bytes(b"SLOT")
+    real_open = os.open
+    opened: list[tuple[str, int]] = []
+
+    def recording_open(path, flags, *args, **kwargs):
+        opened.append((str(path), flags))
+        return real_open(path, flags, *args, **kwargs)
+
+    # A wrapped os.open is not in os.supports_dir_fd; keep the descriptor path.
+    monkeypatch.setattr(files_module, "_posix_dir_fd_supported", lambda: True)
+    monkeypatch.setattr(files_module.os, "open", recording_open)
+
+    assert [name for name, _st in scan_directory_nofollow(saves)] == ["1-1.save"]
+
+    assert opened[-1][0] == "saves"
+    assert opened[-1][1] == files_module._open_flags(os.O_RDONLY, os.O_DIRECTORY, os.O_NOFOLLOW)
+    assert len(opened) > 2
+    for name, flags in opened[:-1]:
+        assert flags & search == search, name
+        assert flags & os.O_NOFOLLOW, name
+        assert flags & os.O_DIRECTORY, name
+
+
+def test_posix_chain_reaches_a_folder_below_a_search_only_ancestor(tmp_path: Path) -> None:
+    if os.name == "nt" or not files_module._posix_dir_fd_supported():
+        pytest.skip("POSIX descriptor chain")
+    if not _search_only_flag():
+        pytest.skip("no search-only directory handle on this platform")
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    ancestor = tmp_path / "ancestor"
+    saves = ancestor / "saves"
+    saves.mkdir(parents=True)
+    (saves / "1-1.save").write_bytes(b"SLOT")
+    ancestor.chmod(0o100)
+    try:
+        assert [name for name, _st in scan_directory_nofollow(saves)] == ["1-1.save"]
+        assert files_module.list_directory_nofollow(saves) == ["1-1.save"]
+        fd, _st = open_regular_at_nofollow(saves, "1-1.save")
+        try:
+            assert os.read(fd, 4) == b"SLOT"
+        finally:
+            os.close(fd)
+        # The folder whose entries are listed still needs read access.
+        with pytest.raises(PermissionError):
+            scan_directory_nofollow(ancestor)
+    finally:
+        ancestor.chmod(0o700)
+
+
+def test_posix_chain_still_refuses_a_linked_ancestor_opened_search_only(tmp_path: Path) -> None:
+    if os.name == "nt" or not files_module._posix_dir_fd_supported():
+        pytest.skip("POSIX descriptor chain")
+    real = tmp_path / "real"
+    (real / "saves").mkdir(parents=True)
+    (tmp_path / "linked").symlink_to(real, target_is_directory=True)
+    with pytest.raises(ValueError):
+        scan_directory_nofollow(tmp_path / "linked" / "saves")
+
+
+def test_posix_chain_falls_back_when_the_kernel_rejects_the_search_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name == "nt" or not files_module._posix_dir_fd_supported():
+        pytest.skip("POSIX descriptor chain")
+    if not _search_only_flag():
+        pytest.skip("no search-only directory handle on this platform")
+    (tmp_path / "saves").mkdir()
+    real_open = os.open
+    read_flags = files_module._open_flags(os.O_RDONLY, os.O_DIRECTORY, os.O_NOFOLLOW)
+
+    def old_kernel_open(path, flags, *args, **kwargs):
+        if flags != read_flags and flags & os.O_DIRECTORY:
+            raise OSError(errno.EINVAL, "invalid argument", str(path))
+        return real_open(path, flags, *args, **kwargs)
+
+    # A wrapped os.open is not in os.supports_dir_fd; keep the descriptor path.
+    monkeypatch.setattr(files_module, "_posix_dir_fd_supported", lambda: True)
+    monkeypatch.setattr(files_module.os, "open", old_kernel_open)
+
+    assert scan_directory_nofollow(tmp_path / "saves") == []
