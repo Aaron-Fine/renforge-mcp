@@ -847,6 +847,12 @@ def test_remove_refuses_a_linked_game_folder(tmp_path) -> None:
     assert (foo / "empty").is_dir()
 
 
+def test_list_does_not_read_through_a_game_folder_linked_out_of_the_project(tmp_path) -> None:
+    root, _foo = _link_game_folder(tmp_path)
+
+    assert mods.list_mods(root) == {"ok": True, "mods": []}
+
+
 def test_write_refuses_a_linked_game_folder(tmp_path) -> None:
     root, foo = _link_game_folder(tmp_path)
 
@@ -1039,6 +1045,39 @@ def test_a_published_file_stays_accounted_for_when_the_last_manifest_write_fails
     removed = mods.remove(root, "demo")
     assert removed["removed"] == ["extra.rpy", "extra.rpyc", "intro.rpy"]
     assert not (root / "game" / "mods" / "demo").exists()
+
+
+def test_a_published_file_stays_owned_when_its_retry_fails_too(tmp_path, monkeypatch) -> None:
+    # First write: content published, final manifest update failed. Retry
+    # with new content: the content write fails. The file on disk is still
+    # the one RenForge published, so remove() must delete it.
+    root = _project(tmp_path)
+    real = mods._write_manifest
+    calls = {"n": 0}
+
+    def second_write_fails(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("refusing unsafe write to renforge-mod.json: disk full")
+        return real(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(mods, "_write_manifest", second_write_fails)
+        with pytest.raises(ValueError):
+            mods.write_file(root, "demo", "intro.rpy", "label demo:\n    return\n")
+    with monkeypatch.context() as patch:
+        _fail_content_writes(patch)
+        with pytest.raises(ValueError):
+            mods.write_file(root, "demo", "intro.rpy", "label demo2:\n    return\n")
+    script = root / "game" / "mods" / "demo" / "intro.rpy"
+    assert script.read_text(encoding="utf-8") == "label demo:\n    return\n"
+
+    listed = mods.list_mods(root)["mods"][0]
+    assert listed["unlisted"] == []
+    retried = mods.write_file(root, "demo", "intro.rpy", "label demo3:\n    return\n")
+    assert retried["files"] == ["intro.rpy"]
+    assert mods.remove(root, "demo")["removed"] == ["intro.rpy"]
+    assert not script.exists()
 
 
 def test_the_write_description_names_what_write_creates_and_refuses() -> None:

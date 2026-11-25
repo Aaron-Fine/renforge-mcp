@@ -25,6 +25,7 @@ from .util.files import (
     read_bytes_nofollow,
     read_text_nofollow,
     receipt_path,
+    resolves_inside,
     walk_nofollow,
     write_atomic,
 )
@@ -312,6 +313,13 @@ def write_file(project_root: str | Path, name: str, path: str, content: str) -> 
     _refuse_foreign_files(mod_dir, name, rel, manifest)
     listed = set(manifest["files"]) if manifest else set()
     pending = dict(manifest["pending"]) if manifest else {}
+    if rel not in listed and rel in pending and _published_pending(mod_dir, rel, pending[rel]):
+        # An earlier write published this file but not the final manifest:
+        # it is RenForge's, so list it before replacing it. Recording the new
+        # digest as pending instead would disown the file on disk if this
+        # content write failed too.
+        listed.add(rel)
+        del pending[rel]
     if rel in listed:
         _write_manifest(mod_dir, name, sorted(listed), pending)
         _atomic_write_bytes(target, data)
@@ -345,7 +353,8 @@ def list_mods(project_root: str | Path) -> dict[str, Any]:
     """Describe every mod under ``game/mods/`` that has a manifest."""
     mods_dir = _game_dir(project_root) / "mods"
     mods: list[dict[str, Any]] = []
-    if mods_dir.is_dir():
+    # A game/ or game/mods link that leads out of the project would list another tree.
+    if mods_dir.is_dir() and resolves_inside(mods_dir, mods_dir.parent.parent):
         for child in sorted(mods_dir.iterdir()):
             if _is_link(child) or not child.is_dir():
                 continue

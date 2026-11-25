@@ -2142,3 +2142,23 @@ def test_a_session_root_another_user_made_is_not_renforge_owned(tmp_path: Path, 
     real_getuid = os.getuid
     monkeypatch.setattr(os, "getuid", lambda: real_getuid() + 1)
     assert path_in_session_root(root / "saves") is False
+
+
+@pytest.mark.parametrize(
+    ("slot", "valid"),
+    [
+        ("1-1", True),
+        ("quick-1", True),
+        ("auto-10", True),
+        ("_reload-1", True),
+        ("page:stream", False),
+        ("1-1:$DATA", False),
+        ("C:", False),
+        ("../1-1", False),
+        ("a\\b", False),
+    ],
+)
+def test_the_host_slot_rule_refuses_a_colon_and_keeps_ordinary_names(slot: str, valid: bool) -> None:
+    from renforge.save_isolation import slot_name_error
+
+    assert (slot_name_error(slot) is None) is valid
