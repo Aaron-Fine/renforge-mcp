@@ -2386,16 +2386,16 @@ def session_saves_dir(project_path: str | Path) -> Path:
 
 
 class SavedirUnknownError(BridgeError):
-    """A game is running, but its bridge predates ``session_info`` and cannot say where it saves."""
+    """A game is running, but its bridge cannot say where it saves (it predates ``session_info`` or reports no folder)."""
 
 
 def running_game_savedir(project_path: str | Path) -> str | None:
     """The save folder the project's running game uses, or ``None``.
 
     For a game this process runs it is the folder this process gave it;
-    any other game is asked. ``None`` means no game is running (or one
-    that reports no folder). A running game whose bridge predates
-    ``session_info`` raises :class:`SavedirUnknownError`: a game is there,
+    any other game is asked. ``None`` means no game is running. A running
+    game that reports no folder, or whose bridge predates
+    ``session_info``, raises :class:`SavedirUnknownError`: a game is there,
     so a folder chosen without it may be one it never loads. Any other
     failure (a busy or still-starting game, a dropped connection) proves
     nothing about where the game saves, so it raises :class:`BridgeError`
@@ -2417,7 +2417,10 @@ def running_game_savedir(project_path: str | Path) -> str | None:
     except Exception as exc:
         raise BridgeError(f"{type(exc).__name__}: {exc}") from exc
     savedir = info.get("savedir") if isinstance(info, dict) else None
-    return savedir if isinstance(savedir, str) and savedir else None
+    if not (isinstance(savedir, str) and savedir):
+        # It answered, so a game is running: "no folder" is not "no game".
+        raise SavedirUnknownError("the running game reported no save folder")
+    return savedir
 
 
 def import_into_owned_session(project_path: str | Path, *, slot: str, save_name: str | None = None) -> dict:

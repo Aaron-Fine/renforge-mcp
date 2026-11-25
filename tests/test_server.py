@@ -588,6 +588,13 @@ def test_session_import_refuses_a_running_game_that_cannot_say_where_it_saves(tm
     assert "stop" in refused["error"]
     assert not state_saves.exists()
 
+    # A game that answers session_info without a save folder is running too.
+    no_folder = _SessionSavesClient({"eval_enabled": True, "savedir": None, "home": None})
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: no_folder))
+    refused = session_tool(str(project), "import", slot="1-1")
+    assert refused["ok"] is False and refused["code"] == "SESSION_SAVES_UNKNOWN", refused
+    assert not state_saves.exists()
+
     # With no game running at all, the slot goes to the saves the next launch uses.
     def no_game(cls, root, **_k):
         raise BridgeNotRunningError("no game is running", code="NO_RUNNING_GAME")

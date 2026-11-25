@@ -709,6 +709,15 @@ def test_launch_guidance_describes_the_home_the_launch_resolves_to(tmp_path, mon
     assert owned(inside, None)
     for text in (tool_definitions._LAUNCH_POLICY, tool_definitions._LAUNCH_AUTHORIZE):
         assert "makes an omitted `home` temporary" in text or "an omitted `home` is a temporary HOME" in text
+    # The home text names that HOME too, instead of "otherwise the host HOME".
+    from renforge.save_isolation import apply_launch_isolation_defaults
+
+    assert apply_launch_isolation_defaults(savedir=inside, home=None)["home"] == "temporary"
+    home_text = tool_definitions._ISOLATION_PARAMETERS["home"]
+    assert "otherwise the host HOME" not in home_text and "`RENFORGE_ISOLATION`" in home_text
+    # A savedir path outside the state folder still needs authorize, and the text must not say otherwise.
+    assert not owned(str(tmp_path / "elsewhere"), None)
+    assert "outside the RenForge state folder always does" in tool_definitions._LAUNCH_POLICY
 
 
 def test_validate_schema_admits_only_the_documented_checks_and_timeouts() -> None:

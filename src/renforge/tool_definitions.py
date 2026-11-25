@@ -76,7 +76,9 @@ _ISOLATION_PARAMETERS = {
     "home": (
         "Process HOME for the launched game. Omitted, empty, or `auto` follows "
         "`savedir`: a private directory for `savedir=temporary`, so preferences "
-        "and `~/.renpy` writes miss the user's files, otherwise the host HOME. "
+        "and `~/.renpy` writes miss the user's files; the host HOME for "
+        "`savedir=existing`; and for a `savedir` path what `RENFORGE_ISOLATION` "
+        "selects (the host HOME unless it is `temporary`). "
         "Pass `temporary` or `existing` to choose explicitly. Any other non-empty "
         "value is an explicit HOME path."
     ),
@@ -96,7 +98,8 @@ _LAUNCH_POLICY = (
     "omitted or `temporary`, or `savedir`/`home` paths inside the RenForge state folder. Omitted (or `auto`) options "
     "mean the user's saves and HOME unless `RENFORGE_ISOLATION=temporary`, so by default a call with no isolation "
     "options needs `authorize=true`, and so does a `savedir` path with `home` omitted (it keeps the user's HOME); "
-    "with `RENFORGE_ISOLATION=temporary` an omitted `home` is a temporary HOME, so neither does. "
+    "with `RENFORGE_ISOLATION=temporary` an omitted `home` is a temporary HOME, so neither does "
+    "(a `savedir` path outside the RenForge state folder always does). "
     "Pass `savedir=temporary` with `home` omitted to stay isolated without `authorize`. "
 )
 
