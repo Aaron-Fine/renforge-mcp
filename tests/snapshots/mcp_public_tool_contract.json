@@ -258,7 +258,7 @@
     }
   },
   "renforge_validate": {
-    "description": "Run Ren'Py `lint` against a clean shadow copy of the project tree: no live session artifacts, optional staged bytes overlaid, and RenForge never publishes staged or copied bytes into the project. Lint executes the project's `init python` blocks with your privileges, so the shadow does not sandbox arbitrary writes made by project code. The shadow omits RenForge-injected files using `<state>/control/artifacts.json` when available plus the known `zzrenforge_*` and `00renforge_session_*` prefixes. Linked directories are never copied byte-for-byte and are reported in `skipped_links`; a link under `game/` (case-insensitive) is scanned read-only with an entry cap and time budget for `.rpy`/`.rpym` source, and `complete`/`ok` are false when source is found or the target cannot be inspected. A fully scanned source-free linked asset directory is represented by zero-byte placeholder files for lint (counted as files, not bytes; `degraded=true`), so expected image/audio names still resolve without copying asset bytes. Media files (images, audio, fonts, video) are also represented by zero-byte placeholders by default: lint resolves their names, not their contents, and init code that opens media bytes sees empty files. Set `RENFORGE_SHADOW_MEDIA=copy` for a faithful shadow; media bytes then count toward the byte quota. Other files are copied. Quotas default to 10000 files, 500 MiB, and 50000 directories (media placeholders count as files, not bytes) and are configurable with `RENFORGE_SHADOW_MAX_FILES`, `RENFORGE_SHADOW_MAX_BYTES`, and `RENFORGE_SHADOW_MAX_DIRS`. Lint runs with `--error-code`, so reported errors produce a non-zero return code. This may download and cache the Ren'Py SDK; it uses the requested `version` (or `stable`), and never a launcher found inside the project being validated. The result reports `sdk_version` and `placeholders` (files materialized by name only). A timeout or truncated transcript is never reported as success.",
+    "description": "Run Ren'Py `lint` against a clean shadow copy of the project tree: no live session artifacts, optional staged bytes overlaid, and RenForge never publishes staged or copied bytes into the project. Lint executes the project's `init python` blocks with your privileges, so the shadow does not sandbox arbitrary writes made by project code. The shadow omits RenForge-injected files using `<state>/control/artifacts.json` when available plus the known `zzrenforge_*` and `00renforge_session_*` prefixes. Linked directories are never copied byte-for-byte and are reported in `skipped_links`; a link under `game/` (case-insensitive) is scanned read-only with an entry cap and time budget for scripts Ren'Py loads (`.rpy`/`.rpym`, a compiled `.rpyc`/`.rpymc`, or `*_ren.py`), and `complete`/`ok` are false when one is found or the target cannot be inspected. A fully scanned source-free linked asset directory is represented by zero-byte placeholder files for lint (counted as files, not bytes; `degraded=true`), so expected image/audio names still resolve without copying asset bytes. Media files (images, audio, fonts, video) are also represented by zero-byte placeholders by default: lint resolves their names, not their contents, and init code that opens media bytes sees empty files, so a failed result that used placeholders carries a `hint`. Set `RENFORGE_SHADOW_MEDIA=copy` for a faithful shadow; media bytes then count toward the byte quota. Other files are copied. Quotas default to 10000 files, 500 MiB, and 50000 directories (media placeholders count as files, not bytes) and are configurable with `RENFORGE_SHADOW_MAX_FILES`, `RENFORGE_SHADOW_MAX_BYTES`, and `RENFORGE_SHADOW_MAX_DIRS`. Lint runs with `--error-code`, so reported errors produce a non-zero return code. This may download and cache the Ren'Py SDK; it uses the requested `version` (or `stable`), and never a launcher found inside the project being validated. The result reports `sdk_version` and `placeholders` (files materialized by name only). A timeout or truncated transcript is never reported as success.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -1930,7 +1930,7 @@
     }
   },
   "renforge_click_element": {
-    "description": "Click a semantic UI element by text/id/screen (preferred). Falls back safely through fresh frame guards and returns focus hints when another element captures the hit test. Use `renforge_click_at` only as coordinate fallback.",
+    "description": "Click a semantic UI element by text/id/screen (preferred). Falls back safely through fresh frame guards and returns focus hints when another element captures the hit test (`received_by`; null with `unlisted_receiver=true` when the engine hit a widget the control list does not hold). Use `renforge_click_at` only as coordinate fallback.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -1992,7 +1992,7 @@
     }
   },
   "renforge_hover_element": {
-    "description": "Move cursor over a semantic control by text/id/screen. Prefer this before click when checking hover states or tooltips.",
+    "description": "Move cursor over a semantic control by text/id/screen. Prefer this before click when checking hover states or tooltips. Refused with `UI element has no pointer target` when other controls take every point of it.",
     "annotations": {
       "readOnlyHint": false,
       "idempotentHint": false,
@@ -2479,7 +2479,7 @@
     }
   },
   "renforge_hit_test": {
-    "description": "Inspect which interactive nodes sit under a coordinate. Use this when click targets look stale or overlays may absorb events, and prefer semantic selectors once ambiguity is resolved.",
+    "description": "Inspect which interactive nodes sit under a coordinate. Use this when click targets look stale or overlays may absorb events, and prefer semantic selectors once ambiguity is resolved. `topmost` is null with `unlisted_receiver=true` when the engine hit a widget the control list does not hold.",
     "annotations": {
       "readOnlyHint": true,
       "idempotentHint": true,

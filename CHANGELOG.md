@@ -7,6 +7,23 @@ versioning.
 
 ### Changed
 
+- Launches that pass no isolation options use the player's own saves and HOME
+  again, following upstream 0.7.6; earlier fork builds isolated them by
+  default. Set `RENFORGE_ISOLATION=temporary` to keep that default, and
+  `RENFORGE_POLICY=enforce` to require `authorize=true` for launches that
+  reach the player's files.
+- `renforge_session(action="import")` also refuses, with
+  `SESSION_SAVES_UNKNOWN`, a running game that answers but reports no save
+  folder; it used to copy the slot into the offline saves folder.
+- `renforge_validate`: a failed result that used zero-byte media placeholders
+  carries a `hint` naming `RENFORGE_SHADOW_MEDIA=copy`. When cleanup fails
+  after lint has finished, `SHADOW_CLEANUP_FAILED` carries the lint verdict
+  in `details.lint`.
+- A stop's `files_deleted` receipt also names the editor asset directories it
+  removed, after the files they held.
+- The `home` option's description says what an omitted `home` resolves to
+  beside a `savedir` path, and the launch policy text says a `savedir` path
+  outside the RenForge state folder always needs `authorize`.
 - Under `RENFORGE_POLICY=enforce`, `renforge_validate` with `staged` bytes
   needs `authorize=true`: lint runs their init code, like `renforge_eval`.
 - Under `RENFORGE_POLICY=enforce`, reading the player's own saves needs

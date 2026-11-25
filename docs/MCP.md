@@ -167,7 +167,8 @@ Isolation is **opt-in**. Pass `savedir="temporary"` to a launch, or set
 `RENFORGE_ISOLATION=temporary` for every launch of a server, and the game does
 not read or write the user's normal Ren'Py saves, preferences, or
 `$HOME/.renpy`. Without either, launches use the game's normal locations, as
-before. The ready payload from
+before. (Fork builds before the 0.7.6 sync isolated every launch by default;
+`RENFORGE_ISOLATION=temporary` keeps that.) The ready payload from
 `renforge_launch` / `renforge_launch_status` includes `session_id` and an
 `isolation` object (`savedir_mode`, `home_mode`, `persistent_mode`,
 `preferences_mode`, resolved paths, and `exposes_user_saves`). A reused game
@@ -667,7 +668,9 @@ id and text; `renforge_explain(id=...)` returns a control's full record.
   interface button, which can save, load, open a menu, or quit), with an
   optional `value`: text for an input field (submitted
   with Enter), a number for a bar, `{"x", "y"}` for a viewport, or a control id
-  for a drag's drop target (an empty string drops on nothing);
+  for a drag's drop target (an empty string drops on nothing). A viewport
+  update that ends the interaction after its first axis reports `interrupted`
+  and `skipped_axes`;
 - `key/<name>` for a physical key (a-z, arrows, escape, return, space, tab),
   with `value` true to hold or false to release (omit it for a tap);
 - no `id`, to continue from the observed state.
@@ -1015,12 +1018,12 @@ with nothing in the mod, `raw_tail` holds the end of Ren'Py's output. `guide` re
 | `renforge_list_choices` | Current engine menu entries across layers, including clipped choices. Use the returned indices; they retain legacy textual-control ordering. |
 | `renforge_select_choice` | Select an eligible menu entry by unique text or listed index. Accepts interaction/session/observation guards; ambiguous captions require an index. |
 | `renforge_list_ui_elements` | Supported controls and engine menu actions with canonical IDs, operations, visibility/coverage, logical bounds when available, and a source `frame_id`. A clipped menu action can remain semantically selectable. |
-| `renforge_hover_element` | Move the pointer over a control by ID or text without clicking. Supports `exact`, `screen`, and `expected_frame_id`. |
+| `renforge_hover_element` | Move the pointer over a control by ID or text without clicking. Supports `exact`, `screen`, and `expected_frame_id`. Refused with `UI element has no pointer target` when other controls take every point of it. |
 | `renforge_get_ui_element_bounds` | Report `focus_bounds` and, for `ImageButton` controls, rendered `painted_bounds` for the active state. Returns `painted_bounds_available: false` with a reason when the painted content cannot be measured. |
-| `renforge_click_element` | Click a control by ID or text. Supports `exact`, `screen`, `expected_frame_id`, `interaction_id`, and `wait_for_effect`. Returns `received_by` when another control owns the hit point. |
+| `renforge_click_element` | Click a control by ID or text. Supports `exact`, `screen`, `expected_frame_id`, `interaction_id`, and `wait_for_effect`. Returns `received_by` when another control owns the hit point; it is null with `unlisted_receiver: true` when the engine hit a widget the control list does not hold. |
 | `renforge_editor` | Public Live Editor: `status`, `select` (overlay hit path), and `save` (reload + attest). `save` with `dry_run` returns a unified source diff without writing, linting, reloading, or creating a transaction; it rejects `x`/`y` and older bridges without dry-run support (`DRY_RUN_UNSUPPORTED`). Locked targets return the lock code. Never call private `editor_task0_*` handlers. |
 | `renforge_click_at` | Click logical or source-capture pixels; pass `expected_frame_id=observation.frame` to map and guard pixels from a delivered gameplay image. Also accepts `expected_state`. |
-| `renforge_hit_test` | Inspect the interactive focus stack at a point (`topmost` + `underneath`) to diagnose overlays that intercept clicks. |
+| `renforge_hit_test` | Inspect the interactive focus stack at a point (`topmost` + `underneath`) to diagnose overlays that intercept clicks. `topmost` is null with `unlisted_receiver: true` when the engine hit a widget the control list does not hold. |
 | `renforge_capture_screenshot` | Persist the current frame as a named PNG under `<state>/captures/` and return `path`, `relative_path`, SHA-256, and dimensions for later diff/translation tools. `relative_path` and the `files_touched` receipt are relative to the project only when the capture is inside it; the state folder is normally outside the project, so they then name the file `path` names, in the receipt form (see Write receipts; on Windows `path` keeps `\`). |
 | `renforge_estimate_translation` | Estimate `dx`/`dy` between two saved PNGs with Pillow, returning `confidence`, `support`, and explicit unavailability when the measure is ambiguous. Search work is bounded; use a tighter region or lower `max_shift` when needed. |
 | `renforge_find_image_on_screen` | Locate a local PNG template in the current frame and return confidence, bounds, center, and frame guard. |

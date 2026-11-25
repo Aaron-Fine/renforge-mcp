@@ -269,12 +269,14 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
             "using `<state>/control/artifacts.json` when available plus the known `zzrenforge_*` and "
             "`00renforge_session_*` prefixes. Linked directories are never copied byte-for-byte and are reported in "
             "`skipped_links`; a link under `game/` (case-insensitive) is scanned read-only with an entry cap and time "
-            "budget for `.rpy`/`.rpym` source, and `complete`/`ok` are false when source is found or the target cannot "
+            "budget for scripts Ren'Py loads (`.rpy`/`.rpym`, a compiled `.rpyc`/`.rpymc`, or `*_ren.py`), and "
+            "`complete`/`ok` are false when one is found or the target cannot "
             "be inspected. A fully scanned source-free linked asset directory is represented by zero-byte placeholder "
             "files for lint (counted as files, not bytes; `degraded=true`), so expected image/audio names still "
             "resolve without copying asset bytes. Media files (images, audio, fonts, video) are also represented by "
             "zero-byte placeholders by default: lint resolves their names, not their contents, and init code that "
-            "opens media bytes sees empty files. Set `RENFORGE_SHADOW_MEDIA=copy` for a faithful shadow; media bytes "
+            "opens media bytes sees empty files, so a failed result that used placeholders carries a `hint`. Set "
+            "`RENFORGE_SHADOW_MEDIA=copy` for a faithful shadow; media bytes "
             "then count toward the byte quota. Other files are copied. Quotas default to 10000 files, "
             "500 MiB, and 50000 directories (media placeholders count as files, not bytes) and are configurable with "
             "`RENFORGE_SHADOW_MAX_FILES`, `RENFORGE_SHADOW_MAX_BYTES`, and `RENFORGE_SHADOW_MAX_DIRS`. Lint "
@@ -975,7 +977,9 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     "renforge_click_element": ToolDefinition(
         description=(
             "Click a semantic UI element by text/id/screen (preferred). Falls back safely through fresh frame guards and "
-            "returns focus hints when another element captures the hit test. Use `renforge_click_at` only as coordinate fallback."
+            "returns focus hints when another element captures the hit test (`received_by`; null with "
+            "`unlisted_receiver=true` when the engine hit a widget the control list does not hold). Use "
+            "`renforge_click_at` only as coordinate fallback."
         ),
         annotations=_ann(
             readOnlyHint=False,
@@ -998,7 +1002,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     "renforge_hover_element": ToolDefinition(
         description=(
             "Move cursor over a semantic control by text/id/screen. Prefer this before click when checking hover states "
-            "or tooltips."
+            "or tooltips. Refused with `UI element has no pointer target` when other controls take every point of it."
         ),
         annotations=_ann(
             readOnlyHint=False,
@@ -1302,7 +1306,8 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     "renforge_hit_test": ToolDefinition(
         description=(
             "Inspect which interactive nodes sit under a coordinate. Use this when click targets look stale or overlays may absorb "
-            "events, and prefer semantic selectors once ambiguity is resolved."
+            "events, and prefer semantic selectors once ambiguity is resolved. `topmost` is null with "
+            "`unlisted_receiver=true` when the engine hit a widget the control list does not hold."
         ),
         annotations=_ann(
             readOnlyHint=True,
