@@ -1093,7 +1093,10 @@ empty files. Media placeholders count as files but not bytes. Other files are
 copied and count normally. Set `RENFORGE_SHADOW_MEDIA=copy` when a caller needs
 a faithful shadow: media bytes are then copied and count toward the byte quota.
 The result reports `placeholders`, the number of files materialized by name
-only. Override the limits with positive integers in the server's environment,
+only. Lint runs the project's `init` code before it checks anything, so a
+project whose `init` code reads an image or font can fail in the shadow and not
+in the game; a failed result with placeholders therefore carries a `hint`
+naming `RENFORGE_SHADOW_MEDIA=copy`. Override the limits with positive integers in the server's environment,
 for example by exporting them in the shell that then runs `renforge serve` (or
 in the MCP client's `env` for the server):
 

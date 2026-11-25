@@ -318,6 +318,39 @@ def test_validate_reports_media_placeholder_count(monkeypatch, tmp_path) -> None
     assert result["bytes"] == (project / "game" / "script.rpy").stat().st_size
 
 
+def test_validate_failure_with_placeholders_says_the_shadow_was_approximate(
+    monkeypatch, tmp_path
+) -> None:
+    """Init code that reads media sees an empty file, so a failure names that cause."""
+    import renforge.tools.validate as validate_tool
+    from renforge.sdk import RenpySdk
+
+    project = _validate_project(tmp_path)
+    (project / "game" / "bg.png").write_bytes(b"x" * 100)
+    sdk_root = tmp_path / "sdk"
+    sdk_root.mkdir()
+    # Stands in for a project whose init code rejects an empty image.
+    (sdk_root / "renpy.py").write_text(
+        "import pathlib, sys\n"
+        "image = pathlib.Path(sys.argv[1]) / 'game' / 'bg.png'\n"
+        "raise SystemExit(0 if image.stat().st_size else 1)\n",
+        encoding="utf-8",
+    )
+    sdk = RenpySdk(version="8.5.3", root=sdk_root)
+    monkeypatch.setattr(validate_tool, "get_or_install_sdk", lambda *args, **kwargs: sdk)
+
+    monkeypatch.delenv("RENFORGE_SHADOW_MEDIA", raising=False)
+    failed = validate_tool.validate_project(str(project))
+    assert failed["ok"] is False and failed["placeholders"] == 1
+    assert "RENFORGE_SHADOW_MEDIA=copy" in failed["hint"]
+
+    monkeypatch.setenv("RENFORGE_SHADOW_MEDIA", "copy")
+    faithful = validate_tool.validate_project(str(project))
+    assert faithful["ok"] is True, faithful
+    assert faithful["placeholders"] == 0
+    assert "hint" not in faithful
+
+
 def test_validate_project_does_not_create_project_state(monkeypatch, tmp_path) -> None:
     import shutil
 

@@ -2172,6 +2172,45 @@ def test_shadow_cleanup_failure_does_not_replace_the_lint_failure(
         assert excinfo.value.details["cleanup_error"] == "SHADOW_CLEANUP_FAILED"
 
 
+def test_shadow_cleanup_failure_carries_the_finished_lint_verdict(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A lint that ran and reported errors is not lost when cleanup then fails."""
+    import renforge.editor.shadow as shadow
+
+    project, _source = _make_project(tmp_path)
+
+    def _lint(*_args, **_kwargs):
+        return shadow.ShadowLintResult(
+            ok=False, returncode=1, timed_out=False, stdout="report", stderr="lint-failed", truncated=False
+        )
+
+    def _cleanup(_root: Path) -> None:
+        raise EditorError("SHADOW_CLEANUP_FAILED", "could not remove the validation shadow project")
+
+    monkeypatch.setattr(shadow, "run_shadow_lint", _lint)
+    monkeypatch.setattr(shadow, "remove_shadow_project", _cleanup)
+
+    with pytest.raises(EditorError) as excinfo:
+        shadow.validate_shadow_project(
+            project,
+            _make_sdk(tmp_path),
+            shadow_root=tmp_path / "shadow-cleanup-fails-after-lint",
+            staged_replacements={},
+            timeout=15,
+        )
+
+    assert excinfo.value.code == "SHADOW_CLEANUP_FAILED"
+    assert excinfo.value.details["lint"] == {
+        "ok": False,
+        "returncode": 1,
+        "timed_out": False,
+        "truncated": False,
+        "stdout": "report",
+        "stderr": "lint-failed",
+    }
+
+
 def test_shadow_lint_failure_is_not_success(tmp_path: Path) -> None:
     from renforge.editor.shadow import run_shadow_lint
 

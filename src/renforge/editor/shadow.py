@@ -48,8 +48,10 @@ _SOURCE_SUFFIXES = {".rpy", ".rpym"}
 # Ren'Py also loads these as scripts: an orphan compiled file, and *_ren.py.
 _LOADABLE_SCRIPT_SUFFIXES = _SOURCE_SUFFIXES | {".rpyc", ".rpymc"}
 _REN_PY_SUFFIX = "_ren.py"
-# Lint resolves media names but never reads their bytes, so media files become
-# zero-byte placeholders instead of consuming the shadow's byte quota.
+# Lint itself resolves media names without reading their bytes, so media files
+# become zero-byte placeholders instead of consuming the shadow's byte quota.
+# Project init code that does read them sees an empty file; SHADOW_MEDIA_ENV
+# set to "copy" gives a faithful shadow.
 _MEDIA_SUFFIXES = {
     ".png",
     ".jpg",
@@ -1059,5 +1061,18 @@ def validate_shadow_project(
         shadow_path=str(shadow_root) if keep_shadow else None,
     )
     if not keep_shadow:
-        remove_shadow_project(shadow_root)
+        try:
+            remove_shadow_project(shadow_root)
+        except EditorError as cleanup:
+            # Lint finished, so its verdict travels with the cleanup error
+            # instead of being lost with the result.
+            cleanup.details["lint"] = {
+                "ok": result.ok,
+                "returncode": result.returncode,
+                "timed_out": result.timed_out,
+                "truncated": result.truncated,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+            raise
     return result

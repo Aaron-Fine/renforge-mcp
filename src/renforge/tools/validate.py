@@ -156,6 +156,14 @@ def _result_payload(
         "stdout": result.stdout,
         "stderr": result.stderr,
     }
+    if result.placeholders and not result.ok:
+        # Lint runs the project's init code first, and a placeholder is an
+        # empty file: a failure may come from that, not from the project.
+        payload["hint"] = (
+            f"{result.placeholders} file(s) in the shadow were zero-byte placeholders. If the failure "
+            "comes from init code that reads media bytes, start the server with "
+            "RENFORGE_SHADOW_MEDIA=copy and validate again (files in linked directories stay placeholders)."
+        )
     if keep_shadow:
         payload["shadow_path"] = result.shadow_path
     return payload
