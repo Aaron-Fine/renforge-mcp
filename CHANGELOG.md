@@ -19,6 +19,13 @@ versioning.
   carries a `hint` naming `RENFORGE_SHADOW_MEDIA=copy`. When cleanup fails
   after lint has finished, `SHADOW_CLEANUP_FAILED` carries the lint verdict
   in `details.lint`.
+- Listing or importing saves no longer fails when an ancestor of the save
+  folder can be traversed but not listed (POSIX); only the listed folder
+  itself needs read access.
+- `renforge_mod` keeps ownership of a file it published when both the final
+  manifest update and a later retry fail, so `remove` still deletes it.
+- `renforge_mod list` no longer reads through a `game/` or `game/mods` link
+  that leads outside the project.
 - A stop's `files_deleted` receipt also names the editor asset directories it
   removed, after the files they held.
 - The `home` option's description says what an omitted `home` resolves to

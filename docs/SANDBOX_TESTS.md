@@ -20,7 +20,7 @@ fixture for this test infrastructure.
 | Linux sandbox contracts (new) | `tests/test_sandbox_contract.py`, using `scripts/sandbox_test_support.py` | Filesystem layout, copy-on-write routing, selected host-state canaries, and PID-namespace descendant cleanup with shell guests |
 | Ren'Py engine integration (reused from main) | `tests/test_integration_sdk.py` and `tests/test_integration_sdk_live_demo_acceptance.py` | Real-engine startup, bridge behavior, screenshots, and demo/editor acceptance through the existing SDK harness |
 
-The `sandbox-contract` CI job needs Bubblewrap, `fuse-overlayfs`, `fusermount3`,
+The `sandbox-contract` CI job needs Bubblewrap, `fuse-overlayfs`, `fusermount3`, `setsid`,
 `/dev/fuse`, and pytest. It does not install or launch Ren'Py or Xvfb.
 `RENFORGE_SANDBOX_TESTS=1` makes missing prerequisites fail in this job.
 The backend probe runs once within the tests; there is no duplicate CI probe.
