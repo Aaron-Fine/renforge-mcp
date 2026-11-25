@@ -462,3 +462,24 @@ def test_hit_test_does_not_name_a_listed_control_for_an_unlisted_engine_hit(runn
     assert hit["topmost"] is None, hit
     assert hit["unlisted_receiver"] is True
     assert [element["text"] for element in hit["underneath"]] == ["Listed"]
+
+
+def test_click_element_names_no_receiver_for_an_unlisted_engine_hit(running_bridge, monkeypatch):
+    """After the click the engine names a widget the list omits: received_by is unknown."""
+    globs = running_bridge.globs
+    element = running_bridge.client.list_ui_elements()[1]
+    unlisted = object()
+    hit_stack = globs["_renforge_hit_stack"]
+
+    def after_the_click(x, y, elements=None):
+        # Only the receiver lookup sees the unlisted widget; the click's own
+        # coverage probes ran before it.
+        monkeypatch.setitem(globs, "_renforge_render_hit", lambda _x, _y: ("displayable", unlisted))
+        return hit_stack(x, y, elements)
+
+    monkeypatch.setitem(globs, "_renforge_hit_stack", after_the_click)
+    clicked = running_bridge.client.click_element(id=element["id"])
+    assert clicked["ok"] is True, clicked
+    assert clicked["received_by"] is None
+    assert clicked["unlisted_receiver"] is True
+    assert "does not describe" in clicked["warning"]

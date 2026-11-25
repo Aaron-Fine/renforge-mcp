@@ -792,6 +792,8 @@ def _remove_asset_tree(
                 "BRIDGE_ARTIFACT_OWNERSHIP_CONFLICT",
                 f"could not remove asset directory {current.name}: {exc}",
             ) from exc
+        else:
+            _record_removed(removed, root, current)
 
 
 def _validate_owned_bridge_info(

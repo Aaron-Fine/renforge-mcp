@@ -1675,6 +1675,13 @@ def test_launch_with_editor_passes_exact_editor_environment_and_owned_manifest(m
     close_result = session.close(timeout=0.1)
     assert close_result["cleaned"]["editor_coordinator"] is True
     assert close_result["cleaned"]["bridge_artifacts"] is True
+    # The receipt names the asset directory too, after the files it held.
+    deleted = close_result["files_deleted"]
+    asset_dir = f"game/{asset_tree['dirname']}"
+    assert not (project_root / asset_dir).exists()
+    assert deleted.count(asset_dir) == 1
+    for entry in asset_tree["files"]:
+        assert deleted.index(f"{asset_dir}/{entry['path']}") < deleted.index(asset_dir)
     assert close_calls["count"] == 1
     assert session.closed is True
 
