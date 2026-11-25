@@ -1,4 +1,4 @@
-"""Host progression, settling, and failure handling for both gameplay modes."""
+"""Host progression (bounded native skip), settling, and failure handling."""
 from __future__ import annotations
 
 import time
@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .bridge.client import BridgeError, BridgeProtocolError
-from .interaction import _real_number, classify, progression_boundary
+from .interaction import classify, progression_boundary
 from .util.frames import FRAME_TIMEOUT
 
 POLL_SECONDS = 0.05
@@ -27,6 +27,8 @@ def process_exit(process) -> dict | None:
 
 
 def failure_status(error: Exception, process=None) -> str:
+    """Name a bridge failure: ``exited`` or ``crash`` when the owned process
+    ended, ``timeout`` for a timed-out request, else ``transport_error``."""
     exited = process_exit(process)
     if exited is not None:
         return "exited" if exited["exit_code"] == 0 else "crash"
@@ -41,13 +43,17 @@ def failure_status(error: Exception, process=None) -> str:
 SETTLE_SAME_INTERACTION = 4
 
 
-def _busy(raw, deadline) -> bool:
+def _busy(raw: Mapping[str, Any], deadline: float) -> bool:
     """A reply that timed out while budget remains: the game's main thread was
     busy (decoding a new scene's images, say), so asking again is safe."""
     return raw.get("status") == "timeout" and deadline - time.monotonic() > POLL_SECONDS
 
 
-def settle(fetch, deadline, *, screenshot=True):
+Fetch = Callable[[bool], Mapping[str, Any]]
+
+
+def settle(fetch: Fetch, deadline: float, *,
+           screenshot: bool = True) -> tuple[dict[str, Any] | None, str, str | None]:
     """Require two matching stable observations after progression is disabled.
 
     A screen that keeps changing within one stable interaction never matches
@@ -81,8 +87,10 @@ def settle(fetch, deadline, *, screenshot=True):
                 return framed, "ready", None
             if framed["stable"] and framed["interaction"] == last["interaction"] and identity != previous:
                 return framed, "ready", None
+            # The screenshot may show a new interaction: its run starts here.
             last = framed
             previous = None
+            streak = 0
         else:
             previous = identity if last["stable"] else None
         time.sleep(min(POLL_SECONDS, max(0, deadline - time.monotonic())))
@@ -93,21 +101,43 @@ def settle(fetch, deadline, *, screenshot=True):
     return None, "timeout", "final observation did not settle within the budget"
 
 
+def _finish_from_status(result: dict[str, Any], status: Mapping[str, Any]) -> bool:
+    """Copy the operation's step count; True (with the stop recorded) once it ended."""
+    result["steps"] = status.get("steps", 0)
+    if status.get("active") is not False:
+        return False
+    result["stop"] = status.get("stop") or "none"
+    # A custom hub is a normal place to stop and hand control back.
+    result["ok"] = result["stop"] != "crash"
+    return True
+
+
 # Longer than any short pause (5 s) plus its grace: a "pause" still pending
 # after this is stuck, and a line the player can click past is clicked once.
 STUCK_PAUSE_SECONDS = 6.0
 
 
-def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, between=None, nudge=None):
+def run_native_skip(client: Any, fetch: Fetch, *, max_steps: int, deadline: float, total_deadline: float,
+                    between: Callable[[], Any] | None = None,
+                    nudge: Callable[[int | None], Any] | None = None) -> dict[str, Any]:
     """Start one bridge-owned skip operation and wait for it to stop.
 
     Once started, poll only the operation's status (and ``between``, which
     drains events): a full observation per poll would compete with skipping
     for the game's main thread. The caller settles the final observation.
+
+    ``nudge(interaction)`` is called once when one dismissible pause has
+    lasted ``STUCK_PAUSE_SECONDS``, timed from its first frame. It must post a guarded dismiss that accepts a
+    pending pause (``dismiss_if(..., allow_pause=True)``); the plain guard
+    refuses every unstable frame.
     """
     operation_id = uuid.uuid4().hex
     attempted = False
-    unstable_since = None
+    # The dismissible pause being timed, and when it first appeared. Any
+    # other frame (a transition, a stable one, another interaction's pause)
+    # ends it, so the time before a pause never counts toward it.
+    pause_interaction: object = None
+    pause_since: float | None = None
     nudged = False
     result = {"ok": True, "stop": "timeout", "steps": 0, "observation": None, "mode": "skip"}
     try:
@@ -121,12 +151,7 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, betwe
                     break
                 if between is not None:
                     between()
-                status = reply.get("progression", {})
-                result["steps"] = status.get("steps", 0)
-                if status.get("active") is False:
-                    result["stop"] = status.get("stop") or "none"
-                    # A custom hub is a normal place to stop and hand control back.
-                    result["ok"] = result["stop"] != "crash"
+                if _finish_from_status(result, reply.get("progression", {})):
                     break
                 time.sleep(min(POLL_SECONDS, max(0, deadline - time.monotonic())))
                 continue
@@ -142,16 +167,19 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, betwe
             if not attempted:
                 if not snapshot["stable"]:
                     now = time.monotonic()
-                    unstable_since = unstable_since if unstable_since is not None else now
-                    # A {w=1.0}{nw} line stayed a "pause"
-                    # for the whole budget, yet one click moved it on.
-                    if (nudge is not None and not nudged and now - unstable_since > STUCK_PAUSE_SECONDS
-                            and snapshot.get("unstable_reason") == "pause" and snapshot.get("say_dismiss") == "dismiss"):
-                        nudged = True
-                        nudge(snapshot["interaction"])
+                    if snapshot.get("unstable_reason") == "pause" and snapshot.get("say_dismiss") == "dismiss":
+                        if pause_since is None or pause_interaction != snapshot["interaction"]:
+                            pause_interaction, pause_since = snapshot["interaction"], now
+                        # A {w=1.0}{nw} line stayed a "pause"
+                        # for the whole budget, yet one click moved it on.
+                        if nudge is not None and not nudged and now - pause_since > STUCK_PAUSE_SECONDS:
+                            nudged = True
+                            nudge(snapshot["interaction"])
+                    else:
+                        pause_interaction, pause_since = None, None
                     time.sleep(POLL_SECONDS)
                     continue
-                unstable_since = None
+                pause_interaction, pause_since = None, None
                 boundary = progression_boundary(snapshot)
                 if boundary is not None:
                     result["stop"] = boundary
@@ -174,13 +202,8 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, betwe
                     result.update(ok=False, stop="unsupported", error=reply.get("error"))
                     break
                 status = reply.get("progression", {})
-            if status.get("id") == operation_id:
-                result["steps"] = status.get("steps", 0)
-                if status.get("active") is False:
-                    result["stop"] = status.get("stop") or "none"
-                    # A custom hub is a normal place to stop and hand control back.
-                    result["ok"] = result["stop"] != "crash"
-                    break
+            if status.get("id") == operation_id and _finish_from_status(result, status):
+                break
             time.sleep(min(POLL_SECONDS, max(0, deadline - time.monotonic())))
     except BridgeError as exc:
         result.update(ok=False, stop=failure_status(exc), error=str(exc))
@@ -200,154 +223,3 @@ def run_native_skip(client, fetch, *, max_steps, deadline, total_deadline, betwe
                 # its connection. Never change another caller's operation.
                 result["cleanup"] = "lease_expiry_pending"
     return result
-
-
-def _finished(stop: str, steps: int, observation: dict[str, Any] | None) -> dict[str, Any]:
-    return {
-        "ok": True,
-        "stop": stop,
-        "steps": steps,
-        "observation": observation,
-    }
-
-
-def run_advance_until(
-    fetch: Callable[[bool], Mapping[str, Any]],
-    dismiss: Callable[[int], Mapping[str, Any]],
-    *,
-    max_steps: int,
-    timeout: float,
-    sleep: Callable[[float], None] = time.sleep,
-    now: Callable[[], float] = time.monotonic,
-) -> dict[str, Any]:
-    """Post ``dismiss`` until the snapshot says the player must choose.
-
-    ``fetch(screenshot)`` returns raw bridge records. ``dismiss(interaction)``
-    re-checks on the main thread and posts the event only when it still listens
-    for ``dismiss``. This loop never clicks and never enables skip.
-    """
-    if isinstance(max_steps, bool) or not isinstance(max_steps, int) or not 1 <= max_steps <= 200:
-        return {
-            "ok": False,
-            "stop": "invalid_arguments",
-            "steps": 0,
-            "observation": None,
-            "error": "max_steps must be an integer from 1 to 200",
-        }
-    if not _real_number(timeout) or not 0.1 <= timeout <= 120:
-        return {
-            "ok": False,
-            "stop": "invalid_arguments",
-            "steps": 0,
-            "observation": None,
-            "error": "timeout must be a number from 0.1 to 120 seconds",
-        }
-
-    deadline = now() + float(timeout)
-    steps = 0
-    last: dict[str, Any] | None = None
-
-    def look(screenshot: bool) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        nonlocal last
-        raw = fetch(screenshot)
-        if not isinstance(raw, Mapping) or raw.get("ok") is False:
-            error = raw.get("error") if isinstance(raw, Mapping) else "observe failed"
-            return None, {
-                "ok": False,
-                "stop": raw.get("status", "transport_error") if isinstance(raw, Mapping) else "transport_error",
-                "steps": steps,
-                "observation": last,
-                "error": error if isinstance(error, str) else "observe failed",
-            }
-        snapshot = classify(raw)
-        last = snapshot
-        return snapshot, None
-
-    def shot(fallback: dict[str, Any] | None) -> dict[str, Any] | None:
-        snapshot, failure = look(True)
-        if failure is not None or snapshot is None or not snapshot["stable"]:
-            return fallback
-        return snapshot
-
-    while True:
-        if now() >= deadline:
-            return _finished("timeout", steps, shot(last))
-        snapshot, failure = look(False)
-        if failure is not None:
-            return failure
-        assert snapshot is not None
-        if not snapshot["stable"]:
-            sleep(POLL_SECONDS)
-            continue
-        forward = snapshot["forward"]
-        boundary = progression_boundary(snapshot)
-        if boundary in ("end", "main_menu", "unsupported"):
-            return _finished(boundary, steps, shot(snapshot))
-        if forward == "wait":
-            seen = snapshot["interaction"]
-            changed = False
-            while now() < deadline:
-                sleep(POLL_SECONDS)
-                nxt, failure = look(False)
-                if failure is not None:
-                    return failure
-                assert nxt is not None
-                if nxt["interaction"] != seen or (nxt["stable"] and nxt["forward"] != "wait"):
-                    changed = True
-                    break
-            if not changed:
-                return _finished("wait", steps, shot(snapshot))
-            continue
-        if forward != "dismiss":
-            framed, failure = look(True)
-            if failure is not None:
-                return failure
-            assert framed is not None
-            if not framed["stable"]:
-                sleep(POLL_SECONDS)
-                continue
-            if framed["forward"] == "dismiss":
-                snapshot = framed
-            else:
-                stop = framed["forward"]
-                if stop not in {"choose", "wait", "none"}:
-                    stop = "none"
-                return _finished(stop, steps, framed)
-        if snapshot["forward"] != "dismiss" or not snapshot["stable"]:
-            continue
-        if steps >= max_steps:
-            return _finished("max_steps", steps, shot(snapshot))
-        interaction = snapshot["interaction"]
-        if not isinstance(interaction, int):
-            return _finished("none", steps, shot(snapshot))
-        reply = dismiss(interaction)
-        if not isinstance(reply, Mapping) or reply.get("ok") is False:
-            error = reply.get("error") if isinstance(reply, Mapping) else None
-            if error in {"unstable", "stale", "not_dismiss"}:
-                sleep(POLL_SECONDS)
-                continue
-            return {
-                "ok": False,
-                "stop": reply.get("status", "transport_error") if isinstance(reply, Mapping) else "transport_error",
-                "steps": steps,
-                "observation": snapshot,
-                "error": error if isinstance(error, str) else "dismiss failed",
-            }
-        steps += 1
-        advanced = False
-        while now() < deadline:
-            sleep(POLL_SECONDS)
-            nxt, failure = look(False)
-            if failure is not None:
-                return failure
-            assert nxt is not None
-            if nxt["interaction"] != interaction:
-                advanced = True
-                break
-            if snapshot.get("text_revealing") is True and nxt.get("text_revealing") is False and nxt["stable"]:
-                # The first dismiss reveals slow text in the same interaction.
-                # Re-check the inventory before posting the next guarded dismiss.
-                advanced = True
-                break
-        if not advanced:
-            return _finished("stalled", steps, shot(snapshot))

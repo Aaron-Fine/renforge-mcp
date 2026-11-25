@@ -82,6 +82,8 @@ export function translateDashboardApiError(payload: DashboardApiError, messageKe
       return i18next.t("errors.launch_editor_invalid");
     case "launch_home_invalid":
       return i18next.t("errors.launch_home_invalid");
+    case "launch_language_invalid":
+      return i18next.t("errors.launch_language_invalid");
     case "launch_persistent_invalid":
       return i18next.t("errors.launch_persistent_invalid");
     case "launch_preferences_invalid":
@@ -90,6 +92,8 @@ export function translateDashboardApiError(payload: DashboardApiError, messageKe
       return i18next.t("errors.launch_savedir_invalid");
     case "launch_start_label_invalid":
       return i18next.t("errors.launch_start_label_invalid");
+    case "launch_state_mode_conflict":
+      return i18next.t("errors.launch_state_mode_conflict");
     case "launch_timeout_invalid":
       return i18next.t("errors.launch_timeout_invalid");
     case "launch_version_invalid":

@@ -10,10 +10,40 @@ from __future__ import annotations
 import hashlib
 import shutil
 import time
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from renforge.bridge.client import BridgeError
+from renforge.editor.constants import TRANSACTION_DIRNAME
 from renforge.editor_task0_runner import _require_ok, _wait_for_status
+from renforge.state import project_state_dir
+
+
+EDITOR_RESOURCE = Path(__file__).resolve().parent / "bridge" / "editor.rpy"
+LIVE_FIXTURES_DIR = Path(__file__).resolve().parents[2] / "tests" / "live_fixtures"
+
+# Drop compiled caches and any leftover session injects from a dirty demo tree.
+# Unowned legacy injects must not ride into live fixtures: they load alongside
+# schema-3 session files and break the bridge.
+DEMO_COPY_IGNORE = shutil.ignore_patterns(
+    "*.rpyc",
+    "*.rpyc.bak",
+    "cache",
+    "saves",
+    "renforge_bridge.rpy",
+    "renforge_bridge.rpyc",
+    "renforge_bridge.rpyc.bak",
+    "00renforge_session.rpy",
+    "00renforge_session.rpyc",
+    "00renforge_session.rpyc.bak",
+    "00renforge_session_*.rpy",
+    "00renforge_session_*.rpyc",
+    "00renforge_session_*.rpyc.bak",
+    "zzrenforge_*",
+    "zz_renforge_*",
+)
 
 
 def summarize_commit_report(report: dict[str, Any]) -> str:
@@ -44,29 +74,76 @@ def summarize_commit_report(report: dict[str, Any]) -> str:
     )
     return "\n".join(f"{name}={value!r}" for name, value in fields)
 
-EDITOR_RESOURCE = Path(__file__).resolve().parent / "bridge" / "editor.rpy"
-LIVE_FIXTURES_DIR = Path(__file__).resolve().parents[2] / "tests" / "live_fixtures"
 
-# Drop compiled caches and any leftover session injects from a dirty demo tree.
-# Unowned legacy injects must not ride into live fixtures: they load alongside
-# schema-3 session files and break the bridge.
-DEMO_COPY_IGNORE = shutil.ignore_patterns(
-    "*.rpyc",
-    "*.rpyc.bak",
-    "cache",
-    "saves",
-    "renforge_bridge.rpy",
-    "renforge_bridge.rpyc",
-    "renforge_bridge.rpyc.bak",
-    "00renforge_session.rpy",
-    "00renforge_session.rpyc",
-    "00renforge_session.rpyc.bak",
-    "00renforge_session_*.rpy",
-    "00renforge_session_*.rpyc",
-    "00renforge_session_*.rpyc.bak",
-    "zzrenforge_*",
-    "zz_renforge_*",
-)
+def clear_transactions(project_root: Path) -> Path:
+    """Remove a fixture project's leftover editor transactions; return their folder."""
+    transaction_root = project_state_dir(project_root) / TRANSACTION_DIRNAME
+    shutil.rmtree(transaction_root, ignore_errors=True)
+    return transaction_root
+
+
+@dataclass(frozen=True)
+class TransactionWait:
+    """How ``wait_for_transaction`` ended.
+
+    ``completed`` is True only when the editor reported a finished reload
+    and the source held the expected bytes. ``last_status`` is then that
+    status; after a timeout it is diagnostic only. ``bridge_failure`` is the
+    last status request's error, ``source_error`` the last source read's,
+    each cleared by a later success.
+
+    It unpacks as ``(last_status, bridge_failure)`` for existing callers,
+    which must still check ``completed``: a timeout can end on a
+    ``reload_committed`` status.
+    """
+
+    completed: bool
+    last_status: dict[str, Any] | None
+    bridge_failure: str | None
+    source_error: str | None
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter((self.last_status, self.bridge_failure))
+
+
+def wait_for_transaction(
+    client: Any,
+    source_path: Path,
+    expected_bytes: bytes,
+    *,
+    timeout: float = 60.0,
+) -> TransactionWait:
+    """Poll the editor until a save or undo has reloaded and ``source_path`` holds ``expected_bytes``.
+
+    A reload's brief disconnect is not blamed for a commit that never
+    finished: the bridge error is cleared by any later successful status
+    request. A source that cannot be read yet (mid-replace) only means "not
+    yet"; the read error is kept apart from bridge errors, and cleared by a
+    later successful read.
+    """
+    deadline = time.monotonic() + timeout
+    last_status: dict[str, Any] | None = None
+    bridge_failure: str | None = None
+    source_error: str | None = None
+    while time.monotonic() < deadline:
+        try:
+            status = client.request("editor_task0_status", {})
+        except BridgeError as exc:
+            bridge_failure = f"{type(exc).__name__}: {exc}"
+        else:
+            last_status = status
+            bridge_failure = None
+            if status.get("status_code") == "reload_committed" and status.get("save_in_progress") is False:
+                try:
+                    current = source_path.read_bytes()
+                except OSError as exc:
+                    source_error = f"{type(exc).__name__}: {exc}"
+                else:
+                    source_error = None
+                    if current == expected_bytes:
+                        return TransactionWait(True, status, None, None)
+        time.sleep(0.25)
+    return TransactionWait(False, last_status, bridge_failure, source_error)
 
 
 def inject_editor_live_resources(

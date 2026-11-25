@@ -6,6 +6,7 @@ import base64
 import hashlib
 import socket
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -112,6 +113,11 @@ class BridgeClient:
     def __init__(self, config: BridgeConfig):
         self._config = config
 
+    @property
+    def config(self) -> BridgeConfig:
+        """The bridge endpoint and token this client talks to."""
+        return self._config
+
     @classmethod
     def from_project(cls, project_root: str | Path, *, timeout: float = 5.0) -> "BridgeClient":
         """Build a client from private control-directory bridge metadata.
@@ -189,7 +195,7 @@ class BridgeClient:
         return response
 
     def _checked(self, command: str, payload: dict[str, Any] | None = None, *, deadline: float | None = None) -> dict:
-        reply = self.request(command, payload) if deadline is None else self.request(command, payload, deadline=deadline)
+        reply = self.request(command, payload, deadline=deadline)
         if reply.get("error") is not None:
             raise BridgeError(f"bridge error on '{command}': {reply['error']}")
         return reply
@@ -204,6 +210,20 @@ class BridgeClient:
 
     def ping(self) -> dict:
         return self.request("ping")
+
+    def session_info(self) -> dict:
+        """``eval_enabled``, ``savedir``, ``home``, and every active ``save_locations`` entry.
+
+        A bridge that does not report ``eval_enabled`` (one that predates it)
+        is assumed to run code.
+        """
+        reply = self._checked("session_info")
+        return {
+            "eval_enabled": reply.get("eval_enabled") is not False,
+            "savedir": reply.get("savedir"),
+            "home": reply.get("home"),
+            "save_locations": reply.get("save_locations"),
+        }
 
     def get_state(
         self,
@@ -279,13 +299,7 @@ class BridgeClient:
             payload["limit"] = limit
         if variables:
             payload["variables"] = list(variables)
-        return self.request("explain", payload)
-
-    def session_info(self) -> dict:
-        """``eval_enabled``, ``savedir``, and ``home`` of the running game's bridge."""
-        reply = self._checked("session_info")
-        return {"eval_enabled": reply.get("eval_enabled") is True, "savedir": reply.get("savedir"),
-                "home": reply.get("home")}
+        return self._normalize_error_reply(self.request("explain", payload))
 
     def eval_expr(self, expr: str) -> Any:
         return self._checked("eval", {"expr": expr})["value"]
@@ -393,21 +407,35 @@ class BridgeClient:
             payload["drop"] = drop
         if input_value is not None:
             payload["input"] = input_value
-        reply = self.request("act", payload, deadline=deadline)
+        return self.send_act(payload, deadline=deadline)
+
+    def send_act(self, payload: Mapping[str, Any], *, deadline: float | None = None) -> dict:
+        """Send one act request with *payload* exactly as given.
+
+        For a caller that built and validated the payload itself; the keys are
+        the bridge's (``id``, ``input``, ``submit`` and so on, as :meth:`act`
+        builds them). The reply follows :meth:`act`'s contract: an error the
+        bridge did not mark ``ok: false`` leaves the outcome unknown.
+        """
+        reply = self.request("act", dict(payload), deadline=deadline)
         if reply.get("error") is not None and reply.get("ok") is not False:
             return {**reply, "ok": False, "action_outcome": "unknown", "retry_safe": False}
         return self._normalize_error_reply(reply)
 
     def dismiss_if(self, *, interaction: int, session_id: str | None = None, observation_id: str | None = None,
-                   past_optional_controls: bool = False, deadline: float | None = None) -> dict:
+                   past_optional_controls: bool = False, allow_pause: bool = False,
+                   deadline: float | None = None) -> dict:
         """Post dismiss only when this interaction still listens for it.
 
         ``past_optional_controls`` dismisses a line even when buttons are shown
-        beside it, as a reader clicking the line would.
+        beside it, as a reader clicking the line would. ``allow_pause`` also
+        accepts a frame that is unstable only because a pause is pending.
         """
         payload: dict[str, Any] = {"interaction": interaction}
         if past_optional_controls:
             payload["past_optional_controls"] = True
+        if allow_pause:
+            payload["allow_pause"] = True
         if session_id is not None:
             payload["session_id"] = session_id
         if observation_id is not None:
@@ -490,7 +518,12 @@ class BridgeClient:
     def select_choice(self, text: str | None = None, index: int | None = None,
                       *, interaction: int | None = None, session_id: str | None = None,
                       observation_id: str | None = None) -> dict:
-        """Select a current choice, optionally guarded by an observation identity."""
+        """Select a current choice, optionally guarded by an observation identity.
+
+        A refusal (no match, an ambiguous caption, a disabled or covered
+        choice, a stale guard) is returned as ``{"ok": False, "error": ...}``
+        rather than raised, so callers must check ``ok``.
+        """
         payload = {"text": text, "index": index}
         payload.update({key: value for key, value in dict(interaction=interaction,
             session_id=session_id, observation_id=observation_id).items() if value is not None})

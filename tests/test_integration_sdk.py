@@ -585,11 +585,11 @@ def test_live_named_save_state_round_trip(sdk, demo_copy: Path) -> None:
         assert client.get_var("courage") == 1
 
         saved = client.save_slot("branch-a", extra_info="before menu")
-        assert saved == {
-            "ok": True,
-            "slot": "branch-a",
-            "extra_info": "before menu",
-        }
+        assert saved["ok"] is True
+        assert saved["slot"] == "branch-a"
+        assert saved["extra_info"] == "before menu"
+        # The bridge also reports the Ren'Py savedir as a write receipt.
+        assert isinstance(saved.get("savedir"), str) and saved["savedir"]
 
         listed = client.list_slots(regexp="branch")
         assert listed["ok"] is True
@@ -839,7 +839,7 @@ screen renforge_sdk_modal_hide():
 def test_live_modal_hide_is_clickable_and_dismisses_its_screen(sdk, demo_copy: Path) -> None:
     """A modal image button stays clickable over a full-screen control, and Hide() runs in its screen."""
     from renforge.bridge.launcher import launch_with_bridge
-    from renforge.observe import classify
+    from renforge.interaction import classify
     from renforge.project import RenpyProject
 
     _add_modal_hide_fixture(demo_copy)
@@ -1217,7 +1217,9 @@ define isolation_mp = MultiPersistent("renforge-isolation-canary")
     # Generate valid persistent, preference, multipersistent and slot canaries
     # with the same engine, rather than relying on invalid placeholder files.
     seed = tmp_path / 'seed'
-    with launch_with_bridge(sdk, project, savedir=str(seed), startup_timeout=90) as session:
+    with launch_with_bridge(
+        sdk, project, savedir=str(seed), home='temporary', startup_timeout=90,
+    ) as session:
         client = session.client
         client.eval_expr("setattr(persistent, 'renforge_host_canary', 'HOST-STATE')")
         client.eval_expr("setattr(_preferences, 'text_cps', 13)")
@@ -1263,7 +1265,7 @@ python early:
     before = [_state_snapshot(root) for root in protected]
 
     with launch_with_bridge(
-        sdk, project, startup_timeout=90,
+        sdk, project, savedir='temporary', startup_timeout=90,
         extra_env={'RENPY_MULTIPERSISTENT': str(host_mp)},
     ) as session:
         client = session.client
@@ -1279,6 +1281,16 @@ python early:
         locations = client.eval_expr("[item.directory for item in __import__('renpy').loadsave.location.locations]")
         assert locations == [str(session.temporary_savedir)]
         assert client.eval_expr("__import__('os').path.expanduser('~')") == str(session.temporary_home)
+        # What a server deciding whether to reuse this game is told.
+        info = client.session_info()
+        assert info["save_locations"] == locations
+        assert info["home"] == str(session.temporary_home)
+        from renforge.save_isolation import path_in_session_root
+
+        # A real isolated game must pass the reuse allowlist, or no external
+        # isolated game could ever be reused.
+        assert path_in_session_root(info["home"])
+        assert all(path_in_session_root(item) for item in info["save_locations"])
         # Every reinitialization must retain the invariant, including reload's
         # storage reinitialization, even if the game sets extra_savedirs again.
         client.eval_expr('__import__("renpy").savelocation.init()')
@@ -1287,7 +1299,6 @@ python early:
 
         imported = import_host_slots(project.root, session.temporary_savedir, slot='host-canary')
         assert imported['ok'], imported
-        client.eval_expr("__import__('renpy').loadsave.location.scan()")
         assert [slot['name'] for slot in client.list_slots()['slots']] == ['host-canary']
         client.eval_expr("setattr(persistent, 'renforge_host_canary', 'SESSION-STATE')")
         client.eval_expr("setattr(isolation_mp, 'marker', 'SESSION-MULTIPERSISTENT')")
@@ -1387,7 +1398,7 @@ label start:
 
         progressed = act(str(game_project), current["interaction"], inputs[0]["id"], text="Alex",
                          session_id=current["session_id"], observation_id=current["observation_id"],
-                         advance=True, timeout=20)
+                         timeout=20)
         assert progressed["ok"] and progressed["observation_status"] == "ready", progressed
         assert progressed["progress"]["stop"] == "choose", progressed
         assert session.client.get_var("rf_name") == "Alex"
@@ -1399,8 +1410,7 @@ label start:
 
 
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display")
-@pytest.mark.parametrize("mode", ["skip", "dismiss"])
-def test_live_bounded_progression_restores_preferences_and_stops_at_custom_hub(sdk, tmp_path, mode):
+def test_live_bounded_progression_restores_preferences_and_stops_at_custom_hub(sdk, tmp_path):
     from renforge.bridge.launcher import launch_with_bridge
     from renforge.project import RenpyProject
     from renforge.tools.live import advance_until
@@ -1435,9 +1445,9 @@ label start:
     return
 ''', encoding="utf-8")
     with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
-        result = advance_until(str(project), mode=mode, max_steps=20, timeout=20, screenshot=False)
+        result = advance_until(str(project), max_steps=20, timeout=20, screenshot=False)
         assert result["stop"] == "choose", result
-        assert result["mode"] == mode
+        assert result["mode"] == "skip"
         assert result["observation_status"] == "ready", result
         assert result["observation"]["dialogue"]["what"] == "Pick a destination."
         assert any(item["screen"] == "navigation_hub" for item in result["observation"]["controls"])
@@ -1497,9 +1507,8 @@ label start:
 
 
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display")
-@pytest.mark.parametrize("mode", ["skip", "dismiss"])
 @pytest.mark.parametrize("terminal", ["return", "$ renpy.full_restart()"])
-def test_live_ending_detection_distinguishes_script_end_from_menu_restart(sdk, tmp_path, mode, terminal):
+def test_live_ending_detection_distinguishes_script_end_from_menu_restart(sdk, tmp_path, terminal):
     from renforge.bridge.launcher import launch_with_bridge
     from renforge.project import RenpyProject
     from renforge.tools.live import act, advance_until, observe
@@ -1524,13 +1533,13 @@ label helper:
     return
 ''' % terminal, encoding="utf-8")
     with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
-        initial = advance_until(str(project), max_steps=10, timeout=15, screenshot=False, mode=mode)
+        initial = advance_until(str(project), max_steps=10, timeout=15, screenshot=False)
         assert initial["stop"] == "main_menu", initial
         assert initial["ending"] is None
         assert initial["observation"]["lifecycle"]["phase"] == "main_menu"
         start = next(control for control in initial["observation"]["controls"] if control["text"] == "Begin")
         result = act(str(project), control_id=start["id"], interaction=initial["observation"]["interaction"],
-                     advance=True, mode=mode, max_steps=10, timeout=15, screenshot=False)
+                     max_steps=10, timeout=15, screenshot=False)
         assert result["action_outcome"] == "succeeded", result
         progress = result["progress"]
         expected = "end" if terminal == "return" else "main_menu"
@@ -1544,14 +1553,18 @@ label helper:
             assert progress["ending"]["statement"]["line"] == 14
             # A subsequent observation/call must retain the end evidence.
             assert observe(str(project), screenshot=False)["lifecycle"]["ending"] == progress["ending"]
-            assert advance_until(str(project), timeout=10, screenshot=False, mode=mode)["stop"] == "end"
+            assert advance_until(str(project), timeout=10, screenshot=False)["stop"] == "end"
         else:
             assert progress["ending"] is None, result
         # Beginning another run clears the previous ending before progressing.
         menu = observe(str(project), screenshot=False)
         start = next(control for control in menu["controls"] if control["text"] == "Begin")
-        restarted = act(str(project), control_id=start["id"], interaction=menu["interaction"], screenshot=False)
-        assert restarted["observation"]["lifecycle"] == {"phase": "playing", "ending": None}
+        restarted = act(str(project), control_id=start["id"], interaction=menu["interaction"],
+                        max_steps=10, timeout=15, screenshot=False)
+        assert restarted["action_outcome"] == "succeeded", restarted
+        # A stale ending would stop at once; the new run plays the chapter again.
+        assert any(line.get("what") == "Final line." for line in restarted["progress"]["crossed"]), restarted
+        assert restarted["progress"]["stop"] == expected, restarted
 
 
 @pytest.mark.skipif(not os.environ.get('DISPLAY'), reason='live bridge needs a display')
@@ -1590,12 +1603,17 @@ label start:
     return
 ''', encoding='utf-8')
     with launch_with_bridge(sdk, RenpyProject(project), startup_timeout=90, editor=False) as session:
+        # get_state does not list screens; ask for the target screen itself.
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            if any(item['name'] == 'target' for item in session.client.get_state().get('screens', [])):
+            inspected = session.client.inspect_screen('target')
+            if inspected.get('active') is True:
                 break
             time.sleep(0.1)
-        from renforge.observe import apply_screenshot, classify
+        else:
+            pytest.fail("the target screen never showed: %r" % (inspected,))
+        from renforge.interaction import classify
+        from renforge.observe import apply_screenshot
         import renforge.util.images as images
         monkeypatch.setattr(images, 'MCP_PNG_MAX_BYTES', 512)
         raw, png = apply_screenshot(session.client.observe(screenshot=True))
@@ -1618,7 +1636,7 @@ label start:
 def test_live_custom_layer_scaled_scrolling_menu(sdk, tmp_path):
     from renforge.bridge.launcher import launch_with_bridge
     from renforge.project import RenpyProject
-    from renforge.observe import classify
+    from renforge.interaction import classify
 
     project = tmp_path / 'menu_geometry'
     (project / 'game').mkdir(parents=True)
@@ -1667,7 +1685,7 @@ label start:
         viewport = next(item for item in snapshot['controls'] if item['role'] == 'viewport')
         assert viewport['bounds'] == {'x': 100, 'y': 80, 'width': 300, 'height': 50}, viewport
         listed = session.client.list_ui_elements()
-        # Upstream ids stay on list_ui_elements; control_id links each to observe.
+        # list_ui_elements keeps its own ids; control_id links each to observe.
         assert {item['control_id'] for item in listed} == {item['id'] for item in snapshot['controls']}
         assert session.client.select_choice(text='Repeat')['ok'] is False
         refused = session.client.select_choice(index=choices[-1]['index'], interaction=snapshot['interaction'], observation_id='stale')
@@ -1713,7 +1731,7 @@ label chapter:
         initial = live.advance_until(str(project), timeout=10, screenshot=False)
         start = next(control for control in initial['observation']['controls'] if control['text'] == 'Begin')
         result = live.act(str(project), control_id=start['id'], interaction=initial['observation']['interaction'],
-            advance=True, timeout=10, screenshot=False)
+            timeout=10, screenshot=False)
         progress = result['progress']
         assert progress['stop'] != 'end', result
         assert progress['ending'] is None, result
@@ -1763,7 +1781,7 @@ label rf_room:
 @pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="live bridge needs a display (set DISPLAY, or run under xvfb)")
 def test_live_explain_reads_rpyc_only_game(sdk, tmp_path: Path) -> None:
     from renforge.bridge.launcher import launch_with_bridge
-    from renforge.observe import classify
+    from renforge.interaction import classify
     from renforge.project import RenpyProject
 
     project = tmp_path / "rpyc_only"
@@ -1790,9 +1808,12 @@ def test_live_explain_reads_rpyc_only_game(sdk, tmp_path: Path) -> None:
 
         # Wait for the start menu to appear, then explain the label.
         for _ in range(40):
-            if any(control.get("text") == "Leave" for control in session.client.list_ui_elements()):
+            elements = session.client.list_ui_elements()
+            if any(control.get("text") == "Leave" for control in elements):
                 break
             time.sleep(0.25)
+        else:
+            pytest.fail("the start menu never showed: %r" % (elements,))
         start = session.client.explain(label="start")
         assert start["ok"] is True, start
         assert any(row["kind"] == "choice" and row["text"] == "Open if rf_gate" for row in start["statements"]), start
@@ -1901,3 +1922,68 @@ def test_live_session_starts_the_story_at_a_label(sdk, demo_copy: Path) -> None:
         gate = play(str(demo_copy), snapshot["observation_id"], screenshot=False)
         assert gate["progress"]["stop"] == "choose", gate
         assert gate["observation"]["started_at_label"] == "village_gate"
+
+
+def test_isolated_language_launch_leaves_host_preferences_untouched(
+    sdk, demo_copy: Path, tmp_path: Path, monkeypatch
+) -> None:
+    """``language`` persists as a preference; isolation must contain that write."""
+    from renforge.bridge.launcher import launch_with_bridge
+    from renforge.project import RenpyProject
+    from renforge.save_isolation import host_renpy_root
+
+    project = RenpyProject(demo_copy)
+    home = tmp_path / 'host-home'
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setenv('USERPROFILE', str(home))
+    monkeypatch.setenv('APPDATA', str(home / 'AppData' / 'Roaming'))
+    monkeypatch.delenv('RENFORGE_ISOLATION', raising=False)
+    (demo_copy / 'game' / 'script.rpy').write_text('''
+label main_menu:
+    return
+label start:
+    "Language test ready."
+    while True:
+        pause
+''', encoding='utf-8')
+    (demo_copy / 'game' / 'zz_language_fixture.rpy').write_text('''
+define config.save_directory = "renforge-language-canary"
+translate french strings:
+    old "Language test ready."
+    new "Test de langue prete."
+''', encoding='utf-8')
+
+    # Seed the host save tree with files the engine itself wrote.
+    seed = tmp_path / 'seed'
+    with launch_with_bridge(
+        sdk, project, savedir=str(seed), home='temporary', startup_timeout=90,
+    ) as session:
+        session.client.eval_expr("setattr(persistent, 'renforge_host_canary', 'HOST-STATE')")
+        session.client.eval_expr('renpy.save_persistent()')
+    assert (seed / 'persistent').is_file()
+    host_saves = host_renpy_root() / 'renforge-language-canary'
+    shutil.copytree(seed, host_saves)
+    local_saves = demo_copy / 'game' / 'saves'
+    shutil.copytree(seed, local_saves, dirs_exist_ok=True)
+
+    def snapshot() -> dict[str, tuple[bytes, int]]:
+        return {
+            f'{root.name}/{path.relative_to(root)}': (path.read_bytes(), path.stat().st_mtime_ns)
+            for root in (host_saves, local_saves)
+            for path in root.rglob('*') if path.is_file()
+        }
+
+    before = snapshot()
+    assert before
+
+    with launch_with_bridge(
+        sdk, project, savedir='temporary', language='french', startup_timeout=90,
+    ) as session:
+        client = session.client
+        root = session.session_root
+        assert root is not None
+        assert client.get_state()['language'] == 'french'
+        client.eval_expr('renpy.save_persistent()')
+        assert (session.temporary_savedir / 'persistent').is_file()
+    assert not root.exists()
+    assert snapshot() == before

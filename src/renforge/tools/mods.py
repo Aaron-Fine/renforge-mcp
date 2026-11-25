@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from .. import mods
-from .live import control, get_errors, observe
+from ..compact import compact_observation
+from .live import control, get_errors, wait_for_stable_observation
 
 ACTIONS = ("write", "list", "lint", "reload", "remove", "package", "guide")
 _ACTIONS_WITHOUT_NAME = ("list", "guide", "reload")
@@ -26,6 +26,12 @@ def _errors_changed(before: dict[str, Any], after: dict[str, Any]) -> bool:
 
 
 def _reload(project_path: str) -> dict[str, Any]:
+    """Reload the game's scripts, wait for a stable screen, and report new errors.
+
+    The observation is compact, like every play-tool observation. When the
+    wait ends before the screen is stable, ``settled`` is false and ``next``
+    says to observe again rather than reload again.
+    """
     baseline = get_errors(project_path)
     baseline = baseline if isinstance(baseline, dict) else {}
     cursor = baseline.get("cursor", 0)
@@ -36,26 +42,25 @@ def _reload(project_path: str) -> dict[str, Any]:
     if not isinstance(reload_reply, dict) or not reload_reply.get("ok"):
         return {"ok": False, "reload": reload_reply, "observation": None, "errors": None}
 
-    observation: dict[str, Any] | None = None
-    deadline = time.monotonic() + RELOAD_TIMEOUT
-    while True:
-        observation = observe(project_path, screenshot=False)
-        if isinstance(observation, dict) and observation.get("stable") is True:
-            break
-        if time.monotonic() >= deadline:
-            break
-        time.sleep(RELOAD_POLL_INTERVAL)
+    observation = wait_for_stable_observation(project_path, timeout=RELOAD_TIMEOUT,
+                                              interval=RELOAD_POLL_INTERVAL)
 
     errors = get_errors(project_path, since=cursor)
     if not isinstance(errors, dict):
         errors = _error_reply("get_errors returned a non-object result")
     ok = errors.get("ok") is True and not _errors_changed(baseline, errors)
-    return {
+    result = {
         "ok": ok,
         "reload": reload_reply,
-        "observation": observation,
+        "observation": compact_observation(observation),
         "errors": errors,
     }
+    if not (isinstance(observation, dict) and observation.get("stable") is True):
+        # The wait timed out: the reload stands, the screen had not settled.
+        result["settled"] = False
+        result["next"] = ("the scripts reloaded, but the screen had not settled when the wait ended; "
+                          "call renforge_observe again, and do not reload the scripts again")
+    return result
 
 
 def mod(

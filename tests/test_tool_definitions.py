@@ -36,7 +36,7 @@ def test_tool_definitions_cover_all_registered_tools_and_parameters() -> None:
 
     expected = set(TOOL_DEFINITIONS)
     assert set(registered) == expected
-    assert len(registered) == 60
+    assert len(registered) == 61
 
     for name, definition in TOOL_DEFINITIONS.items():
         tool = registered[name]
@@ -88,6 +88,7 @@ def test_emitted_tool_schemas_encode_options_limits_and_required_relationships()
     assert launch["savedir"]["default"] == "auto"
     assert launch["home"]["default"] == "auto"
     assert launch["timeout"]["minimum"] == 0
+    assert launch["language"]["maxLength"] == 64
 
     compact = schemas["renforge_game_state_compact"]["properties"]
     assert compact["state_profile"]["enum"] == ["minimal", "interaction", "debug", "full"]
@@ -194,6 +195,8 @@ def test_high_risk_tool_guidance_includes_safety_notes() -> None:
     assert "prefer" in _desc("renforge_eval").lower()
     assert "overwrite" in _desc("renforge_saves").lower()
     assert "overwrite" in _desc("renforge_capture_screenshot").lower()
+    # Captures are in the state folder, outside the project: relative_path is then absolute.
+    assert "absolute" in _desc("renforge_capture_screenshot")
     assert "writes" in _desc("renforge_generate_translations").lower()
     assert "write" in _desc("renforge_web_build").lower()
     assert "open-world" not in _desc("renforge_web_build").lower()
@@ -338,6 +341,7 @@ def test_tool_annotations_are_conservative_for_conditional_and_sdk_side_effects(
     }
 
     sdk_backed_tools = {
+        "renforge_validate",
         "renforge_launch",
         "renforge_jump",
         "renforge_new_game",
@@ -376,6 +380,11 @@ def test_risky_runtime_annotation_matrix_is_conservative() -> None:
         "renforge_click_at",
         "renforge_position_element",
         "renforge_set_var",
+        # Play-loop and mod tools: annotate the worst action (a mod write is
+        # code the game runs; session launch starts the game's process).
+        "renforge_act",
+        "renforge_session",
+        "renforge_mod",
     }
     for name in arbitrary_python_tools | arbitrary_game_action_tools:
         annotations = TOOL_DEFINITIONS[name].annotations
@@ -404,11 +413,12 @@ def test_catalog_states_exact_runtime_and_filesystem_contracts() -> None:
     assert "user's normal" in launch.parameters["savedir"].lower()
     assert "`existing`" in launch.parameters["savedir"]
     assert "renforge_isolation" in launch.parameters["savedir"].lower()
-    assert "authorize=true" in launch.parameters["savedir"]
+    assert "`temporary` isolates" in launch.parameters["savedir"]
     assert "private directory" in launch.parameters["home"].lower()
     assert "preference" in launch.parameters["preferences"].lower()
     assert "only" in launch.parameters["cleanup_on_stop"].lower()
     assert "disposable session directory" in launch.parameters["cleanup_on_stop"].lower()
+    # Leaving RenForge's own folders needs authorize.
     assert "authorize=true" in launch.parameters["authorize"]
     assert "session_id" in launch.description
     assert "isolation" in launch.description.lower()
@@ -417,7 +427,15 @@ def test_catalog_states_exact_runtime_and_filesystem_contracts() -> None:
     assert "savedir" in jump.parameters
     assert "authorize" in jump.parameters
     assert "temporary" in jump.description.lower()
+    assert "savedir=temporary" in definitions["renforge_new_game"].description
     assert "authorize=true" in definitions["renforge_new_game"].description
+    language = launch.parameters["language"].lower()
+    assert "renpy_language" in language
+    assert "preferences.language" in language
+    assert "stored preference" in language
+    assert "savedir='temporary'" in language
+    assert "session only" not in language
+    assert "already-running" in language
 
     launch_status = definitions["renforge_launch_status"].description.lower()
     for status in ("idle", "starting", "ready", "failed", "closing", "closed"):
@@ -614,3 +632,111 @@ def test_get_var_description_does_not_promise_zero_user_code() -> None:
         "destructiveHint": True,
         "openWorldHint": True,
     }
+
+
+def test_validate_tool_documents_the_clean_shadow_contract() -> None:
+    definition = TOOL_DEFINITIONS["renforge_validate"]
+    description = definition.description.lower()
+
+    assert "clean shadow" in description
+    assert "no live session artifacts" in description
+    assert "staged bytes" in description
+    assert "never publishes staged or copied bytes" in description
+    assert "does not sandbox arbitrary writes" in description
+    assert "skipped_links" in description
+    assert "zero-byte placeholder" in description
+    assert "degraded=true" in description
+    assert "renforge_shadow_max_files" in description
+    assert "renforge_shadow_max_bytes" in description
+    assert "renforge_shadow_max_dirs" in description
+    assert "timeout or truncated" in description
+    assert "--error-code" in description
+    assert definition.annotations == {
+        "readOnlyHint": False,
+        "idempotentHint": False,
+        "destructiveHint": False,
+        "openWorldHint": True,
+    }
+    assert "only" in definition.parameters["checks"].lower()
+    assert "project-relative" in definition.parameters["staged"].lower()
+    assert "game-relative" in definition.parameters["staged"].lower()
+    assert "shadow_path" in definition.parameters["keep_shadow"]
+    assert definition.parameter_schemas["timeout"] == {"minimum": 0, "maximum": 600}
+
+
+def test_action_enums_match_the_policy_tables() -> None:
+    # An action missing from its policy table is MALFORMED and refused only
+    # under enforce, which tests with the policy off would never notice.
+    from renforge import policy
+    from renforge.tool_registration.lifecycle import SESSION_ACTIONS
+    from renforge.tools.mods import ACTIONS as MOD_TOOL_ACTIONS
+
+    for name, table in policy._ACTION_TABLES.items():
+        enum = TOOL_DEFINITIONS[name].parameter_schemas["action"]["enum"]
+        assert sorted(enum) == sorted(table), name
+    assert sorted(MOD_TOOL_ACTIONS) == sorted(policy.MOD_ACTIONS)
+    assert sorted(SESSION_ACTIONS) == sorted(policy.SESSION_ACTIONS)
+
+
+def test_launch_guidance_describes_the_home_the_launch_resolves_to(tmp_path, monkeypatch) -> None:
+    """The text must match the policy: an explicit home overrides savedir=temporary, and
+    RENFORGE_ISOLATION=temporary makes an omitted home temporary even beside a savedir path."""
+    from renforge import tool_definitions
+    from renforge.save_isolation import launch_request_is_renforge_owned
+    from renforge.server import _instructions
+    from renforge.state import project_state_dir
+    from renforge.toolsets import enabled_toolsets
+
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    inside = str(project_state_dir(project) / "saves-here")
+
+    def owned(savedir, home):
+        return launch_request_is_renforge_owned(savedir=savedir, home=home, persistent=None,
+                                                preferences=None, project_path=str(project))
+
+    # savedir=temporary isolates HOME only while home is left to follow it.
+    assert owned("temporary", None) and not owned("temporary", "existing")
+    savedir_text = tool_definitions._ISOLATION_PARAMETERS["savedir"]
+    assert "unless `home` is `existing` or a path" in savedir_text
+    # An explicit auto or temporary home still isolates; the text must not warn agents off it.
+    assert owned("temporary", "temporary") and owned("temporary", "auto")
+    instructions = _instructions(enabled_toolsets())
+    assert "with home omitted or auto" in instructions
+
+    # Under RENFORGE_ISOLATION=temporary a savedir path with home omitted keeps no user HOME.
+    monkeypatch.setenv("RENFORGE_ISOLATION", "temporary")
+    assert owned(inside, None)
+    for text in (tool_definitions._LAUNCH_POLICY, tool_definitions._LAUNCH_AUTHORIZE):
+        assert "makes an omitted `home` temporary" in text or "an omitted `home` is a temporary HOME" in text
+    # The home text names that HOME too, instead of "otherwise the host HOME".
+    from renforge.save_isolation import apply_launch_isolation_defaults
+
+    assert apply_launch_isolation_defaults(savedir=inside, home=None)["home"] == "temporary"
+    home_text = tool_definitions._ISOLATION_PARAMETERS["home"]
+    assert "otherwise the host HOME" not in home_text and "`RENFORGE_ISOLATION`" in home_text
+    # A savedir path outside the state folder still needs authorize, and the text must not say otherwise.
+    assert not owned(str(tmp_path / "elsewhere"), None)
+    assert "outside the RenForge state folder always does" in tool_definitions._LAUNCH_POLICY
+
+
+def test_validate_schema_admits_only_the_documented_checks_and_timeouts() -> None:
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    pytest.importorskip("jsonschema")
+    from jsonschema import Draft202012Validator
+
+    tools = asyncio.run(create_app().list_tools())
+    schema = next(tool.parameters for tool in tools if tool.name == "renforge_validate")
+    validator = Draft202012Validator(schema)
+
+    def valid(**arguments) -> bool:
+        return validator.is_valid({"project_path": "/tmp/game", **arguments})
+
+    # checks: omitted, null, or exactly ["lint"].
+    assert valid() and valid(checks=None) and valid(checks=["lint"])
+    assert not valid(checks=[]) and not valid(checks=["lint", "lint"])
+    # timeout: the schema's range is the accepted range; the text must not
+    # promise to clamp values the schema refuses.
+    assert valid(timeout=0) and valid(timeout=600) and not valid(timeout=601)
+    text = schema["properties"]["timeout"]["description"]
+    assert "0-600" in text and "clamped to 1-600" not in text

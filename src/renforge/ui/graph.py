@@ -11,6 +11,7 @@ from ..project import RenpyProject
 from ..sdk import get_or_install_sdk
 from ..scanner import scan_project
 from ..state import project_state_dir
+from ..util.files import resolves_inside, walk_nofollow
 
 
 _STORY_MAP_CACHE: dict[Path, tuple[tuple[Any, ...], dict[str, Any]]] = {}
@@ -96,8 +97,10 @@ def resolve_game_file_path(
 def _story_map_signature(project_root: Path) -> tuple[tuple[Any, ...], tuple[int, int]]:
     game_root = project_root / "game"
     entries: list[tuple[str, int, int]] = []
-    if game_root.exists():
-        for file_path in sorted(game_root.rglob("*.rpy")):
+    # A game/ link that leads out of the project would list another tree.
+    if game_root.exists() and resolves_inside(game_root, project_root):
+        scripts = (Path(folder) / name for folder, _dirs, names in walk_nofollow(game_root) for name in names)
+        for file_path in sorted(path for path in scripts if path.suffix == ".rpy"):
             try:
                 stats = file_path.stat()
             except OSError:

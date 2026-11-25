@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,44 @@ TOOL_NAMES = (
 )
 
 SESSION_ACTIONS = ("launch", "status", "save", "load", "list", "import", "stop")
+
+_LANGUAGE_RESULT_KEYS = ("requested_language", "active_language", "language_applied")
+
+
+def _annotate_language_result(
+    result: dict[str, Any],
+    language: str | None,
+    warning: str | None = None,
+) -> dict[str, Any]:
+    """Keep language fields honest for delegated dashboard launches.
+
+    An older dashboard ignores the unknown ``language`` key and returns no
+    language fields. Without this note the launch would look as if the language
+    had been applied. A successful launch that used the default savedir also
+    needs the persistence warning, because Ren'Py stores the language there.
+    """
+    annotated = dict(result)
+    reported_language = any(key in annotated for key in _LANGUAGE_RESULT_KEYS)
+    if language is not None and annotated.get("ok") and not reported_language:
+        note = (
+            "The dashboard did not report language support, so the requested "
+            f"language {language!r} was not confirmed. Upgrade the dashboard or "
+            "launch without a language."
+        )
+        annotated["requested_language"] = language
+        annotated["language_applied"] = False
+        message = annotated.get("message")
+        annotated["message"] = f"{message} {note}" if isinstance(message, str) and message else note
+    if language is not None and not annotated.get("ok"):
+        annotated["language_applied"] = False
+    if (
+        warning is not None
+        and annotated.get("ok")
+        and not annotated.get("already_running")
+        and reported_language
+    ):
+        annotated.setdefault("warning", warning)
+    return annotated
 
 
 def build_wrappers(context):
@@ -34,6 +73,7 @@ def build_wrappers(context):
         persistent: str | None = None,
         cleanup_on_stop: bool = True,
         timeout: float | None = None,
+        language: str | None = None,
         session: dict[str, Any] | None = None,
         cancel_event: threading.Event | None = None,
         home: str | None = None,
@@ -44,20 +84,38 @@ def build_wrappers(context):
             launch_game as launch_via_dashboard,
             stop_game as stop_via_dashboard,
         )
-        from ..save_isolation import apply_launch_isolation_defaults
+        from ..save_isolation import (
+            apply_launch_isolation_defaults,
+            configured_isolation_mode,
+            isolation_knobs_unset,
+        )
 
         canonical_editor = bool(editor)
         session_cfg = dict(session or {})
-        isolation_defaults = apply_launch_isolation_defaults(
-            savedir=session_cfg.get("savedir", savedir),
-            home=session_cfg.get("home", home),
-            persistent=session_cfg.get("persistent", persistent),
-            preferences=session_cfg.get("preferences", preferences),
-        )
+        knobs = {
+            "savedir": session_cfg.get("savedir", savedir),
+            "home": session_cfg.get("home", home),
+            "persistent": session_cfg.get("persistent", persistent),
+            "preferences": session_cfg.get("preferences", preferences),
+        }
+        isolation_defaults = apply_launch_isolation_defaults(**knobs)
         effective_savedir = isolation_defaults["savedir"]
         effective_home = isolation_defaults["home"]
         effective_persistent = isolation_defaults["persistent"]
         effective_preferences = isolation_defaults["preferences"]
+        # A relaunch (warp) with every knob auto is resolved by the process
+        # that owns the running game, so an isolated game's jump stays
+        # isolated there instead of being sent the player's saves from here.
+        # When this server's RENFORGE_ISOLATION already isolates, resolve here
+        # instead: the owner may strengthen isolation, never drop it.
+        owner_resolves = (
+            warp is not None
+            and isolation_knobs_unset(*knobs.values())
+            and configured_isolation_mode() != "temporary"
+        )
+        if owner_resolves:
+            effective_savedir = effective_home = None
+            effective_persistent = effective_preferences = None
         effective_cleanup = (
             session_cfg["cleanup_on_stop"]
             if isinstance(session_cfg.get("cleanup_on_stop"), bool)
@@ -82,6 +140,7 @@ def build_wrappers(context):
             home=effective_home,
             preferences=effective_preferences,
             start_label=start_label,
+            language=language,
         )
         if delegated is not None:
             if cancel_event is not None and cancel_event.is_set():
@@ -107,7 +166,20 @@ def build_wrappers(context):
                         "launch_cancel_requested": True,
                     }
                 return live.cancelled_launch_result(phase="starting_renpy")
-            return delegated
+            warning_savedir = effective_savedir
+            if owner_resolves:
+                # The dashboard chose; its isolation report says what it chose.
+                reported = delegated.get("isolation")
+                warning_savedir = (
+                    reported.get("savedir_mode")
+                    if isinstance(reported, dict) and reported.get("savedir_mode")
+                    else isolation_defaults["savedir"]
+                )
+            warning = live.language_persistence_warning(
+                language,
+                warning_savedir if isinstance(warning_savedir, str) else None,
+            )
+            return _annotate_language_result(delegated, language, warning)
         if cancel_event is not None and cancel_event.is_set():
             stopped = live.stop_external_game(project_path)
             if not stopped.get("ok"):
@@ -128,6 +200,7 @@ def build_wrappers(context):
             persistent=effective_persistent,
             cleanup_on_stop=bool(effective_cleanup),
             timeout=timeout,
+            language=language,
             session=session,
             cancel_event=cancel_event,
             home=effective_home,
@@ -151,7 +224,13 @@ def build_wrappers(context):
         return delegated if delegated is not None else live.launch_status(project_path)
 
 
-    def _start_launch(project_path: str, **kwargs: Any) -> dict:
+    def _start_launch(project_path: str, *, require_isolated: bool = False, **kwargs: Any) -> dict:
+        """Start (or join) a launch in the background; ``kwargs`` go to the launch.
+
+        ``require_isolated`` refuses, before anything starts, a launch whose
+        saves or HOME would resolve outside RenForge's own folders: a launch
+        the policy let through on the promise that it is isolated.
+        """
         requested_editor = bool(kwargs.get("editor", True))
         kwargs["editor"] = requested_editor
 
@@ -163,8 +242,21 @@ def build_wrappers(context):
             )
 
         requirements = live.launch_requirements(
-            project_path, **{field: kwargs.get(field) for field in ("savedir", "home", "persistent", "preferences")})
-        return live.start_launch(project_path, _launch, editor=requested_editor, requirements=requirements)
+            project_path,
+            **{field: kwargs.get(field) for field in ("warp", "savedir", "home", "persistent", "preferences")})
+        if require_isolated and not requirements["isolated"]:
+            message = ("This launch would keep its saves or HOME outside RenForge's own folders (for example, "
+                       "the state folder's saves folder is a link to another folder), so it would not be "
+                       "isolated. Remove the link and launch again.")
+            return {"ok": False, "ready": False, "code": "SESSION_NOT_ISOLATED",
+                    "phase": "validating_session_mode", "message": message, "error": message}
+        return live.start_launch(
+            project_path,
+            _launch,
+            editor=requested_editor,
+            language=kwargs.get("language"),
+            requirements=requirements,
+        )
 
 
     def renforge_launch(
@@ -180,6 +272,7 @@ def build_wrappers(context):
         timeout: float = 0,
         home: str = "auto",
         preferences: str = "auto",
+        language: str | None = None,
         authorize: bool = False,
     ) -> dict:
         """Launch or reuse a game with the Live Editor enabled by default.
@@ -195,14 +288,26 @@ def build_wrappers(context):
         The call waits at most 20 seconds for readiness, then returns
         ``status="starting"`` while startup continues in the background. Poll
         ``renforge_launch_status`` until it reports ``ready`` or ``failed``.
-        display/audio default to auto. Saves, preferences, and HOME default to
-        isolated temporary locations so this session does not read or write the
-        user's normal Ren'Py state. The ready payload includes ``session_id``
-        and an ``isolation`` object. Pass savedir='existing' (and home='existing'
-        if needed) to use the user's files, or set RENFORGE_ISOLATION=existing
-        as a server-wide default; that requires authorize=true when
-        RENFORGE_POLICY=enforce. timeout controls the background startup
-        deadline, not the MCP call (default 180 s, or RENFORGE_STARTUP_TIMEOUT).
+        display/audio default to auto. Saves and HOME default to the user's own,
+        as before; pass savedir='temporary' (or set RENFORGE_ISOLATION=temporary
+        server-wide) to isolate saves, persistent data, preferences, and HOME in
+        a disposable session folder. The ready payload includes ``session_id``
+        and an ``isolation`` object. Under RENFORGE_POLICY=enforce a launch
+        needs authorize=true unless its saves and HOME both stay in
+        RenForge's own folders (savedir='temporary' with home omitted or
+        'temporary', or state-folder paths), so by default one with no
+        isolation knobs needs it; pass savedir='temporary' instead. The rule
+        is stated once in tool_definitions._LAUNCH_POLICY. timeout controls the
+        background startup deadline, not the MCP call (default 180 s, or
+        RENFORGE_STARTUP_TIMEOUT).
+        ``language`` sets ``RENPY_LANGUAGE`` for a fresh game process. Ren'Py
+        persists it as ``preferences.language``, so this overrides the stored
+        preference, not just one session; for verification use
+        ``savedir="temporary"`` (and ``persistent="empty"``, which needs an
+        isolated savedir) or restore the language afterward. It cannot change an
+        already-running session. Only this tool accepts ``language``: a later
+        ``renforge_jump``/``renforge_new_game`` or dashboard Warp relaunch
+        starts without it and returns to the stored preference.
         """
         kwargs: dict[str, Any] = {
             "version": version,
@@ -218,6 +323,8 @@ def build_wrappers(context):
         }
         if timeout and timeout > 0:
             kwargs["timeout"] = float(timeout)
+        if language is not None:
+            kwargs["language"] = language
         return _log_tool_call(
             name="renforge_launch",
             params={
@@ -233,6 +340,7 @@ def build_wrappers(context):
                 "timeout": timeout,
                 "home": home,
                 "preferences": preferences,
+                "language": language,
                 "authorize": authorize,
             },
             project_root=project_path,
@@ -266,8 +374,10 @@ def build_wrappers(context):
     ) -> dict:
         """Restart at a label or file:line; poll launch status when still starting.
 
-        Isolation knobs match ``renforge_launch``. Exposing the user save tree
-        requires authorize=true when RENFORGE_POLICY=enforce.
+        Isolation knobs and the RENFORGE_POLICY=enforce rule match
+        ``renforge_launch``; the policy judges these knobs, not the game
+        being replaced, so with no knobs this needs authorize=true unless
+        RENFORGE_ISOLATION=temporary. Pass savedir='temporary' instead.
         """
         from ..navigation import resolve_warp_target
 
@@ -315,8 +425,10 @@ def build_wrappers(context):
     ) -> dict:
         """Start at the ``start`` label; poll launch status when still starting.
 
-        Isolation knobs match ``renforge_launch``. Exposing the user save tree
-        requires authorize=true when RENFORGE_POLICY=enforce.
+        Isolation knobs and the RENFORGE_POLICY=enforce rule match
+        ``renforge_launch``; the policy judges these knobs, not the game
+        being replaced, so with no knobs this needs authorize=true unless
+        RENFORGE_ISOLATION=temporary. Pass savedir='temporary' instead.
         """
         from ..navigation import resolve_warp_target
 
@@ -366,12 +478,18 @@ def build_wrappers(context):
 
     def renforge_session(project_path: str, action: str, slot: str | None = None,
                          label: str | None = None, authorize: bool = False) -> dict:
-        """Start, check, save, load, list saves of, or stop a play session.
+        """Start, check, save, load, list saves of, import a player save into, or stop a play session.
 
         The canonical lifecycle for agents. ``launch`` uses agent-mode
         defaults: saves and preferences in the project's RenForge state
         folder (never the player's, and kept across launches), an isolated
-        HOME, no Live Editor. Poll ``status`` until ready.
+        HOME, no Live Editor. Poll ``status`` until ready. ``save``, ``load``
+        and ``list`` refuse a game whose saves or HOME are outside RenForge's
+        own folders (``SESSION_NOT_ISOLATED``). ``import`` copies one of the
+        player's slots in, only reading the player's file; it refuses a running
+        game that keeps its saves somewhere RenForge does not own
+        (``SESSION_SAVES_ELSEWHERE``) or cannot say where it keeps them
+        (``SESSION_SAVES_UNKNOWN``).
         """
 
         def _session() -> dict:
@@ -382,15 +500,34 @@ def build_wrappers(context):
             if label is not None and not (isinstance(label, str) and label.strip()):
                 return {"ok": False, "error": "label must be a label name"}
             if action == "launch":
+                # One spelling from here on: ``~/project`` must take the same
+                # no-follow create below as the absolute path it names.
+                launch_path = os.path.expanduser(project_path)
                 # Saves stay apart from the player's own but survive relaunches.
-                from ..state import project_state_dir
-                saves = project_state_dir(project_path) / "saves"
+                saves = live.session_saves_dir(launch_path)
+                if Path(launch_path).is_dir():
+                    from ..state import ensure_project_state_dir
+                    from ..util.files import PrivatePathError
+
+                    # Made without following links, as import makes it: a link
+                    # anywhere on the way (even to another folder in the state
+                    # tree) must not choose where this launch saves.
+                    try:
+                        ensure_project_state_dir(launch_path, saves.name)
+                    except PrivatePathError as exc:
+                        message = (f"The session's saves folder in the RenForge state folder is a link or not a "
+                                   f"folder ({exc}), so the launch would not be isolated. Remove it and launch "
+                                   f"again.")
+                        return {"ok": False, "ready": False, "code": "SESSION_NOT_ISOLATED",
+                                "phase": "validating_session_mode", "message": message, "error": message}
                 # HOME is always the session's own, even when the server's
                 # RENFORGE_ISOLATION=existing would default it to the player's:
                 # the policy classifies this launch as isolated.
-                result = _start_launch(project_path, editor=False, savedir=str(saves), home="temporary",
-                                       start_label=label.strip() if label else None)
-                if label and isinstance(result, dict):
+                result = _start_launch(launch_path, editor=False, savedir=str(saves), home="temporary",
+                                       start_label=label.strip() if label else None, require_isolated=True)
+                # Only a game this call starts goes to the label: a reused one
+                # stays where it is, and a refused launch starts nothing.
+                if label and isinstance(result, dict) and result.get("ok") and not result.get("already_running"):
                     result["start_label"] = label.strip()
                 return result
             if action == "status":
@@ -401,17 +538,20 @@ def build_wrappers(context):
                 return {"ok": False, "error": f"{action} needs a slot name"}
             if action == "import":
                 return _import(slot.strip())
-            result = live.saves(project_path, action, slot=slot)
+            # Only the session's own saves: never a game on the player's saves.
+            result = live.saves(project_path, action, slot=slot, renforge_owned_only=True)
             if action == "load" and isinstance(result, dict) and result.get("ok"):
                 result = _after_load(result)
-            if action == "list" and isinstance(result, dict):
+            # A failed list (refused, or no game) lists nothing, so it says
+            # nothing about anyone's slots either.
+            if action == "list" and isinstance(result, dict) and result.get("ok"):
                 save_name = result.pop("save_directory", None)
                 if _may_read_player_saves():
                     result["player_slots"] = _player_slots(save_name)
                 else:
                     result["player_slots_hidden"] = (
-                        "the player's own slots are listed only with authorize=true "
-                        "under RENFORGE_POLICY=enforce")
+                        "slots are this session's own saves; the player's own slots are "
+                        "listed only with authorize=true under RENFORGE_POLICY=enforce")
             return result
 
         def _may_read_player_saves() -> bool:
@@ -436,45 +576,106 @@ def build_wrappers(context):
                     for item in listed.get("slots") or []]
 
         def _import(name: str) -> dict:
-            """Copy one of the player's slots into the session's saves; the player's file is only read."""
-            import re
+            """Copy one of the player's slots into the saves a load will read; the player's file is only read.
 
+            That is the running game's save folder when it reports one, else,
+            with no game running, the session's saves folder, which the next
+            launch uses. A game that does not answer (busy, still starting)
+            gets a retryable error, and one whose bridge cannot report its
+            folder is refused; nothing is copied for either.
+            """
+            from ..bridge.client import BridgeError
             from ..save_isolation import import_host_slots
-            from ..state import project_state_dir
+            from ..state import ensure_project_state_dir
 
-            saves = project_state_dir(project_path) / "saves"
-            pattern = re.compile(r"%s-[A-Za-z]{2}\d+\.save" % re.escape(name))
-            replaced = saves.is_dir() and any(pattern.fullmatch(entry.name) for entry in saves.iterdir())
-            result = import_host_slots(project_path, saves, slot=name, save_name=_save_name())
+            saves = live.session_saves_dir(project_path)
+            try:
+                running = live.running_game_savedir(project_path)
+            except live.SavedirUnknownError:
+                # A game is running but cannot say where it saves: the next
+                # launch's folder may be one it never loads, so copy nothing.
+                message = ("the running game's bridge cannot report where it keeps its saves, so a load could "
+                           "not be shown to read an imported slot; stop the game and launch with "
+                           "renforge_session(action=\"launch\"), which installs the current bridge, then import")
+                return {"ok": False, "code": "SESSION_SAVES_UNKNOWN", "files_touched": [],
+                        "message": message, "error": message}
+            except BridgeError as exc:
+                # Busy or still starting: where it saves is unknown, so nothing
+                # is copied anywhere a load might not read; the call may be retried.
+                return {"ok": False, "files_touched": [],
+                        "error": f"the running game did not say where it keeps its saves ({exc}); retry"}
+            elsewhere = running is not None and not _same_folder(Path(running), saves)
+            if elsewhere and not live.owns_session(project_path):
+                return _saves_elsewhere(running)
+            save_name = _save_name()
+            if elsewhere:
+                replaced = _has_slot(Path(running), name)
+                result = live.import_into_owned_session(project_path, slot=name, save_name=save_name)
+                if result.get("code") == "SAVE_IMPORT_NOT_ISOLATED":
+                    return _saves_elsewhere(running)
+            else:
+                replaced = _has_slot(saves, name)
+                # The import creates only the saves folder itself; the state
+                # folder is RenForge's own (and already resolved), so make it here.
+                ensure_project_state_dir(project_path)
+                result = import_host_slots(project_path, saves, slot=name, save_name=save_name)
+            touched = list(result.get("files_touched") or [])
             if not result.get("ok"):
-                return {"ok": False, "error": f"the player has no save slot {name!r}; list shows player_slots"}
-            return {"ok": True, "slot": name, "replaced": replaced,
+                if result.get("code") in (None, "NO_MATCHING_SAVE_SLOTS"):
+                    return {"ok": False, "code": "NO_MATCHING_SAVE_SLOTS", "files_touched": touched,
+                            "error": f"the player has no save slot {name!r}; list shows player_slots"}
+                return {**result, "files_touched": touched}
+            return {"ok": True, "slot": name, "replaced": replaced, "files_touched": touched,
                     "next": ("load this slot to play from it. Ren'Py asks whether to trust a save made on "
                              "another device: choose Yes for the save, then No for the device, which loads "
                              "this save without trusting others.")}
+
+        def _saves_elsewhere(savedir: str) -> dict:
+            message = (f"the running game keeps its saves in {savedir}, which this server did not create, so a "
+                       "load could not read an imported slot; stop the game and launch with "
+                       "renforge_session(action=\"launch\"), then import")
+            return {"ok": False, "code": "SESSION_SAVES_ELSEWHERE", "files_touched": [],
+                    "message": message, "error": message}
+
+        def _has_slot(folder: Path, name: str) -> bool:
+            """Whether *folder* already holds a save file of slot *name*."""
+            from ..save_isolation import SLOT_FILE_RE
+
+            try:
+                entries = list(folder.iterdir())
+            except OSError:
+                return False
+            return any((match := SLOT_FILE_RE.match(entry.name)) is not None
+                       and match["slot"] == name and not match["json"] for entry in entries)
+
+        def _same_folder(first: Path, second: Path) -> bool:
+            try:
+                return first.resolve() == second.resolve()
+            except OSError:
+                return first == second
 
         def _after_load(result: dict) -> dict:
             """Return the restored game's observation, so the next act can use it.
 
             The bridge replies before the engine has restarted into the save, so
-            its ``restored_label`` names the label from before the load.
+            its ``restored_label`` names the label from before the load. Only a
+            stable observation with an id is attached; otherwise ``next`` says
+            to observe again.
             """
-            import time
-
             from ..compact import compact_observation
 
             result.pop("restored_label", None)
             result.pop("restarting", None)
             result.pop("ended_interaction", None)
-            observation = None
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                observation = live.observe(project_path, screenshot=False)
-                if isinstance(observation, dict) and observation.get("stable") and observation.get("observation_id"):
-                    break
-                time.sleep(0.25)
-            if isinstance(observation, dict) and observation.get("observation_id"):
+            observation = live.wait_for_stable_observation(project_path, require_id=True)
+            # At the wait's timeout it returns the last observation as it was,
+            # which may be unstable: never offer that one for renforge_act.
+            if (isinstance(observation, dict) and observation.get("stable") is True
+                    and observation.get("observation_id")):
                 result["observation"] = compact_observation(observation)
+            else:
+                result["next"] = ("the save loaded, but the restored game had not settled when the wait ended; "
+                                  "call renforge_observe before renforge_act, and do not load the save again")
             return result
 
         return _log_tool_call(

@@ -58,6 +58,7 @@ EXPECTED_TOOLS = {
     "renforge_inspect_project",
     "renforge_scan_project",
     "renforge_parse_lint",
+    "renforge_validate",
     "renforge_inspect_image",
     "renforge_find_references",
     # live game control
@@ -253,7 +254,7 @@ def test_create_app_registers_expected_tools() -> None:
 
     tools = asyncio.run(app.list_tools())
     names = {tool.name for tool in tools if tool.name.startswith("renforge_")}
-    assert len(EXPECTED_TOOLS) == 60
+    assert len(EXPECTED_TOOLS) == 61
     assert EXPECTED_TOOLS == set(TOOL_DEFINITIONS) == names
     instructions = getattr(app, "instructions", "") or ""
     assert "renforge_info" in instructions or not hasattr(app, "instructions")
@@ -285,6 +286,24 @@ def test_session_load_returns_the_restored_observation(tmp_path, monkeypatch) ->
     payload = json.loads(next(block.text for block in asyncio.run(_call()).content if block.type == "text"))
     assert payload == {"ok": True, "slot": "a",
                        "observation": {"stable": True, "observation_id": "obs_2", "label": "loaded", "controls": []}}
+
+
+
+def test_session_load_does_not_offer_an_unsettled_observation_to_act_on(tmp_path, monkeypatch) -> None:
+    """At the wait's timeout the last observation may be unstable; the load stands, the observation does not."""
+    from renforge.tools import live
+
+    monkeypatch.setattr(live, "saves", lambda *a, **k: {"ok": True, "slot": "a", "restarting": True})
+    monkeypatch.setattr(live, "wait_for_stable_observation", lambda *a, **k: {
+        "stable": False, "unstable_reason": "transition", "observation_id": "obs_9", "controls": []})
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    loaded = app.tools["renforge_session"](str(tmp_path), "load", slot="a", authorize=True)
+
+    assert loaded["ok"] is True and loaded["slot"] == "a"
+    assert "observation" not in loaded
+    assert "renforge_observe" in loaded["next"] and "not load" in loaded["next"]
 
 
 def test_session_lists_and_imports_the_players_slots(tmp_path, monkeypatch) -> None:
@@ -329,6 +348,335 @@ def test_session_lists_and_imports_the_players_slots(tmp_path, monkeypatch) -> N
     assert asyncio.run(_call(action="list", authorize=True))["player_slots"] == [{"name": "1-1"}]
     assert asyncio.run(_call(action="import", slot="1-1"))["code"] == "POLICY_DENIED"
     assert asyncio.run(_call(action="import", slot="1-1", authorize=True))["ok"] is True
+
+
+class _SessionSavesClient:
+    """A running game's bridge: where it keeps its saves, and one slot in them."""
+
+    def __init__(self, info: dict) -> None:
+        self.info = info
+        self.calls: list[str] = []
+
+    def session_info(self) -> dict:
+        return dict(self.info)
+
+    def list_slots(self, regexp=None) -> dict:
+        self.calls.append("list")
+        return {"ok": True, "slots": [{"name": "player-slot"}], "save_directory": "a-game"}
+
+    def save_slot(self, slot, extra_info="") -> dict:
+        self.calls.append("save")
+        return {"ok": True, "slot": slot}
+
+    def load_slot(self, slot) -> dict:
+        self.calls.append("load")
+        return {"ok": True, "slot": slot}
+
+
+def test_session_import_goes_where_the_running_game_keeps_its_saves(tmp_path, monkeypatch) -> None:
+    """A load reads the running game's own save folder, so an import must land there."""
+    import contextlib
+    import tempfile
+    from types import SimpleNamespace
+
+    from renforge.save_isolation import host_renpy_root
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    player = host_renpy_root(home=home) / "a-game"
+    player.mkdir(parents=True)
+    (player / "1-1-LT1.save").write_bytes(b"PLAYER")
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    session_root = tmp_path / "renforge-session-x"
+    session_saves = session_root / "saves"
+    session_saves.mkdir(parents=True)
+    client = _SessionSavesClient({"eval_enabled": True, "savedir": str(session_saves),
+                                  "home": str(session_root / "home"), "save_locations": [str(session_saves)]})
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: client))
+    app = _ToolRegistry()
+    _register_tools(app)
+    session_tool = app.tools["renforge_session"]
+
+    # A game this server did not start: its folder is not one it may write into.
+    refused = session_tool(str(project), "import", slot="1-1")
+    assert refused["ok"] is False and refused["code"] == "SESSION_SAVES_ELSEWHERE"
+    assert not (project_state_dir(project) / "saves").exists()
+
+    class _OwnedTemporary:
+        temporary_savedir = session_saves
+        isolation = SimpleNamespace(savedir_mode="temporary", session_root=session_root)
+
+        @contextlib.contextmanager
+        def holding_open(self):
+            yield True
+
+    monkeypatch.setitem(live._SESSIONS, live._key(project), _OwnedTemporary())
+    imported = session_tool(str(project), "import", slot="1-1")
+    assert imported["ok"] is True and imported["slot"] == "1-1" and imported["replaced"] is False
+    assert (session_saves / "1-1-LT1.save").read_bytes() == b"PLAYER"
+    assert not (project_state_dir(project) / "saves").exists()
+    assert session_tool(str(project), "import", slot="1-1")["replaced"] is True
+
+
+def test_session_import_never_guesses_the_folder_when_the_bridge_does_not_answer(tmp_path, monkeypatch) -> None:
+    """A busy bridge is not 'no game': the import must not land where the running game never loads it."""
+    import contextlib
+    import tempfile
+    from types import SimpleNamespace
+
+    from renforge.bridge.client import BridgeNotRunningError
+    from renforge.save_isolation import host_renpy_root
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    player = host_renpy_root(home=home) / "a-game"
+    player.mkdir(parents=True)
+    (player / "1-1-LT1.save").write_bytes(b"PLAYER")
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    (project / "game" / "options.rpy").write_text('define config.save_directory = "a-game"\n', encoding="utf-8")
+    busy = _UnansweringSessionClient("bridge request timed out")
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: busy))
+    app = _ToolRegistry()
+    _register_tools(app)
+    session_tool = app.tools["renforge_session"]
+    state_saves = project_state_dir(project) / "saves"
+
+    # A game this server did not start, and that does not answer: retry, write nothing.
+    refused = session_tool(str(project), "import", slot="1-1")
+    assert refused["ok"] is False and refused["files_touched"] == [], refused
+    assert "timed out" in refused["error"]
+    assert not state_saves.exists()
+
+    # A game still starting has not said where it saves either.
+    def starting(cls, root, **_k):
+        raise BridgeNotRunningError("the game is still starting", code="GAME_STARTING")
+
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(starting))
+    assert session_tool(str(project), "import", slot="1-1")["ok"] is False
+    assert not state_saves.exists()
+
+    # A game this server launched with savedir='temporary': its folder is known here.
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: busy))
+    session_root = tmp_path / "renforge-session-x"
+    session_saves = session_root / "saves"
+    session_saves.mkdir(parents=True)
+
+    class _OwnedTemporary:
+        temporary_savedir = session_saves
+        isolation = SimpleNamespace(savedir_mode="temporary", session_root=session_root)
+
+        @contextlib.contextmanager
+        def holding_open(self):
+            yield True
+
+    monkeypatch.setitem(live._SESSIONS, live._key(project), _OwnedTemporary())
+    imported = session_tool(str(project), "import", slot="1-1")
+    assert imported["ok"] is True, imported
+    assert (session_saves / "1-1-LT1.save").read_bytes() == b"PLAYER"
+    assert not state_saves.exists()
+
+    # No game at all: the import goes to the session's saves, which the next launch uses.
+    monkeypatch.delitem(live._SESSIONS, live._key(project))
+
+    def not_running(cls, root, **_k):
+        raise BridgeNotRunningError("no game", code="NO_RUNNING_GAME")
+
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(not_running))
+    assert session_tool(str(project), "import", slot="1-1")["ok"] is True
+    assert (state_saves / "1-1-LT1.save").read_bytes() == b"PLAYER"
+
+
+@pytest.mark.parametrize("policy", ["off", "enforce"])
+def test_session_saves_never_act_on_a_game_using_the_players_saves(tmp_path, monkeypatch, policy) -> None:
+    """renforge_session promises the state folder, never the player's saves."""
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    from fastmcp import Client
+
+    from renforge.save_isolation import host_renpy_root
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("RENFORGE_POLICY", policy)
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    player_saves = host_renpy_root(home=home) / "a-game"
+    player_saves.mkdir(parents=True)
+    client = _SessionSavesClient({"eval_enabled": True, "savedir": str(player_saves), "home": str(home),
+                                  "save_locations": [str(player_saves)]})
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: client))
+
+    async def _call(**args):
+        async with Client(create_app()) as mcp:
+            result = await mcp.call_tool("renforge_session", {"project_path": str(project), **args})
+        return next(block.text for block in result.content if block.type == "text")
+
+    for args in ({"action": "save", "slot": "x"}, {"action": "load", "slot": "x", "authorize": True},
+                 {"action": "list"}):
+        text = asyncio.run(_call(**args))
+        refused = json.loads(text)
+        assert refused["code"] == "SESSION_NOT_ISOLATED", args
+        assert "player-slot" not in text
+        # A refusal lists nothing, so it says nothing about anyone's slots.
+        assert "player_slots" not in refused and "player_slots_hidden" not in refused
+    assert client.calls == []
+
+    # The same game with its saves in the state folder and a session HOME is the session's own.
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    state_saves = project_state_dir(project) / "saves"
+    session_home = tmp_path / "renforge-session-x" / "home"
+    for path in (state_saves, session_home):
+        path.mkdir(parents=True)
+    client.info = {"eval_enabled": True, "savedir": str(state_saves), "home": str(session_home),
+                   "save_locations": [str(state_saves)]}
+    listed = json.loads(asyncio.run(_call(action="list")))
+    assert listed["ok"] is True and listed["slots"] == [{"name": "player-slot"}]
+    if policy == "enforce":
+        # The slots shown are the session's; the hidden ones are the player's.
+        assert "session's own" in listed["player_slots_hidden"] and "player_slots" not in listed
+    assert json.loads(asyncio.run(_call(action="save", slot="x")))["ok"] is True
+    assert client.calls == ["list", "save"]
+
+
+
+def test_session_import_refuses_a_running_game_that_cannot_say_where_it_saves(tmp_path, monkeypatch) -> None:
+    """A bridge without session_info is a running game, not 'no game': a load could not read the copy."""
+    import tempfile
+
+    from renforge.bridge.client import BridgeNotRunningError
+    from renforge.save_isolation import host_renpy_root
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    player = host_renpy_root(home=home) / "a-game"
+    player.mkdir(parents=True)
+    (player / "1-1-LT1.save").write_bytes(b"PLAYER")
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    (project / "game" / "options.rpy").write_text('define config.save_directory = "a-game"\n', encoding="utf-8")
+    old = _UnansweringSessionClient("unknown_command: session_info")
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: old))
+    app = _ToolRegistry()
+    _register_tools(app)
+    session_tool = app.tools["renforge_session"]
+    state_saves = project_state_dir(project) / "saves"
+
+    refused = session_tool(str(project), "import", slot="1-1")
+    assert refused["ok"] is False and refused["code"] == "SESSION_SAVES_UNKNOWN", refused
+    assert refused["files_touched"] == []
+    assert "stop" in refused["error"]
+    assert not state_saves.exists()
+
+    # A game that answers session_info without a save folder is running too.
+    no_folder = _SessionSavesClient({"eval_enabled": True, "savedir": None, "home": None})
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: no_folder))
+    refused = session_tool(str(project), "import", slot="1-1")
+    assert refused["ok"] is False and refused["code"] == "SESSION_SAVES_UNKNOWN", refused
+    assert not state_saves.exists()
+
+    # With no game running at all, the slot goes to the saves the next launch uses.
+    def no_game(cls, root, **_k):
+        raise BridgeNotRunningError("no game is running", code="NO_RUNNING_GAME")
+
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(no_game))
+    imported = session_tool(str(project), "import", slot="1-1")
+    assert imported["ok"] is True, imported
+    assert (state_saves / "1-1-LT1.save").read_bytes() == b"PLAYER"
+
+
+class _UnansweringSessionClient(_SessionSavesClient):
+    """A bridge whose session_info fails: busy main thread, or a bridge without the command."""
+
+    def __init__(self, error: str) -> None:
+        super().__init__({})
+        self.error = error
+
+    def session_info(self) -> dict:
+        from renforge.bridge.client import BridgeError
+
+        raise BridgeError(f"bridge error on 'session_info': {self.error}")
+
+
+@pytest.mark.parametrize("action", ["save", "load", "list"])
+def test_session_saves_pass_a_busy_bridge_through_as_a_retryable_error(tmp_path, monkeypatch, action) -> None:
+    """A busy game is not proof of the player's saves; telling the agent to relaunch would lose play state."""
+    from renforge.tools import live
+
+    (tmp_path / "game").mkdir()
+    busy = _UnansweringSessionClient("timeout_waiting_for_main_thread")
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: busy))
+    slot = None if action == "list" else "x"
+
+    result = live.saves(str(tmp_path), action, slot=slot, renforge_owned_only=True)
+
+    assert result["ok"] is False
+    assert result.get("code") != "SESSION_NOT_ISOLATED"
+    assert "timeout_waiting_for_main_thread" in result["error"]
+    assert busy.calls == []
+
+    # A bridge that has no session_info cannot say where it saves: refused.
+    old = _UnansweringSessionClient("unknown_command: session_info")
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: old))
+    assert live.saves(str(tmp_path), action, slot=slot, renforge_owned_only=True)["code"] == "SESSION_NOT_ISOLATED"
+    assert old.calls == []
+
+
+@pytest.mark.parametrize("slot", [
+    "/home/player/.renpy/a-game/1-1", "../../player/1-1", "sub/1-1", "sub\\1-1", "C:1-1",
+    "\\\\server\\share\\1-1", ".", "..", "1-1\x00",
+    # Windows stream syntax: a stream of the file "page", not a save file.
+    "page:stream", "1-1:$DATA",
+])
+@pytest.mark.parametrize("action", ["save", "load"])
+def test_save_and_load_refuse_a_slot_that_is_a_path(tmp_path, monkeypatch, slot, action) -> None:
+    """Ren'Py joins the slot onto its save folder, so a path slot would reach any folder, the player's included."""
+    import tempfile
+
+    from renforge.tools import live
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    # The session's own game: an ordinary slot name would be saved or loaded.
+    state_saves = project_state_dir(project) / "saves"
+    session_home = tmp_path / "renforge-session-x" / "home"
+    for path in (state_saves, session_home):
+        path.mkdir(parents=True)
+    client = _SessionSavesClient({"eval_enabled": True, "savedir": str(state_saves), "home": str(session_home),
+                                  "save_locations": [str(state_saves)]})
+    monkeypatch.setattr(live.BridgeClient, "from_project", classmethod(lambda cls, root, **_k: client))
+    monkeypatch.setattr(live, "wait_for_stable_observation", lambda *_a, **_k: {})
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    for result in (live.saves(str(project), action, slot=slot),
+                   live.saves(str(project), action, slot=slot, renforge_owned_only=True),
+                   app.tools["renforge_session"](str(project), action, slot=slot, authorize=True)):
+        assert result["ok"] is False and result["code"] == "SAVE_SLOT_INVALID", result
+    assert client.calls == []
+    assert live.saves(str(project), action, slot="quick-1", renforge_owned_only=True)["ok"] is True
 
 
 def test_live_tools_error_cleanly_without_a_running_game(tmp_path) -> None:
@@ -527,10 +875,40 @@ def test_launch_tool_defaults_editor_true(tmp_path, monkeypatch) -> None:
     assert calls["version"] == "stable"
     assert calls["warp"] is None
     assert calls["kwargs"]["editor"] is True
-    assert calls["kwargs"]["savedir"] == "temporary"
-    assert calls["kwargs"]["home"] == "temporary"
-    assert calls["kwargs"]["persistent"] == "empty"
-    assert calls["kwargs"]["preferences"] == "empty"
+    assert calls["kwargs"]["savedir"] == "existing"
+    assert calls["kwargs"]["home"] == "existing"
+    assert calls["kwargs"]["persistent"] == "existing"
+    assert calls["kwargs"]["preferences"] == "existing"
+
+
+def test_delegated_isolated_launch_forwards_language(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    from renforge import dashboard_client
+
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    calls = {}
+
+    def fake_dashboard_launch(_project_path, **kwargs):
+        calls.update(kwargs)
+        return {
+            "ok": True,
+            "ready": True,
+            "already_running": False,
+            "requested_language": kwargs.get("language"),
+            "active_language": kwargs.get("language"),
+            "language_applied": True,
+        }
+
+    monkeypatch.setattr(dashboard_client, "launch_game", fake_dashboard_launch)
+
+    app = _ToolRegistry()
+    _register_tools(app)
+    result = app.tools["renforge_launch"](str(tmp_path), savedir="temporary", language="japanese")
+
+    assert result["ok"] is True
+    assert calls["language"] == "japanese"
+    assert calls["savedir"] == "temporary" and calls["home"] == "temporary"
+    assert "warning" not in result
 
 
 def test_launch_tool_forwards_editor_mode_to_direct_launch(tmp_path, monkeypatch) -> None:
@@ -557,10 +935,10 @@ def test_launch_tool_forwards_editor_mode_to_direct_launch(tmp_path, monkeypatch
     assert calls["version"] == "stable"
     assert calls["warp"] is None
     assert calls["kwargs"]["editor"] is True
-    assert calls["kwargs"]["savedir"] == "temporary"
-    assert calls["kwargs"]["home"] == "temporary"
-    assert calls["kwargs"]["persistent"] == "empty"
-    assert calls["kwargs"]["preferences"] == "empty"
+    assert calls["kwargs"]["savedir"] == "existing"
+    assert calls["kwargs"]["home"] == "existing"
+    assert calls["kwargs"]["persistent"] == "existing"
+    assert calls["kwargs"]["preferences"] == "existing"
 
 
 def test_launch_tool_honors_editor_opt_out(tmp_path, monkeypatch) -> None:
@@ -725,7 +1103,7 @@ def test_stop_tool_falls_back_when_dashboard_is_unavailable(tmp_path, monkeypatc
 
     def fake_direct_stop(project_path: str):
         calls["project_path"] = project_path
-        return {"ok": True, "was_running": False}
+        return {"ok": True, "was_running": False, "files_deleted": []}
 
     monkeypatch.setattr(live, "stop_game", fake_direct_stop)
 
@@ -733,7 +1111,7 @@ def test_stop_tool_falls_back_when_dashboard_is_unavailable(tmp_path, monkeypatc
     _register_tools(app)
     result = app.tools["renforge_stop"](str(tmp_path))
 
-    assert result == {"ok": True, "was_running": False}
+    assert result == {"ok": True, "was_running": False, "files_deleted": []}
     assert calls == {"project_path": str(tmp_path)}
 
 
@@ -1005,7 +1383,7 @@ def test_saves_tool_dispatches_grouped_save_action(tmp_path, monkeypatch) -> Non
 
     calls = {}
 
-    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None, slots=None):
+    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None, slots=None, pattern=None):
         calls.update(
             project_path=project_path,
             action=action,
@@ -1044,6 +1422,33 @@ def test_saves_tool_dispatches_grouped_save_action(tmp_path, monkeypatch) -> Non
     }
 
 
+@pytest.mark.parametrize("action", ["list_user", "import"])
+def test_saves_tool_forwards_pattern(tmp_path, monkeypatch, action) -> None:
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    from fastmcp import Client
+
+    from renforge.tools import live
+
+    calls = {}
+
+    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None, slots=None, pattern=None):
+        calls.update(action=action, pattern=pattern, regexp=regexp)
+        return {"ok": True}
+
+    monkeypatch.setattr(live, "saves", fake_saves)
+
+    async def _call():
+        async with Client(create_app()) as client:
+            return await client.call_tool(
+                "renforge_saves",
+                {"project_path": str(tmp_path), "action": action, "pattern": "1-*"},
+            )
+
+    asyncio.run(_call())
+
+    assert calls == {"action": action, "pattern": "1-*", "regexp": None}
+
+
 def test_saves_tool_validates_action_and_required_slot(tmp_path) -> None:
     pytest.importorskip("fastmcp", reason="fastmcp not installed")
     from fastmcp import Client
@@ -1080,7 +1485,7 @@ def test_saves_tool_dispatches_load_and_list_actions(tmp_path, monkeypatch) -> N
 
     calls = []
 
-    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None, slots=None):
+    def fake_saves(project_path, action, slot=None, extra_info=None, regexp=None, slots=None, pattern=None):
         calls.append(
             {
                 "project_path": project_path,
@@ -1149,6 +1554,7 @@ def test_saves_tool_is_listed_with_grouped_actions() -> None:
         "extra_info",
         "regexp",
         "slots",
+        "pattern",
         "authorize",
     }
 
@@ -1944,7 +2350,7 @@ def test_session_launch_keeps_its_own_home_even_when_isolation_defaults_to_exist
     captured: dict = {}
     monkeypatch.setattr(live, "launch_game", lambda *a, **k: captured.update(k) or {"ok": True})
 
-    def fake_start_launch(project_path, launch, editor=True, requirements=None):
+    def fake_start_launch(project_path, launch, editor=True, requirements=None, **_kwargs):
         return launch(Path(project_path), threading.Event())
 
     monkeypatch.setattr(live, "start_launch", fake_start_launch)
@@ -1956,3 +2362,330 @@ def test_session_launch_keeps_its_own_home_even_when_isolation_defaults_to_exist
     asyncio.run(_call())
     assert captured["home"] == "temporary"
     assert captured["editor"] is False
+
+
+def test_session_launch_refuses_a_saves_folder_linked_out_of_the_state_folder(tmp_path, monkeypatch) -> None:
+    """The policy lets a session launch through as isolated, so a planted link must not start it on the player's saves."""
+    import os
+
+    from renforge.save_isolation import host_renpy_root
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    player = host_renpy_root(home=home) / "a-game"
+    player.mkdir(parents=True)
+    state_saves = project_state_dir(project) / "saves"
+    state_saves.parent.mkdir(parents=True)
+    try:
+        os.symlink(player, state_saves, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    started: list = []
+    monkeypatch.setattr(live, "start_launch", lambda *a, **k: started.append(k) or {"ok": True, "ready": True})
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    refused = app.tools["renforge_session"](str(project), "launch")
+
+    assert refused["ok"] is False and refused["code"] == "SESSION_NOT_ISOLATED", refused
+    assert started == []
+
+    # The same launch on the state folder's own saves goes ahead.
+    state_saves.unlink()
+    assert app.tools["renforge_session"](str(project), "launch")["ok"] is True
+    assert len(started) == 1 and started[0]["requirements"]["isolated"] is True
+    assert state_saves.is_dir() and not state_saves.is_symlink()
+
+
+@pytest.mark.parametrize("spelling", ["absolute", "tilde"])
+def test_session_launch_refuses_a_saves_folder_linked_inside_the_state_folder(
+        tmp_path, monkeypatch, spelling) -> None:
+    """A link to another folder of the state tree is still a link: it must not choose where the session saves.
+
+    ``~/project`` names the same folder as its absolute spelling, so it must
+    take the same no-follow create.
+    """
+    import os
+
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    project = home / "project"
+    (project / "game").mkdir(parents=True)
+    other = tmp_path / "state" / "projects" / "another-project" / "saves"
+    other.mkdir(parents=True)
+    state_saves = project_state_dir(project) / "saves"
+    state_saves.parent.mkdir(parents=True)
+    try:
+        os.symlink(other, state_saves, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    started: list = []
+    monkeypatch.setattr(live, "start_launch", lambda *a, **k: started.append(k) or {"ok": True, "ready": True})
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    refused = app.tools["renforge_session"]("~/project" if spelling == "tilde" else str(project), "launch")
+
+    assert refused["ok"] is False and refused["code"] == "SESSION_NOT_ISOLATED", refused
+    assert started == []
+
+
+def test_session_launch_isolation_check_refuses_a_link_to_the_player_saves_on_its_own(tmp_path, monkeypatch) -> None:
+    """Without the no-follow create, the launch's own isolation check still refuses a link to the player's saves.
+
+    The create runs first and refuses the same link, so it is turned off here
+    to keep ``require_isolated`` covered.
+    """
+    import os
+
+    from renforge import state
+    from renforge.save_isolation import host_renpy_root
+    from renforge.tools import live
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("RENFORGE_POLICY", "enforce")
+    project = tmp_path / "project"
+    (project / "game").mkdir(parents=True)
+    player = host_renpy_root(home=home) / "a-game"
+    player.mkdir(parents=True)
+    state_saves = project_state_dir(project) / "saves"
+    state_saves.parent.mkdir(parents=True)
+    try:
+        os.symlink(player, state_saves, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    monkeypatch.setattr(state, "ensure_project_state_dir", lambda project_root, *parts: state_saves)
+    started: list = []
+    monkeypatch.setattr(live, "start_launch", lambda *a, **k: started.append(k) or {"ok": True, "ready": True})
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    refused = app.tools["renforge_session"](str(project), "launch")
+
+    assert refused["ok"] is False and refused["code"] == "SESSION_NOT_ISOLATED", refused
+    assert "isolated" in refused["message"] and started == []
+
+
+@pytest.mark.parametrize(("launched", "says_label"), [
+    ({"ok": True, "ready": True, "already_running": False}, True),
+    ({"ok": True, "ready": False, "status": "starting"}, True),
+    ({"ok": True, "ready": True, "already_running": True}, False),
+    ({"ok": False, "code": "LAUNCH_IN_PROGRESS"}, False),
+])
+def test_session_launch_reports_a_start_label_only_for_a_game_it_started(
+        tmp_path, monkeypatch, launched, says_label) -> None:
+    """A reused or refused launch never went to the label."""
+    from renforge.tools import live
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(live, "start_launch", lambda *_a, **_k: dict(launched))
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    result = app.tools["renforge_session"](str(tmp_path), "launch", label="chapter_two")
+
+    assert ("start_label" in result) is says_label
+
+
+def _saves_tool(monkeypatch, import_result):
+    from renforge import dashboard_client
+    from renforge.tools import live
+
+    calls = {"import_saves": [], "saves": []}
+
+    def fake_import(project_path, **kwargs):
+        calls["import_saves"].append((project_path, kwargs))
+        return import_result
+
+    def fake_saves(project_path, action, **kwargs):
+        calls["saves"].append((project_path, action, kwargs))
+        return {"ok": False, "code": "NO_ISOLATED_SESSION", "local": True}
+
+    monkeypatch.setattr(dashboard_client, "import_saves", fake_import)
+    monkeypatch.setattr(live, "saves", fake_saves)
+    app = _ToolRegistry()
+    _register_tools(app)
+    return app.tools["renforge_saves"], calls, live
+
+
+def test_saves_import_delegates_when_this_process_owns_no_session(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    answer = {"ok": True, "via": "dashboard"}
+    tool, calls, _live = _saves_tool(monkeypatch, answer)
+
+    result = tool(str(tmp_path), "import", slots=["1-1"])
+
+    assert result == answer
+    assert calls["import_saves"] == [
+        (str(tmp_path), {"slot": None, "slots": ["1-1"], "pattern": None})
+    ]
+    assert calls["saves"] == []
+
+
+def test_saves_import_uses_the_owned_session_before_the_dashboard(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    tool, calls, live = _saves_tool(monkeypatch, {"ok": True, "via": "dashboard"})
+    monkeypatch.setattr(live, "_SESSIONS", {live._key(tmp_path): object()})
+
+    result = tool(str(tmp_path), "import", slots=["1-1"])
+
+    assert result["local"] is True
+    assert calls["import_saves"] == []
+    assert [c[1] for c in calls["saves"]] == ["import"]
+
+
+def test_saves_import_without_dashboard_reports_no_isolated_session(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    from renforge.tools import live as real_live
+
+    original_saves = real_live.saves
+    tool, calls, live = _saves_tool(monkeypatch, None)
+    monkeypatch.setattr(live, "saves", original_saves)
+    monkeypatch.setattr(live, "_SESSIONS", {})
+
+    result = tool(str(tmp_path), "import", slots=["1-1"])
+
+    assert len(calls["import_saves"]) == 1
+    assert result["ok"] is False
+    assert result["code"] == "NO_ISOLATED_SESSION"
+
+
+def test_saves_import_dashboard_answer_is_final(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    answer = {"ok": False, "code": "NO_ISOLATED_SESSION", "via": "dashboard"}
+    tool, calls, _live = _saves_tool(monkeypatch, answer)
+
+    result = tool(str(tmp_path), "import", slots=["1-1"])
+
+    assert result == answer
+    assert calls["saves"] == []
+
+
+def test_saves_import_extra_info_never_reaches_the_dashboard(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    from renforge.tools import live as real_live
+
+    original_saves = real_live.saves
+    tool, calls, live = _saves_tool(monkeypatch, {"ok": True, "via": "dashboard"})
+    monkeypatch.setattr(live, "saves", original_saves)
+
+    result = tool(str(tmp_path), "import", slots=["1-1"], extra_info="x")
+
+    assert result["ok"] is False
+    assert result["error"] == "extra_info is only valid for action 'save'"
+    assert calls["import_saves"] == []
+    for action in ("load", "list", "list_user", "import"):
+        slot = "1-1" if action in ("load", "import") else None
+        error = real_live.saves_argument_error(
+            action, slot=slot, extra_info="x", regexp=None, slots=None, pattern=None
+        )
+        expected = {"ok": False, "error": "extra_info is only valid for action 'save'"}
+        if action == "import":
+            expected["code"] = "SAVE_IMPORT_INVALID"
+        assert error == expected, action
+
+
+def test_saves_import_argument_errors_never_reach_the_dashboard(tmp_path, monkeypatch) -> None:
+    (tmp_path / "game").mkdir()
+    from renforge.tools import live as real_live
+
+    original_saves = real_live.saves
+    tool, calls, live = _saves_tool(monkeypatch, {"ok": True, "via": "dashboard"})
+    monkeypatch.setattr(live, "saves", original_saves)
+
+    result = tool(str(tmp_path), "import", regexp="x")
+
+    assert result["ok"] is False
+    assert "pattern" in result["error"] and "regexp" in result["error"]
+    assert calls["import_saves"] == []
+
+
+@pytest.mark.parametrize("tool", ["renforge_jump", "renforge_new_game"])
+def test_relaunch_tools_leave_unset_isolation_to_the_owning_process(
+    tmp_path, monkeypatch, tool
+) -> None:
+    # The process that owns the running game decides whether an all-auto
+    # jump inherits its isolation, so the wrapper must not resolve "auto"
+    # to the player's saves first, locally or for a dashboard.
+    from renforge import dashboard_client
+    from renforge.tools import live
+
+    game = tmp_path / "game"
+    game.mkdir()
+    (game / "script.rpy").write_text("label start:\n    return\nlabel other:\n    return\n", encoding="utf-8")
+    knobs = ("savedir", "home", "persistent", "preferences")
+    arguments = {"target": "other"} if tool == "renforge_jump" else {}
+
+    seen: dict = {}
+    monkeypatch.setattr(dashboard_client, "launch_game", lambda *_a, **_k: None)
+
+    def fake_launch(project_path: str, version: str = "stable", warp: str | None = None, **kwargs):
+        seen["local"] = {k: kwargs.get(k) for k in knobs}
+        return {"ok": True, "ready": True, "already_running": False, "editor": True}
+
+    monkeypatch.setattr(live, "launch_game", fake_launch)
+    app = _ToolRegistry()
+    _register_tools(app)
+    assert app.tools[tool](str(tmp_path), **arguments)["ok"] is True
+    assert seen["local"] == dict.fromkeys(knobs)
+
+    def fake_dashboard(project_path: str, **kwargs):
+        seen["dashboard"] = {k: kwargs.get(k) for k in knobs}
+        return {"ok": True, "ready": True, "via": "dashboard", "editor": True}
+
+    monkeypatch.setattr(dashboard_client, "launch_game", fake_dashboard)
+    assert app.tools[tool](str(tmp_path), **arguments)["ok"] is True
+    assert seen["dashboard"] == dict.fromkeys(knobs)
+
+    explicit = app.tools[tool](str(tmp_path), savedir="temporary", **arguments)
+    assert explicit["ok"] is True
+    assert seen["dashboard"] == {
+        "savedir": "temporary", "home": "temporary", "persistent": "empty", "preferences": "empty"
+    }
+
+
+@pytest.mark.parametrize("tool", ["renforge_jump", "renforge_new_game"])
+def test_relaunch_tools_keep_this_servers_isolation_for_a_dashboard(tmp_path, monkeypatch, tool) -> None:
+    # With RENFORGE_ISOLATION=temporary on this server, an all-auto relaunch
+    # must stay isolated even when a dashboard started without it owns the
+    # game: the owner may only strengthen isolation, never drop it.
+    from renforge import dashboard_client
+    from renforge.tools import live
+
+    game = tmp_path / "game"
+    game.mkdir()
+    (game / "script.rpy").write_text("label start:\n    return\nlabel other:\n    return\n", encoding="utf-8")
+    knobs = ("savedir", "home", "persistent", "preferences")
+    arguments = {"target": "other"} if tool == "renforge_jump" else {}
+    monkeypatch.setenv("RENFORGE_ISOLATION", "temporary")
+    seen: dict = {}
+
+    def fake_dashboard(project_path: str, **kwargs):
+        seen["dashboard"] = {k: kwargs.get(k) for k in knobs}
+        return {"ok": True, "ready": True, "via": "dashboard", "editor": True}
+
+    monkeypatch.setattr(dashboard_client, "launch_game", fake_dashboard)
+    monkeypatch.setattr(live, "launch_game", lambda *_a, **_k: pytest.fail("ran locally"))
+    app = _ToolRegistry()
+    _register_tools(app)
+
+    assert app.tools[tool](str(tmp_path), **arguments)["ok"] is True
+    assert seen["dashboard"] == {
+        "savedir": "temporary", "home": "temporary", "persistent": "empty", "preferences": "empty"
+    }

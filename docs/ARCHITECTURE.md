@@ -6,7 +6,7 @@
 src/renforge/
   cli.py            # argparse entrypoint (inspect / serve / ui)
   server.py         # MCP app bootstrap + FastMCP/fallback; delegates tool registration
-  tool_definitions.py # canonical 60-tool public contract (names, schemas, annotations)
+  tool_definitions.py # canonical 61-tool public contract (names, schemas, annotations)
   tool_schema.py    # shared JSON Schema fragments used by the contract catalog
   tool_registration/
     registry.py     # backend-aware ToolRegistrar; clones wrappers before annotating
@@ -20,8 +20,8 @@ src/renforge/
     content_build.py # assets, translations, builds, docs
     mods.py         # renforge_mod
   interaction.py    # pure gameplay contract shared with the injected bridge
-  observe.py        # host image decoding + compatibility exports
-  progression.py    # native skip, guarded dismiss, settling, process failures
+  observe.py        # host decoding of delivered screenshots
+  progression.py    # native skip, stuck-pause nudge, settling, process failures
   bridge/           # in-game .rpy bridge, launcher, and client
   tools/
     live.py         # running-game control (launch, eval, screenshot, ...)
@@ -60,7 +60,7 @@ never mutates shared `__annotations__` or `__doc__`, then applies description,
 unknown names, parameter drift, duplicate registrations, and backends that
 cannot accept required metadata raise instead of shipping a partial catalog.
 
-The public 60-tool contract is snapshotted in
+The public 61-tool contract is snapshotted in
 `tests/snapshots/mcp_public_tool_contract.json`. Intentional API changes must
 update that file; accidental ones fail CI.
 
@@ -108,7 +108,8 @@ before that check; the namemap itself stays Node-keyed.
 
 RenForge follows that dump unwrap without waiting on a new SDK release and
 without patching installed `dump.py`. Each dump subprocess loads a temporary
-`.rpe.py` adapter from `RENPY_SEARCHPATH` that wraps `renpy.dump.dump` and,
+`.rpe` adapter (a zip whose `autorun.py` every Ren'Py 8 runs; `.rpe.py` came
+only in 8.3) from `RENPY_SEARCHPATH` that wraps `renpy.dump.dump` and,
 only when keys are not already strings, presents a string-keyed namemap for
 the duration of the dump. Because namemap keys remain `Node` objects even
 after upstream `dump.py` is fixed, the adapter still normalizes the map on
@@ -160,7 +161,7 @@ The server falls back to a compatibility mode with a clear message if
 
 ## Runtime policy
 
-`policy.py` classifies high-risk MCP calls (session, launch, control, saves,
+`policy.py` classifies high-risk MCP calls (play-loop, session, launch, control, saves,
 mod, editor, eval, set_var, wait_until and scenario tools; the full list is in
 [POLICY.md](POLICY.md)) from the tool name and validated parameters, then allows or denies them inside `_log_tool_call`
 before the live implementation runs. MCP `ToolAnnotations` remain static
@@ -197,7 +198,7 @@ an empty return stack. Arrival at the engine menu confirms and latches the endin
 on the non-rollback bridge object, emits one ending event, and exposes its return
 location. Resuming root gameplay (including custom Start targets) or
 start/load/warp/replay clears the evidence. The shared contract stops
-both progression modes at `end` or `main_menu`, even without clickable menu
+progression at `end` or `main_menu`, even without clickable menu
 controls; the host uses a settled final observation before reporting completion.
 
 The host composes action, observation, and bounded progression with one client.
@@ -219,9 +220,9 @@ interaction the bridge freezes skip before screen construction; the periodic
 main-thread inventory resumes it only for known narrative. The lease counts
 advances and checks deadlines inside the game. Choices, inputs, custom controls,
 unknown interactions, exceptions, completion, and lease expiry disable owned
-skip and restore the saved preferences. `mode="dismiss"` keeps the guarded
-single-step path in the same host module; `observe.py` retains compatibility
-exports and handles delivered images.
+skip and restore the saved preferences. A line that stays a pause past any
+short pause gets one guarded dismiss that accepts the pending pause.
+`observe.py` decodes and bounds delivered images.
 
 The host polls events during progression and reserves part of the total budget
 for operation cleanup, two matching stable final observations, image capture,

@@ -8,32 +8,7 @@ from __future__ import annotations
 
 import types
 
-import pytest
-
-from test_bridge_runtime import running_bridge  # noqa: F401 - shared bridge fixture
-
-
-def _node(kind: str, **attrs):
-    node = type(kind, (), {})()
-    for key, value in attrs.items():
-        setattr(node, key, value)
-    return node
-
-
-def _script_node(kind: str, filename: str, line: int, **attrs):
-    return _node(kind, filename=filename, linenumber=line, **attrs)
-
-
-def _set_script(bridge, labels: dict) -> None:
-    bridge.renpy.game = types.SimpleNamespace(script=types.SimpleNamespace(namemap=labels))
-
-
-def _set_screens(bridge, screens: dict) -> None:
-    bridge.renpy.display.screen = types.SimpleNamespace(screens=screens)
-
-
-def _screen(location, ast=None, parameters=None):
-    return types.SimpleNamespace(location=location, ast=ast, parameters=parameters)
+from bridge_harness import _node, _screen, _script_node, _set_screens, _set_script
 
 
 def _rows(reply):
@@ -528,15 +503,32 @@ def test_imagemap_hotspots_show_their_clicked_action(running_bridge):
 
 
 def test_explain_source_on_a_menu_shows_what_each_choice_does(running_bridge):
-    f = "game/camp.rpy"
-    effect = _script_node("Python", f, 607, code=types.SimpleNamespace(source="courtney.relationship += 10"))
-    flash = _script_node("Jump", f, 611, target="week1_courtney_flashing_bra", expression=False)
-    menu = _script_node("Menu", f, 605, items=[("Agree", "True", [effect]), ("Hesitate", "True", [flash])])
+    f = "game/script.rpy"
+    effect = _script_node("Python", f, 44, code=types.SimpleNamespace(source="ally.affection += 10"))
+    ending = _script_node("Jump", f, 48, target="chapter1_ending", expression=False)
+    menu = _script_node("Menu", f, 42, items=[("Agree", "True", [effect]), ("Hesitate", "True", [ending])])
     running_bridge.renpy.game = types.SimpleNamespace(script=types.SimpleNamespace(namemap={}, all_stmts=[menu]))
 
-    reply = running_bridge.client.explain(source="game/camp.rpy:605")
+    reply = running_bridge.client.explain(source="game/script.rpy:42")
 
     rows = [(row["kind"], row["depth"], row["text"]) for row in reply["script"][0]["statements"]]
-    assert ("choice", 0, "Agree") in rows and ("choice", 0, "Hesitate") in rows
-    assert ("python", 1, "courtney.relationship += 10") in rows
-    assert ("jump", 1, "week1_courtney_flashing_bra") in rows
+    # Ordered: each effect follows its own choice.
+    assert [row for row in rows if row[0] != "menu"] == [
+        ("choice", 0, "Agree"),
+        ("python", 1, "ally.affection += 10"),
+        ("choice", 0, "Hesitate"),
+        ("jump", 1, "chapter1_ending"),
+    ]
+
+
+def test_explain_snippet_shows_a_match_only_case_folding_finds(running_bridge):
+    """``STRASSE`` finds ``Straße`` by casefold; the excerpt must include it."""
+    snippet = running_bridge.globs["_renforge_explain_snippet"]
+    text = "x" * 150 + " the Hauptstraße is closed " + "y" * 150
+
+    excerpt = snippet(text, "STRASSE")
+    assert "Hauptstraße" in excerpt
+    assert len(excerpt) <= len("straße") + 120
+
+    plain = snippet("a" * 100 + "Needle" + "b" * 100, "needle")
+    assert plain == "a" * 60 + "Needle" + "b" * 60

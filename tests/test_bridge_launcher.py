@@ -2,6 +2,7 @@ import errno
 import hashlib
 import json
 import os
+import shutil
 import signal
 import stat
 import sys
@@ -9,6 +10,8 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+
+_REAL_RMTREE = shutil.rmtree
 
 import pytest
 
@@ -186,7 +189,8 @@ def test_launch_with_bridge_builds_run_command(monkeypatch, tmp_path: Path, warp
     monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
     monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
 
-    session = launch_with_bridge(sdk, project, warp=warp)
+    # Isolation is opt-in; this launch asks for it.
+    session = launch_with_bridge(sdk, project, warp=warp, savedir="temporary")
     assert session is not None
     command = list(captured["command"])  # type: ignore[arg-type]
     assert len(command) >= 3
@@ -217,6 +221,59 @@ def test_launch_with_bridge_builds_run_command(monkeypatch, tmp_path: Path, warp
     # reserved before spawn; fake popen overwrote it to ready for the ping path
     assert starting.exists()
     session.close(timeout=0.1)
+
+
+def _launch_names_the_metadata_root(monkeypatch, project, sdk, project_root: Path, spelling: Path) -> None:
+    """Launch ``project`` spelled ``spelling``; the bridge env and metadata name ``project_root``."""
+    # As resolve() leaves a case alias on macOS: the caller's spelling, unchanged.
+    object.__setattr__(project, "root", spelling)
+    captured: dict[str, object] = {}
+
+    def fake_popen(command, env=None, stdout=None, stderr=None, start_new_session=False):
+        starting = json.loads((control_dir(project_root) / "bridge.json").read_text(encoding="utf-8"))
+        captured["metadata_root"] = starting["project_root"]
+        captured["env_root"] = env["RENFORGE_BRIDGE_PROJECT_ROOT"]
+        _write_bridge_info(project_root, env)
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
+
+    session = launch_with_bridge(sdk, project, savedir="temporary")
+    try:
+        assert captured["env_root"] == captured["metadata_root"] == str(project_root.resolve())
+    finally:
+        session.close(timeout=0.1)
+
+
+def test_launch_tells_the_bridge_the_project_root_its_metadata_names(monkeypatch, tmp_path: Path) -> None:
+    """The bridge refuses an env project root that differs from the starting metadata's.
+
+    On a case-insensitive volume a project root can be spelled other than
+    the disk lists it (``/users/me/game`` for ``/Users/me/Game``), while
+    the metadata names the on-disk spelling. A linked alias stands in for
+    such a spelling here: a root that reaches the project but is not how
+    the disk spells it. Its name differs from ``project`` by more than
+    case, so a case-insensitive volume can create it too.
+    """
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    alias = tmp_path / "project-link"
+    try:
+        alias.symlink_to(project_root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    _launch_names_the_metadata_root(monkeypatch, project, sdk, project_root, alias)
+
+
+def test_launch_names_the_on_disk_spelling_on_a_case_insensitive_volume(monkeypatch, tmp_path: Path) -> None:
+    """The same as above with a real case alias, where the volume has them."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    spelling = tmp_path / "PROJECT"
+    if not spelling.exists() or not spelling.samefile(project_root):
+        pytest.skip("needs a case-insensitive volume")
+    _launch_names_the_metadata_root(monkeypatch, project, sdk, project_root, spelling)
 
 
 def test_launch_with_bridge_isolates_saves_via_native_savedir(
@@ -284,8 +341,30 @@ def test_launch_with_bridge_existing_savedir_does_not_redirect(
     assert command[2:] == ["run"]
     assert "RENFORGE_SAVEDIR" not in env
     assert "RENPY_PATH_TO_SAVES" not in env
-    assert "RENFORGE_PERSISTENT_MODE" not in env
+    assert env["RENFORGE_PERSISTENT_MODE"] == "existing"
     assert not list((project_root / "game").glob("00renforge_session_*.rpy"))
+    session.close(timeout=0.1)
+
+
+def test_isolated_launch_marks_persistent_mode_empty(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_popen(command, env=None, stdout=None, stderr=None, start_new_session=False):
+        captured["env"] = env
+        _write_bridge_info(project_root, env)
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
+
+    session = launch_with_bridge(sdk, project, savedir="temporary")
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["RENFORGE_PERSISTENT_MODE"] == "empty"
     session.close(timeout=0.1)
 
 
@@ -376,6 +455,71 @@ def test_launch_accepts_display_provided_via_extra_env(monkeypatch, tmp_path: Pa
     session.close(timeout=0.1)
 
 
+def test_launch_sets_renpy_language_for_the_game_process(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("RENPY_LANGUAGE", "inherited")
+    project, sdk, project_root = _make_project(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_popen(command, env=None, stdout=None, stderr=None, start_new_session=False):
+        captured["env"] = env
+        _write_bridge_info(project_root, env)
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
+
+    session = launch_with_bridge(sdk, project, language=" japanese ")
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["RENPY_LANGUAGE"] == "japanese"
+
+    session.close(timeout=0.1)
+
+
+def test_launch_without_language_keeps_inherited_renpy_language(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("RENPY_LANGUAGE", "schinese")
+    project, sdk, project_root = _make_project(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_popen(command, env=None, stdout=None, stderr=None, start_new_session=False):
+        captured["env"] = env
+        _write_bridge_info(project_root, env)
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.BridgeClient", lambda _config: _FakeClient())
+
+    session = launch_with_bridge(sdk, project)
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["RENPY_LANGUAGE"] == "schinese"
+
+    session.close(timeout=0.1)
+
+
+@pytest.mark.parametrize(
+    "language",
+    ["   ", "ja\npanese", "x" * 65, "ja/panese", "ja\\panese", "ja\ud800panese"],
+)
+def test_launch_rejects_invalid_language(monkeypatch, tmp_path: Path, language: str) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+
+    def fail_popen(*_args, **_kwargs):
+        raise AssertionError("Popen must not be reached for an invalid language")
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fail_popen)
+
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, language=language)
+
+    assert excinfo.value.code == "LANGUAGE_INVALID"
+    assert not list((project_root / "game").glob("zzrenforge_bridge_*.rpy"))
+    assert not _bridge_info_path(project_root).exists()
+
+
 def test_remove_bridge_artifacts_deletes_injected_and_runtime_files(tmp_path: Path) -> None:
     from renforge.bridge.artifacts import allocate_and_materialize, artifacts_path
     from renforge.project import RenpyProject
@@ -411,11 +555,23 @@ def test_remove_bridge_artifacts_deletes_injected_and_runtime_files(tmp_path: Pa
     assert owned_source.exists()
     assert artifacts_path(tmp_path).exists()
 
-    assert remove_bridge_artifacts(tmp_path, expected_session_id=materialized.session_id) is True
+    removed: list[str] = []
+    assert (
+        remove_bridge_artifacts(
+            tmp_path,
+            expected_session_id=materialized.session_id,
+            removed=removed,
+        )
+        is True
+    )
 
     assert not owned_source.exists()
     assert not owned_info.exists()
     assert not artifacts_path(tmp_path).exists()
+    assert f"game/{owned_source.name}" in removed
+    # The control folder is in RenForge's state folder, outside the project.
+    assert (control_dir(tmp_path) / "bridge.json").as_posix() in removed
+    assert (control_dir(tmp_path) / "artifacts.json").as_posix() in removed
     # Unowned / legacy paths preserved.
     assert legacy_inject.exists()
     assert (game / "renforge_bridge.rpyc").exists()
@@ -435,12 +591,215 @@ def test_bridge_session_close_kills_running_game(tmp_path: Path) -> None:
     assert process.killed is True
     assert process.terminated is False
     assert session.closed is True
+    assert session.close()["files_deleted"] == []
 
     injected = tmp_path / "game" / "renforge_bridge.rpy"
     injected.parent.mkdir()
     injected.write_text("# belongs to a later session\n", encoding="utf-8")
     session.close()
     assert injected.exists()
+
+
+def test_bridge_session_close_reports_a_removed_temporary_savedir(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    savedir = tmp_path / "renforge-saves"
+    savedir.mkdir()
+    (savedir / "1-1-LT1.save").write_text("save", encoding="utf-8")
+
+    session = BridgeSession(
+        _FakeProcess(),
+        _FakeClient(),
+        project_root,
+        temporary_savedir=savedir,
+        cleanup_savedir=True,
+    )
+
+    result = session.close()
+
+    assert not savedir.exists()
+    assert result["cleaned"]["temporary_savedir"] is True
+    # The temporary savedir lives outside the project, so its receipt stays
+    # absolute.
+    assert [Path(item) for item in result["files_deleted"]] == [savedir.resolve()]
+
+
+def _patch_launcher_rmtree(monkeypatch, rmtree) -> None:
+    """Replace rmtree for the launcher module only; the shared shutil stays real."""
+    import types
+
+    from renforge.bridge import launcher as launcher_module
+
+    monkeypatch.setattr(launcher_module, "shutil", types.SimpleNamespace(**{**vars(shutil), "rmtree": rmtree}))
+
+
+def test_partial_savedir_cleanup_still_reports_the_paths_it_removed(
+    monkeypatch, tmp_path: Path
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    savedir = tmp_path / "renforge-saves"
+    (savedir / "nested").mkdir(parents=True)
+    removed_file = savedir / "nested" / "1-1-LT1.save"
+    removed_file.write_text("save", encoding="utf-8")
+    surviving_file = savedir / "2-1-LT1.save"
+    surviving_file.write_text("save", encoding="utf-8")
+
+    def partial_rmtree(_path, **_kwargs):
+        removed_file.unlink()
+        raise OSError("locked")
+
+    _patch_launcher_rmtree(monkeypatch, partial_rmtree)
+    assert shutil.rmtree is _REAL_RMTREE  # other threads keep the real one
+    session = BridgeSession(
+        _FakeProcess(),
+        _FakeClient(),
+        project_root,
+        temporary_savedir=savedir,
+        cleanup_savedir=True,
+    )
+
+    result = session.close()
+
+    assert result["cleaned"]["temporary_savedir"] is False
+    assert "temporary_savedir" in result["failed"]
+    assert [Path(item) for item in result["files_deleted"]] == [removed_file.resolve()]
+    assert surviving_file.exists()
+
+
+def test_cleanup_listing_never_walks_into_a_junction_in_the_session(monkeypatch, tmp_path: Path) -> None:
+    """rmtree removes a junction without following it, so the listing for a partial-delete receipt must not walk it.
+
+    Windows os.walk does not treat a junction as a link; it stands in here
+    for one, as util.files.is_link reports it.
+    """
+    from renforge.bridge import launcher as launcher_module
+
+    session_root = tmp_path / "renforge-session-x"
+    junction = session_root / "home" / "profile-link"
+    (junction / "Documents").mkdir(parents=True)
+    (junction / "Documents" / "private.txt").write_text("not the session's", encoding="utf-8")
+    (session_root / "saves").mkdir()
+    (session_root / "saves" / "1-1-LT1.save").write_text("save", encoding="utf-8")
+    monkeypatch.setattr(launcher_module, "is_link", lambda path: Path(path) == junction, raising=False)
+
+    listed = set(launcher_module._existing_paths(session_root))
+
+    assert junction in listed
+    assert session_root / "saves" / "1-1-LT1.save" in listed
+    assert not any(path.is_relative_to(junction) and path != junction for path in listed)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_partial_savedir_cleanup_never_reports_a_dangling_link_it_left(
+    monkeypatch, tmp_path: Path
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    savedir = tmp_path / "renforge-saves"
+    savedir.mkdir()
+    dangling = savedir / "gone"
+    dangling.symlink_to(tmp_path / "missing")
+
+    def failing_rmtree(_path, **_kwargs):
+        raise OSError("locked")
+
+    _patch_launcher_rmtree(monkeypatch, failing_rmtree)
+    assert shutil.rmtree is _REAL_RMTREE  # other threads keep the real one
+    session = BridgeSession(
+        _FakeProcess(),
+        _FakeClient(),
+        project_root,
+        temporary_savedir=savedir,
+        cleanup_savedir=True,
+    )
+
+    result = session.close()
+
+    assert dangling.is_symlink()
+    assert result["files_deleted"] == []
+
+
+def test_close_waits_for_a_writer_holding_the_session_open(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    session_root = tmp_path / "renforge-session-x"
+    savedir = session_root / "saves"
+    savedir.mkdir(parents=True)
+    session = BridgeSession(
+        _FakeProcess(),
+        _FakeClient(),
+        project_root,
+        temporary_savedir=savedir,
+        session_root=session_root,
+        cleanup_savedir=True,
+    )
+    writing = threading.Event()
+    release = threading.Event()
+    closed = threading.Event()
+    blocked = threading.Event()
+
+    class _ReportingLock:
+        """The session's lock, reporting an acquire that has to wait."""
+
+        def __init__(self, lock) -> None:
+            self._lock = lock
+
+        def __enter__(self):
+            if not self._lock.acquire(blocking=False):
+                blocked.set()
+                self._lock.acquire()
+            return self
+
+        def __exit__(self, *_exc) -> None:
+            self._lock.release()
+
+    session._close_lock = _ReportingLock(session._close_lock)
+
+    def writer() -> None:
+        with session.holding_open() as session_open:
+            assert session_open is True
+            (savedir / "1-1-LT1.save").write_bytes(b"SLOT")
+            writing.set()
+            release.wait(timeout=5)
+
+    def closer() -> None:
+        session.close()
+        closed.set()
+
+    writer_thread = threading.Thread(target=writer)
+    writer_thread.start()
+    assert writing.wait(timeout=5)
+    closer_thread = threading.Thread(target=closer)
+    closer_thread.start()
+
+    # The stop must not remove the session root under an unfinished copy:
+    # close() reached the lock, and waits there for the writer.
+    assert blocked.wait(timeout=5)
+    assert not closed.wait(timeout=0.2)
+    assert (savedir / "1-1-LT1.save").exists()
+
+    release.set()
+    writer_thread.join(timeout=5)
+    closer_thread.join(timeout=5)
+    assert closed.is_set()
+    assert session.closed is True
+    assert not session_root.exists()
+    with session.holding_open() as session_open:
+        assert session_open is False
+
+
+def test_a_session_whose_game_exited_is_not_held_open_for_writes(tmp_path: Path) -> None:
+    # Nothing would read slots copied into it, and the next stop deletes them.
+    process = _FakeProcess()
+    session = BridgeSession(process, _FakeClient(), tmp_path)
+    with session.holding_open() as session_open:
+        assert session_open is True
+    process.returncode = 0
+    with session.holding_open() as session_open:
+        assert session_open is False
 
 
 def test_failed_launch_removes_every_generated_bridge_artifact(monkeypatch, tmp_path: Path) -> None:
@@ -697,7 +1056,7 @@ def test_game_error_report_during_startup_fails_before_timeout(monkeypatch, tmp_
     project, sdk, project_root = _make_project(tmp_path)
     report = (
         "\ufeffI'm sorry, but an uncaught exception occurred.\n\nWhile running game code:\n"
-        '  File "game/tl/chinese/ProfileMenu.rpy", line 6, in script\n'
+        '  File "game/tl/example/screens.rpy", line 6, in script\n'
         "Exception: A translation for \"Character\" already exists.\n\n"
         "-- Full Traceback ------\nmore\n"
     )
@@ -764,6 +1123,40 @@ def test_a_launch_that_compiled_scripts_and_stopped_on_an_error_is_retried_once(
     assert excinfo.value.code == "GAME_STARTUP_ERROR" and launches["count"] == 1
 
 
+def test_renforges_own_compiled_scripts_do_not_count_as_changed_game_scripts(monkeypatch, tmp_path: Path) -> None:
+    """Ren'Py compiles the injected per-session scripts on every launch."""
+    from renforge.bridge.artifacts import bridge_basename, editor_basename, session_init_basename
+
+    monkeypatch.setenv("DISPLAY", ":0")
+    project, sdk, project_root = _make_project(tmp_path)
+    (project_root / "game").mkdir(exist_ok=True)
+    launches = {"count": 0}
+    compiled: list[str] = []
+
+    def failing_popen(*_args, **kwargs):
+        launches["count"] += 1
+        session_id = kwargs["env"]["RENFORGE_BRIDGE_SESSION_ID"]
+        # Compile only what the launch injected, as Ren'Py would.
+        for basename in (session_init_basename, bridge_basename, editor_basename):
+            source = project_root / "game" / basename(session_id)
+            if source.exists():
+                source.with_name(source.name + "c").write_bytes(b"compiled")
+                compiled.append(basename.__name__)
+        (project_root / "traceback.txt").write_text("Exception: boom %d\n" % launches["count"], encoding="utf-8")
+        return _FakeProcess()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", failing_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("renforge.bridge.launcher._GAME_ERROR_GRACE_S", 0.0)
+    with pytest.raises(LaunchError) as excinfo:
+        # Temporary saves inject the session init script beside the bridge.
+        launch_with_bridge(sdk, project, savedir="temporary", startup_timeout=30.0)
+    assert {"session_init_basename", "bridge_basename"} <= set(compiled), compiled
+    assert excinfo.value.code == "GAME_STARTUP_ERROR"
+    assert launches["count"] == 1
+    assert excinfo.value.details["scripts_compiled"] is False
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the Wayland driver default is Linux-only")
 def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkeypatch, tmp_path: Path) -> None:
     """A transparent presplash needs a shaped window."""
@@ -807,9 +1200,10 @@ def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkey
 
     # Ren'Py 8.4's pygame_sdl2 says "Invalid window".
     from renforge.bridge.launcher import _shaped_presplash_failed
-    older = LaunchError("DISPLAY_START_FAILED", "exited", phase="starting_renpy", details={"stderr": (
-        '  File "renpy/display/presplash.py", line 131, in start\n'
-        "    window = pygame_sdl2.display.Window(\npygame_sdl2.error.error: Invalid window\n")})
+    older = LaunchError("DISPLAY_START_FAILED", "exited", phase="starting_renpy", details={
+        "video_driver": "wayland,x11", "stderr": (
+            '  File "renpy/display/presplash.py", line 131, in start\n'
+            "    window = pygame_sdl2.display.Window(\npygame_sdl2.error.error: Invalid window\n")})
     assert _shaped_presplash_failed(older, None) is True
 
     # A driver the user chose is theirs: no retry.
@@ -817,6 +1211,71 @@ def test_a_shaped_presplash_that_wayland_cannot_open_is_launched_with_x11(monkey
     with pytest.raises(LaunchError):
         launch_with_bridge(sdk, project, startup_timeout=30.0, extra_env={"SDL_VIDEODRIVER": "wayland,x11"})
     assert drivers == ["wayland,x11"]
+
+
+def _presplash_failure_process() -> "_FakeProcess":
+    class _Stream:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def read(self, _size=-1):
+            payload, self._payload = self._payload, b""
+            return payload
+
+    process = _FakeProcess()
+    process.returncode = 1
+    process.stdout = _Stream(b"")
+    process.stderr = _Stream(
+        b'  File "renpy/display/presplash.py", line 131, in start\n'
+        b"    window = pygame_sdl2.display.Window(\npygame_sdl2.error.error: Invalid window\n")
+    return process
+
+
+def test_a_presplash_failure_without_the_wayland_driver_is_not_relaunched(monkeypatch, tmp_path: Path) -> None:
+    """Only a launch that used SDL's Wayland driver can be helped by X11."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("SDL_VIDEODRIVER", raising=False)
+    project, sdk, _project_root = _make_project(tmp_path)
+    drivers = []
+
+    def fake_popen(*_args, **kwargs):
+        drivers.append(kwargs["env"].get("SDL_VIDEODRIVER"))
+        return _presplash_failure_process()
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert drivers == [None]
+    assert "presplash" in excinfo.value.details["stderr"]
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the Wayland driver default is Linux-only")
+def test_a_failed_relaunch_keeps_the_first_launchs_error(monkeypatch, tmp_path: Path) -> None:
+    """The first error names the real cause; the relaunch's may not."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.delenv("SDL_VIDEODRIVER", raising=False)
+    project, sdk, _project_root = _make_project(tmp_path)
+    drivers = []
+
+    def fake_popen(*_args, **kwargs):
+        drivers.append(kwargs["env"].get("SDL_VIDEODRIVER"))
+        if len(drivers) == 1:
+            return _presplash_failure_process()
+        process = _FakeProcess()
+        process.returncode = 1
+        return process
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("renforge.bridge.launcher.time.sleep", lambda _seconds: None)
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, startup_timeout=30.0)
+    assert drivers == ["wayland,x11", "x11"]
+    first = excinfo.value.details["first_attempt"]
+    assert first["code"] in {"DISPLAY_START_FAILED", "RENPY_PROCESS_EXITED"}
+    assert "presplash" in first["details"]["stderr"]
 
 
 def test_a_launch_whose_scripts_do_not_parse_fails_even_with_the_bridge_up(monkeypatch, tmp_path: Path) -> None:
@@ -1120,7 +1579,7 @@ def test_launch_without_editor_does_not_start_editor_flow(monkeypatch, tmp_path:
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("editor flow started")),
     )
 
-    session = launch_with_bridge(sdk, project, editor=False)
+    session = launch_with_bridge(sdk, project, editor=False, savedir="temporary")
     assert session is not None
     assert not session.editor
     env = captured.get("env") or {}
@@ -1216,6 +1675,13 @@ def test_launch_with_editor_passes_exact_editor_environment_and_owned_manifest(m
     close_result = session.close(timeout=0.1)
     assert close_result["cleaned"]["editor_coordinator"] is True
     assert close_result["cleaned"]["bridge_artifacts"] is True
+    # The receipt names the asset directory too, after the files it held.
+    deleted = close_result["files_deleted"]
+    asset_dir = f"game/{asset_tree['dirname']}"
+    assert not (project_root / asset_dir).exists()
+    assert deleted.count(asset_dir) == 1
+    for entry in asset_tree["files"]:
+        assert deleted.index(f"{asset_dir}/{entry['path']}") < deleted.index(asset_dir)
     assert close_calls["count"] == 1
     assert session.closed is True
 
@@ -1321,6 +1787,32 @@ def test_bridge_session_close_is_idempotent(tmp_path: Path) -> None:
     assert first == second
     assert process.killed is True
     assert second["cleaned"]["renpy_process"] is True
+
+
+def test_repeated_close_does_not_repeat_the_first_calls_deletions(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    savedir = tmp_path / "renforge-saves"
+    savedir.mkdir()
+    (savedir / "1-1-LT1.save").write_text("save", encoding="utf-8")
+    session = BridgeSession(
+        _FakeProcess(),
+        _FakeClient(),
+        project_root,
+        temporary_savedir=savedir,
+        cleanup_savedir=True,
+    )
+
+    first = session.close()
+    second = session.close()
+
+    assert [Path(item) for item in first["files_deleted"]] == [savedir.resolve()]
+    # The second call deleted nothing, so it reports no deletions even though
+    # the cleanup state still names what the first call did.
+    assert second["files_deleted"] == []
+    assert second["cleaned"]["temporary_savedir"] is True
 
 
 def test_editor_launch_failure_cleans_resources_and_closes_coordinator(
@@ -2085,10 +2577,10 @@ def test_windows_project_bridge_lock_helper_wiring_and_cleanup(tmp_path: Path, m
     from renforge.bridge.launcher import ProjectBridgeLock, _LockPathUnsafe
     from renforge.util import files as private_files
 
-    called = {"is_reparse": False, "set_dacl": False, "val_dacl": False, "closed_file": False}
+    called = {"is_link": False, "set_dacl": False, "val_dacl": False, "closed_file": False}
 
-    def fake_win_is_reparse(path):
-        called["is_reparse"] = True
+    def fake_is_link(path):
+        called["is_link"] = True
         return False
 
     def fake_win_set_dacl(path):
@@ -2098,7 +2590,7 @@ def test_windows_project_bridge_lock_helper_wiring_and_cleanup(tmp_path: Path, m
         called["val_dacl"] = True
         raise RuntimeError("DACL check failed")
 
-    monkeypatch.setattr("renforge.util.files._win_is_reparse", fake_win_is_reparse)
+    monkeypatch.setattr("renforge.util.files.is_link", fake_is_link)
     monkeypatch.setattr("renforge.util.files._win_set_protected_dacl", fake_win_set_dacl)
     monkeypatch.setattr("renforge.util.files._win_validate_protected_dacl", fake_win_val_dacl)
 
@@ -2146,7 +2638,7 @@ def test_windows_project_bridge_lock_helper_wiring_and_cleanup(tmp_path: Path, m
     with pytest.raises(_LockPathUnsafe, match="bridge lock DACL is unsafe"):
         lock._open_lock_file_windows()
 
-    assert called["is_reparse"] is True
+    assert called["is_link"] is True
     assert called["set_dacl"] is True
     assert called["val_dacl"] is True
     assert called["closed_file"] is True
@@ -2324,16 +2816,30 @@ def test_a_launch_that_fails_before_spawning_removes_its_session_root(
 
     monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fail_popen)
 
+    # Only an isolated launch makes a session root, so ask for one; otherwise
+    # the glob below would pass without the pre-spawn cleanup.
+    monkeypatch.delenv("RENFORGE_ISOLATION", raising=False)
+    created = []
+    real_resolve = save_isolation.resolve_launch_isolation
+
+    def tracking_resolve(*args, **kwargs):
+        isolation = real_resolve(*args, **kwargs)
+        created.append(isolation.session_root)
+        return isolation
+
+    monkeypatch.setattr("renforge.bridge.launcher.resolve_launch_isolation", tracking_resolve)
+
     with pytest.raises(LaunchError) as excinfo:
-        launch_with_bridge(sdk, project, token="not-a-token")
+        launch_with_bridge(sdk, project, token="not-a-token", savedir="temporary")
 
     assert excinfo.value.code == "BRIDGE_TOKEN_INVALID"
+    assert created and created[0] is not None
     assert not list(temp_root.glob(save_isolation.SESSION_PREFIX + "*"))
 
 
 def test_a_reader_thread_that_cannot_start_still_tears_the_game_down(monkeypatch, tmp_path: Path) -> None:
-    # Between Popen and the startup wait, a failure used to skip
-    # _teardown_failed_launch and leave the game running with no owner.
+    # A failure between Popen and the startup wait still runs
+    # _teardown_failed_launch, so no game is left running with no owner.
     monkeypatch.setenv("DISPLAY", ":0")
     project, sdk, project_root = _make_project(tmp_path)
     process = _FakeProcess()
@@ -2405,3 +2911,271 @@ def test_a_collision_whose_cleanup_fails_is_not_retried(monkeypatch, tmp_path: P
             editor_asset_files=None,
         )
     assert attempts == [1]
+
+
+def _launch_until_token_check(sdk, project, monkeypatch, savedir: str) -> LaunchError:
+    """Launch with an invalid token, so the launch stops just after it made its saves folder."""
+
+    def fail_popen(*_args, **_kwargs):
+        raise AssertionError("Popen must not be reached")
+
+    monkeypatch.setattr("renforge.bridge.launcher.subprocess.Popen", fail_popen)
+    with pytest.raises(LaunchError) as excinfo:
+        launch_with_bridge(sdk, project, token="not-a-token", savedir=savedir)
+    return excinfo.value
+
+
+def test_a_savedir_in_the_state_folder_is_made_without_following_links(monkeypatch, tmp_path: Path) -> None:
+    """A link planted in the state folder must not choose where the launch saves, whichever tool asked for it."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project, sdk, project_root = _make_project(tmp_path)
+    other = tmp_path / "state" / "projects" / "another-project" / "saves"
+    other.mkdir(parents=True)
+    saves = project_state_dir(project_root) / "saves"
+    saves.parent.mkdir(parents=True)
+    try:
+        os.symlink(other, saves, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+
+    refused = _launch_until_token_check(sdk, project, monkeypatch, str(saves))
+
+    assert refused.code == "SESSION_NOT_ISOLATED", refused.message
+    assert list(other.iterdir()) == []
+
+    # The state folder's own saves folder is made as a real folder.
+    saves.unlink()
+    assert _launch_until_token_check(sdk, project, monkeypatch, str(saves)).code == "BRIDGE_TOKEN_INVALID"
+    assert saves.is_dir() and not saves.is_symlink()
+
+
+def test_a_savedir_outside_the_state_folder_may_sit_behind_a_link(monkeypatch, tmp_path: Path) -> None:
+    """Only the state folder is made no-follow: a chosen savedir elsewhere behind a symlink still works."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    project, sdk, _root = _make_project(tmp_path)
+    real = tmp_path / "real"
+    real.mkdir()
+    try:
+        os.symlink(real, tmp_path / "linked", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+
+    error = _launch_until_token_check(sdk, project, monkeypatch, str(tmp_path / "linked" / "saves"))
+
+    assert error.code == "BRIDGE_TOKEN_INVALID"
+    assert (real / "saves").is_dir()
+
+
+def _link(link: Path, target: Path) -> None:
+    """Make ``link`` a directory symlink to ``target``, or skip the test where links are unavailable."""
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+
+
+# Each row builds its folders under tmp, with RENFORGE_STATE_DIR=<tmp>/state
+# unless it sets another, and returns (savedir, expected, untouched). expected
+# is "refused", "passed" (returned unchanged) or the folder that must be made;
+# a refused row's ``untouched`` folder, if any, must stay empty.
+def _plain_inside(tmp, mp):
+    return str(tmp / "state/projects/p/saves"), tmp / "state/projects/p/saves", None
+
+
+def _planted_link_to_outside(tmp, mp):
+    player = tmp / "home/.renpy/a-game"
+    player.mkdir(parents=True)
+    _link(tmp / "state/projects/p/saves", player)
+    return str(tmp / "state/projects/p/saves"), "refused", player
+
+
+def _planted_link_to_outside_below_the_savedir(tmp, mp):
+    player = tmp / "home/.renpy/a-game"
+    player.mkdir(parents=True)
+    _link(tmp / "state/projects/p/saves", player)
+    return str(tmp / "state/projects/p/saves/x"), "refused", player
+
+
+def _planted_link_to_outside_through_an_alias(tmp, mp):
+    player = tmp / "home/.renpy/a-game"
+    player.mkdir(parents=True)
+    _link(tmp / "state/projects/p/saves", player)
+    _link(tmp / "alias", tmp / "state")
+    return str(tmp / "alias/projects/p/saves"), "refused", player
+
+
+def _planted_link_inside(tmp, mp):
+    other = tmp / "state/projects/other/saves"
+    other.mkdir(parents=True)
+    _link(tmp / "state/projects/p/saves", other)
+    return str(tmp / "state/projects/p/saves"), "refused", other
+
+
+def _dotdot_after_an_outside_link(tmp, mp):
+    other = tmp / "state/projects/other/saves"
+    other.mkdir(parents=True)
+    (tmp / "state/projects/p/sub").mkdir(parents=True)
+    _link(tmp / "state/projects/p/saves", other)
+    _link(tmp / "out/M", tmp / "state/projects/p/sub")
+    return str(tmp / "out/M/../saves"), "refused", other
+
+
+def _outside_link_into_the_middle(tmp, mp):
+    middle = tmp / "state/projects/other"
+    middle.mkdir(parents=True)
+    _link(tmp / "out/shortcut", middle)
+    return str(tmp / "out/shortcut/saves"), "refused", middle
+
+
+def _dotdot_over_a_real_folder_inside(tmp, mp):
+    (tmp / "state/projects/p/sub").mkdir(parents=True)
+    return str(tmp / "state/projects/p/sub/../saves"), tmp / "state/projects/p/saves", None
+
+
+def _alias_of_the_state_root(tmp, mp):
+    (tmp / "state").mkdir()
+    _link(tmp / "alias", tmp / "state")
+    return str(tmp / "alias/projects/p/saves"), tmp / "state/projects/p/saves", None
+
+
+def _state_dir_given_through_a_link(tmp, mp):
+    (tmp / "state").mkdir()
+    _link(tmp / "statelink", tmp / "state")
+    mp.setenv("RENFORGE_STATE_DIR", str(tmp / "statelink"))
+    return str(tmp / "statelink/projects/p/saves"), tmp / "state/projects/p/saves", None
+
+
+def _state_dir_given_with_dotdot(tmp, mp):
+    (tmp / "x").mkdir()
+    mp.setenv("RENFORGE_STATE_DIR", str(tmp / "x/../state"))
+    return str(tmp / "x/../state/projects/p/saves"), tmp / "state/projects/p/saves", None
+
+
+def _state_dir_given_with_tilde(tmp, mp):
+    # Python expands ``~`` from HOME on POSIX but from USERPROFILE on
+    # Windows; state_root() and the savedir check both use expanduser.
+    mp.setenv("HOME", str(tmp))
+    mp.setenv("USERPROFILE", str(tmp))
+    mp.setenv("RENFORGE_STATE_DIR", "~/state")
+    return "~/state/projects/p/saves", tmp / "state/projects/p/saves", None
+
+
+def _state_dir_given_relative(tmp, mp):
+    mp.chdir(tmp)
+    mp.setenv("RENFORGE_STATE_DIR", "state")
+    return "state/projects/p/saves", tmp / "state/projects/p/saves", None
+
+
+def _several_dotdots_after_an_outside_link(tmp, mp):
+    (tmp / "state/projects/p/sub/deep").mkdir(parents=True)
+    _link(tmp / "out/M", tmp / "state/projects/p/sub/deep")
+    return str(tmp / "out/M/./../../saves"), "refused", None
+
+
+def _several_dotdots_over_real_folders_inside(tmp, mp):
+    (tmp / "state/projects/p/sub/deep").mkdir(parents=True)
+    return str(tmp / "state/projects/p/sub/deep/./../../saves"), tmp / "state/projects/p/saves", None
+
+
+def _link_to_the_state_root_then_dotdot(tmp, mp):
+    (tmp / "state/projects/p/sub").mkdir(parents=True)
+    _link(tmp / "out/R", tmp / "state")
+    return str(tmp / "out/R/projects/p/sub/../saves"), tmp / "state/projects/p/saves", None
+
+
+def _default_state_folder_under_a_linked_home(tmp, mp):
+    if os.name == "nt":
+        pytest.skip("the default state folder on Windows is under LOCALAPPDATA")
+    (tmp / "realhome").mkdir()
+    _link(tmp / "linkhome", tmp / "realhome")
+    mp.delenv("RENFORGE_STATE_DIR")
+    mp.delenv("XDG_STATE_HOME", raising=False)
+    mp.setenv("HOME", str(tmp / "linkhome"))
+    made = tmp / "realhome/.local/state/renforge/projects/p/saves"
+    return "~/.local/state/renforge/projects/p/saves", made, None
+
+
+def _planted_link_under_a_linked_home(tmp, mp):
+    player = tmp / "realhome/.renpy/a-game"
+    _default_state_folder_under_a_linked_home(tmp, mp)
+    player.mkdir(parents=True)
+    _link(tmp / "realhome/.local/state/renforge/projects/p/saves", player)
+    return str(tmp / "linkhome/.local/state/renforge/projects/p/saves"), "refused", player
+
+
+def _planted_link_back_to_the_state_root(tmp, mp):
+    (tmp / "state/projects/p").mkdir(parents=True)
+    _link(tmp / "state/projects/p/saves", tmp / "state")
+    return str(tmp / "state/projects/p/saves"), "refused", None
+
+
+def _link_loop_inside_the_state_folder(tmp, mp):
+    (tmp / "state").mkdir()
+    _link(tmp / "state/la", tmp / "state/lb")
+    _link(tmp / "state/lb", tmp / "state/la")
+    return str(tmp / "state/la/x"), "refused", None
+
+
+def _caller_savedir_behind_an_outside_link(tmp, mp):
+    (tmp / "real").mkdir()
+    _link(tmp / "linked", tmp / "real")
+    return str(tmp / "linked/saves"), "passed", None
+
+
+def _not_a_path(tmp, mp):
+    return "temporary", "passed", None
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        _plain_inside,
+        _planted_link_to_outside,
+        _planted_link_to_outside_below_the_savedir,
+        _planted_link_to_outside_through_an_alias,
+        _planted_link_inside,
+        _dotdot_after_an_outside_link,
+        _outside_link_into_the_middle,
+        _dotdot_over_a_real_folder_inside,
+        _alias_of_the_state_root,
+        _state_dir_given_through_a_link,
+        _state_dir_given_with_dotdot,
+        _state_dir_given_with_tilde,
+        _state_dir_given_relative,
+        _several_dotdots_after_an_outside_link,
+        _several_dotdots_over_real_folders_inside,
+        _link_to_the_state_root_then_dotdot,
+        _default_state_folder_under_a_linked_home,
+        _planted_link_under_a_linked_home,
+        _planted_link_back_to_the_state_root,
+        _link_loop_inside_the_state_folder,
+        _caller_savedir_behind_an_outside_link,
+        _not_a_path,
+    ],
+    ids=lambda build: build.__name__.lstrip("_"),
+)
+def test_a_state_folder_savedir_is_judged_by_where_the_launcher_lands_it(build, monkeypatch, tmp_path: Path) -> None:
+    """Every spelling seen so far: a savedir touching the state folder is made there no-follow or refused."""
+    from renforge.bridge.launcher import _make_state_savedir
+
+    monkeypatch.setenv("RENFORGE_STATE_DIR", str(tmp_path / "state"))
+    savedir, expected, untouched = build(tmp_path, monkeypatch)
+
+    if expected == "refused":
+        with pytest.raises(LaunchError) as excinfo:
+            _make_state_savedir(savedir)
+        refused = excinfo.value
+        assert refused.code == "SESSION_NOT_ISOLATED", refused.message
+        assert refused.phase == "preparing_isolation"
+        # One refusal, not one wrapped in another.
+        assert refused.message.startswith("The saves folder in the RenForge state folder is a link or not a folder ("), refused.message
+        assert refused.message.count("so the launch would not be isolated") == 1, refused.message
+        assert untouched is None or list(untouched.iterdir()) == []
+    elif expected == "passed":
+        assert _make_state_savedir(savedir) == savedir
+    else:
+        assert _make_state_savedir(savedir) == str(expected)
+        assert expected.is_dir() and not expected.is_symlink()

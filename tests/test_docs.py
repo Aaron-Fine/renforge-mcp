@@ -36,9 +36,29 @@ def test_mcp_docs_cover_save_isolation_recipes() -> None:
     assert "session_id" in isolation
     assert "list_user" in isolation
     assert 'action="import"' in isolation
-    assert 'savedir="existing"' in isolation
+    assert 'savedir="temporary"' in isolation
     assert "authorize=true" in isolation
     assert "bind-mount" in isolation
+
+
+def test_mcp_docs_document_shadow_validation_limits_and_links() -> None:
+    text = (Path(__file__).parents[1] / "docs" / "MCP.md").read_text(encoding="utf-8")
+
+    assert "`renforge_validate`" in text
+    assert "clean shadow copy" in text.lower()
+    assert "RENFORGE_SHADOW_MAX_FILES" in text
+    assert "RENFORGE_SHADOW_MAX_BYTES" in text
+    assert "RENFORGE_SHADOW_MAX_DIRS" in text
+    assert "RENFORGE_SHADOW_MEDIA" in text
+    assert "SHADOW_QUOTA_EXCEEDED" in text
+    assert "skipped_links" in text
+    assert "complete=false" in text
+    assert "linked_directory_with_source" in text
+    assert "linked_directory_uninspectable" in text
+    assert "linked_directory_assets_placeholders" in text
+    assert "zero-byte placeholder" in text
+    assert "keep_shadow=true" in text
+    assert "<state>/activity.jsonl" in text
 
 
 def test_runtime_policy_docs_cover_model_and_compatibility() -> None:
@@ -100,7 +120,7 @@ def test_json_dump_compatibility_strategy_is_documented() -> None:
 
     assert "compile --json-dump" in architecture
     assert "RENPY_SEARCHPATH" in architecture
-    assert ".rpe.py" in architecture
+    assert "`.rpe` adapter" in architecture
     assert "8.5.3" in architecture
     assert "8.4.1" in architecture
     assert "Node" in architecture
@@ -115,3 +135,20 @@ def test_json_dump_compatibility_strategy_is_documented() -> None:
     assert "String-keyed namemaps (Ren'Py 8.4 and earlier" not in dump_docs
     assert "RENPY_SEARCHPATH" in changelog
     assert "dump.py" in changelog
+
+
+def test_docs_describe_one_progression_mode() -> None:
+    """Dismiss mode is gone, so no public doc may refer to a second mode."""
+    root = Path(__file__).parents[1]
+    for name in ("README.md", "docs/MCP.md", "docs/ARCHITECTURE.md", "docs/LIVE_EDITOR.md"):
+        path = root / name
+        if path.exists():
+            assert "progression modes" not in path.read_text(encoding="utf-8"), name
+
+
+def test_mcp_state_folder_section_names_the_editor_exchange_folder() -> None:
+    """The only in-project writes besides game/ are listed where the state folder is."""
+    text = (Path(__file__).parents[1] / "docs" / "MCP.md").read_text(encoding="utf-8")
+    section = text.split("## Where RenForge keeps its files", 1)[1].split("\n## ", 1)[0]
+    assert "<project>/.renforge/editor-exchange/" in section
+    assert "conflict" in section

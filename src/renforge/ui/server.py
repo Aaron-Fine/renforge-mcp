@@ -21,19 +21,21 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from .. import session_registry
+from ..bridge.launcher import normalize_language
+from ..launch_env import AUDIO_STRATEGIES, LAUNCHABLE_DISPLAY_STRATEGIES, LaunchError
+from ..interaction import is_real_number
+from ..lint import run_lint
+from ..policy import CONTROL_ACTIONS
+from ..save_isolation import STATE_MODE_TOKENS, launch_state_mode_error
+from ..state import project_state_dir
 from ..tools import live
 from ..tools import project_ops
-from ..lint import run_lint
-from ..interaction import _real_number
-from ..launch_env import AUDIO_STRATEGIES, DISPLAY_STRATEGIES
-from ..policy import CONTROL_ACTIONS
-from ..save_isolation import STATE_MODE_TOKENS
+from ..util.files import resolves_inside, walk_nofollow
 from .activity import read_recent_activity, tail_activity
 from .graph import build_story_map, resolve_game_file_path, resolve_warp_target
 from .errors import error_response
 from .poller import poll_bridge
 from .ws import WebSocketHub, build_ws_envelope
-from ..state import project_state_dir
 
 
 def _renforge_version() -> str:
@@ -208,13 +210,15 @@ def _browse_project_directories(project_root: Path, root_id: str | None, raw_pat
 
 def _list_script_files(project_root: Path) -> dict[str, Any]:
     game_root = project_root / "game"
-    if not game_root.is_dir():
+    # A game/ link that leads out of the project would list another tree.
+    if not game_root.is_dir() or not resolves_inside(game_root, project_root):
         return {"ok": True, "files": []}
     try:
         files = sorted(
-            "game/" + path.relative_to(game_root).as_posix()
-            for path in game_root.rglob("*.rpy")
-            if path.is_file()
+            "game/" + (Path(folder) / name).relative_to(game_root).as_posix()
+            for folder, _dirs, names in walk_nofollow(game_root)
+            for name in names
+            if name.endswith(".rpy") and (Path(folder) / name).is_file()
         )
     except OSError:
         return {"ok": False, "error": "could not list project scripts", "files": []}
@@ -545,46 +549,41 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             return _unauthorized(request)
         return JSONResponse(project_ops.languages(str(runtime.root)))
 
-    async def translation_stats(request: Request):
-        if not await _check_token(request):
-            return _unauthorized(request)
-        language = request.query_params.get("language")
+    def _translation_language(request: Request) -> tuple[str, JSONResponse | None]:
+        """Read the ``language`` query parameter, or a 400 when it is missing or not a name."""
+        from ..translation import invalid_language
+
+        language = request.query_params.get("language") or ""
         if not language:
-            return error_response(
+            return language, error_response(
                 code="translation_language_missing",
                 error="language is required",
                 status_code=400,
                 details={"parameter": "language"},
             )
-        if not language.isidentifier():
-            # It names a folder under game/tl; "/" or ".." would leave it.
-            return error_response(
+        if invalid_language(language):
+            return language, error_response(
                 code="translation_language_invalid",
                 error="language must be a Ren'Py language name",
                 status_code=400,
                 details={"language": language},
             )
+        return language, None
+
+    async def translation_stats(request: Request):
+        if not await _check_token(request):
+            return _unauthorized(request)
+        language, refused = _translation_language(request)
+        if refused is not None:
+            return refused
         return JSONResponse(project_ops.translation_stats(str(runtime.root), language))
 
     async def translation_strings(request: Request):
         if not await _check_token(request):
             return _unauthorized(request)
-        language = request.query_params.get("language")
-        if not language:
-            return error_response(
-                code="translation_language_missing",
-                error="language is required",
-                status_code=400,
-                details={"parameter": "language"},
-            )
-        if not language.isidentifier():
-            # It names a folder under game/tl; "/" or ".." would leave it.
-            return error_response(
-                code="translation_language_invalid",
-                error="language must be a Ren'Py language name",
-                status_code=400,
-                details={"language": language},
-            )
+        language, refused = _translation_language(request)
+        if refused is not None:
+            return refused
         from ..translation import list_translation_strings
         return JSONResponse({"ok": True, "strings": list_translation_strings(runtime.root, language)})
 
@@ -678,8 +677,9 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             requirements=live.launch_requirements(
                 project_path,
                 **{field: launch_kwargs.get(field)
-                   for field in ("savedir", "home", "persistent", "preferences", "bridge_eval")},
+                   for field in ("warp", "savedir", "home", "persistent", "preferences", "bridge_eval")},
             ),
+            language=launch_kwargs.get("language"),
         )
 
     def _isolation_option_error(payload: dict[str, Any]):
@@ -696,7 +696,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 details={"savedir": savedir},
             )
         if persistent is not None and (
-            not isinstance(persistent, str) or persistent.strip() not in STATE_MODE_TOKENS
+            not isinstance(persistent, str) or persistent.strip().lower() not in STATE_MODE_TOKENS
         ):
             return error_response(
                 code="launch_persistent_invalid",
@@ -712,13 +712,29 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 details={"home": home},
             )
         if preferences is not None and (
-            not isinstance(preferences, str) or preferences.strip() not in STATE_MODE_TOKENS
+            not isinstance(preferences, str) or preferences.strip().lower() not in STATE_MODE_TOKENS
         ):
             return error_response(
                 code="launch_preferences_invalid",
                 error="preferences must be 'auto', 'existing', or 'empty'",
                 status_code=400,
                 details={"preferences": preferences},
+            )
+        # Each field is valid on its own; some pairs are not (empty state
+        # needs a temporary savedir). Refuse those before any SDK work.
+        combined = launch_state_mode_error(
+            savedir=savedir, home=home, persistent=persistent, preferences=preferences
+        )
+        if combined is not None:
+            return error_response(
+                code="launch_state_mode_conflict",
+                error=combined,
+                status_code=400,
+                details={
+                    "savedir": savedir,
+                    "persistent": persistent,
+                    "preferences": preferences,
+                },
             )
         return None
 
@@ -732,7 +748,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 status_code=400,
                 details={"version": version},
             )
-        for field, allowed in (("display", DISPLAY_STRATEGIES), ("audio", AUDIO_STRATEGIES)):
+        for field, allowed in (("display", LAUNCHABLE_DISPLAY_STRATEGIES), ("audio", AUDIO_STRATEGIES)):
             value = payload.get(field, "auto")
             if not isinstance(value, str) or value.strip().casefold() not in allowed:
                 return error_response(
@@ -750,7 +766,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 details={"cleanup_on_stop": cleanup_on_stop},
             )
         timeout = payload.get("timeout")
-        if timeout is not None and not _real_number(timeout):
+        if timeout is not None and not _usable_timeout(timeout):
             return error_response(
                 code="launch_timeout_invalid",
                 error="timeout must be a number",
@@ -758,6 +774,17 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
                 details={"timeout": timeout},
             )
         return _isolation_option_error(payload)
+
+    def _usable_timeout(timeout: Any) -> bool:
+        # The act/time-budget number rule, and small enough to become the
+        # float deadline _launch_timeout makes (JSON integers have no limit).
+        if not is_real_number(timeout):
+            return False
+        try:
+            float(timeout)
+        except OverflowError:
+            return False
+        return True
 
     def _launch_timeout(timeout: Any) -> float | None:
         # As for renforge_launch: zero or less means the default deadline.
@@ -844,6 +871,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
         preferences = payload.get("preferences")
         cleanup_on_stop = payload.get("cleanup_on_stop", True)
         timeout = payload.get("timeout")
+        language = payload.get("language")
         start_label = payload.get("start_label")
         bridge_eval = payload.get("bridge_eval")
         if bridge_eval is not None and not isinstance(bridge_eval, bool):
@@ -879,6 +907,16 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
         option_error = _launch_option_error(payload)
         if option_error is not None:
             return option_error
+        if language is not None:
+            try:
+                language = normalize_language(language)
+            except LaunchError as exc:
+                return error_response(
+                    code="launch_language_invalid",
+                    error=exc.message,
+                    status_code=400,
+                    details={"language": payload.get("language")},
+                )
         result = await asyncio.to_thread(
             _start_live_launch,
             version=version,
@@ -894,6 +932,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
             preferences=preferences,
             start_label=start_label,
             bridge_eval=bridge_eval,
+            language=language,
         )
         return JSONResponse(result)
 
@@ -907,6 +946,22 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
         if not await _check_token(request):
             return _unauthorized(request)
         result = await asyncio.to_thread(live.stop_game, str(runtime.root))
+        return JSONResponse(result)
+
+    async def saves_import(request: Request):
+        if not await _check_token(request):
+            return _unauthorized(request)
+        payload = _as_dict(await _read_json(request))
+        # live.saves validates the selectors (types and lengths) and answers a
+        # malformed one with SAVE_IMPORT_INVALID, the code the caller relays.
+        result = await asyncio.to_thread(
+            live.saves,
+            str(runtime.root),
+            "import",
+            slot=payload.get("slot"),
+            slots=payload.get("slots"),
+            pattern=payload.get("pattern"),
+        )
         return JSONResponse(result)
 
     async def select_choice(request: Request):
@@ -1032,6 +1087,7 @@ def create_ui_app(project_root: Path, ui_token: str, dashboard_url: str | None =
         Route("/api/live/launch", launch, methods=["POST"]),
         Route("/api/live/status", launch_status, methods=["GET"]),
         Route("/api/live/stop", stop, methods=["POST"]),
+        Route("/api/live/saves/import", saves_import, methods=["POST"]),
         Route("/api/select-choice", select_choice, methods=["POST"]),
         Route("/api/eval", eval_route, methods=["POST"]),
         Route("/api/set-var", set_var, methods=["POST"]),

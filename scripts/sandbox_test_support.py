@@ -98,7 +98,8 @@ def _system_binds() -> list[str]:
 
 
 def missing_requirements() -> tuple[str, ...]:
-    names = ("bwrap", "fuse-overlayfs", "fusermount3")
+    # setsid runs inside the guest; checking the host approximates that.
+    names = ("bwrap", "fuse-overlayfs", "fusermount3", "setsid")
     missing = [name for name in names if shutil.which(name) is None]
     if not Path("/dev/fuse").exists():
         missing.append("/dev/fuse")

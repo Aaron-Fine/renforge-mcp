@@ -16,6 +16,12 @@ def test_default_lists_every_tool():
     assert allowed_tools(TOOL_DEFINITIONS, {"RENFORGE_TOOLSETS": "all"}) == set(TOOL_DEFINITIONS)
 
 
+def test_all_selects_every_group_alongside_valid_names():
+    every = set(TOOL_DEFINITIONS)
+    assert allowed_tools(TOOL_DEFINITIONS, {"RENFORGE_TOOLSETS": "all,play"}) == every
+    assert allowed_tools(TOOL_DEFINITIONS, {"RENFORGE_TOOLSETS": " play , all "}) == every
+
+
 def test_groups_combine_and_unknown_names_fail():
     env = {"RENFORGE_TOOLSETS": "play, docs"}
     assert allowed_tools(TOOL_DEFINITIONS, env) == set(TOOLSETS["play"]) | set(TOOLSETS["docs"])
@@ -88,3 +94,78 @@ def test_info_and_instructions_name_only_the_listed_tools(monkeypatch):
     assert "renforge_mod" not in play_only and "toolsets keep the earlier tools" not in play_only
     everything = _instructions(list(TOOLSETS))
     assert "renforge_mod" in everything and "Live Editor" in everything
+
+
+@pytest.mark.parametrize(
+    ("toolsets", "listed"),
+    [(["editor"], False), (["play", "editor"], False), (["live"], False), (["editor", "live"], True)],
+)
+def test_instructions_name_the_live_editor_only_when_info_does(toolsets, listed):
+    """The instructions use renforge_info's rule: the workflow needs both editor and live."""
+    from renforge.server import _instructions
+
+    assert ("Live Editor" in _instructions(toolsets)) is listed
+
+
+@pytest.mark.parametrize(
+    ("toolsets", "listed"),
+    [("play,editor", False), ("live,project", False), ("editor,live,project", True), ("all", True)],
+)
+def test_info_lists_the_live_editor_only_when_its_workflow_tools_are_listed(monkeypatch, toolsets, listed):
+    """The live_editor block names renforge_launch & co. (live) and renforge_editor (editor)."""
+    pytest.importorskip("fastmcp", reason="fastmcp not installed")
+    from fastmcp import Client
+
+    from renforge.server import create_app
+    from renforge.toolsets import allowed_tools
+
+    monkeypatch.setenv("RENFORGE_TOOLSETS", toolsets)
+    tool = "renforge_info" if "play" in toolsets or toolsets == "all" else "renforge_context"
+
+    async def info():
+        async with Client(create_app()) as client:
+            return (await client.call_tool(tool, {})).structured_content
+
+    payload = asyncio.run(info())
+    assert ("live_editor" in payload) is listed
+    if listed:
+        everything = {name for names in TOOLSETS.values() for name in names}
+        available = allowed_tools(everything)
+        block = payload["live_editor"]
+        assert block["launch_tool"] in available
+        assert set(block["agent_workflow"]) - {"renforge_info"} <= available
+
+
+@pytest.mark.parametrize("toolsets", ["live,editor", "debug", "project", "mod"])
+def test_renforge_info_is_listed_without_the_play_group(toolsets):
+    # Its description says "Call this first", and so do the server instructions.
+    listed = allowed_tools(TOOL_DEFINITIONS, {"RENFORGE_TOOLSETS": toolsets})
+    assert "renforge_info" in listed
+    assert "renforge_session" not in listed
+
+
+@pytest.mark.parametrize("value", [",", " , ", "Play", "play,plya", "all,projecct", "projecct,all"])
+def test_every_reader_of_the_variable_rejects_the_same_values(value):
+    from renforge.toolsets import bridge_eval_allowed, enabled_toolsets
+
+    env = {"RENFORGE_TOOLSETS": value}
+    with pytest.raises(RuntimeError):
+        allowed_tools(TOOL_DEFINITIONS, env)
+    with pytest.raises(RuntimeError):
+        enabled_toolsets(env)
+    # Launching games fails closed rather than enabling eval for a server
+    # whose tool list could not be worked out.
+    assert bridge_eval_allowed(env) is False
+
+
+def test_enabled_toolsets_matches_the_listed_tools():
+    from renforge.toolsets import enabled_toolsets
+
+    env = {"RENFORGE_TOOLSETS": "docs, play"}
+    assert enabled_toolsets(env) == ["play", "docs"]
+    assert enabled_toolsets({"RENFORGE_TOOLSETS": "play, all"}) == list(TOOLSETS)
+
+
+def test_image_shift_estimate_is_listed_with_the_capture_tools():
+    listed = allowed_tools(TOOL_DEFINITIONS, {"RENFORGE_TOOLSETS": "live"})
+    assert {"renforge_capture_screenshot", "renforge_estimate_translation"} <= listed

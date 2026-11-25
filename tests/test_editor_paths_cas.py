@@ -12,7 +12,7 @@ import renforge.editor.paths as editor_paths
 import renforge.util.files as file_utils
 from renforge.editor.paths import (
     EditorPathError,
-    _same_filesystem,
+    same_filesystem,
     conditional_replace_file,
     hash_file_nofollow,
     write_exclusive_bytes,
@@ -106,7 +106,7 @@ def test_same_filesystem_ignores_overlay_file_vs_dir_st_dev(tmp_path: Path) -> N
     """Overlayfs splits file and directory st_dev on one mount; CAS must still accept it."""
     source = tmp_path / "screen.rpy"
     source.write_text("xpos 10\n", encoding="utf-8")
-    assert _same_filesystem(source, tmp_path) is True
+    assert same_filesystem(source, tmp_path) is True
     if source.stat().st_dev != tmp_path.stat().st_dev:
         # Host actually splits file/dir st_dev — this is the production overlay case.
         assert source.parent.stat().st_dev == tmp_path.stat().st_dev

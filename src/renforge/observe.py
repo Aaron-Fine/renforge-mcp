@@ -1,15 +1,13 @@
-"""Host screenshot decoding and compatibility exports for gameplay helpers."""
+"""Host-side decoding of the screenshot an observation delivers."""
 from __future__ import annotations
 
 import base64
 import hashlib
 from collections.abc import Mapping
 from typing import Any
+
 from .util.images import bounded_png
 
-# Re-export the gameplay helpers callers import from renforge.observe.
-from .interaction import classify, crossed_transcript, guard_act, guard_dismiss
-from .progression import run_advance_until
 
 def apply_screenshot(raw: Mapping[str, Any]) -> tuple[dict[str, Any], bytes | None]:
     """Bound delivered images while preserving their source frame guard."""

@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Final, Iterable, Sequence
 
 from .sdk import RenpySdk
-from .state import project_state_dir
 
 
 RENPY_GAME_DIR: Final = "game"
@@ -53,11 +52,15 @@ def discover_project_from(start: Path | None = None) -> Path | None:
 
 @dataclass(frozen=True)
 class RenpyProject:
-    """Represents a Ren'Py project directory."""
+    """Represents a Ren'Py project directory.
+
+    RenForge's own files for the project live outside it; ask
+    :func:`renforge.state.project_state_dir` (or ``ensure_project_state_dir``)
+    for that folder.
+    """
 
     root: Path
     game_dir: Path = field(init=False)
-    cache_dir: Path = field(init=False)
 
     def __post_init__(self) -> None:
         original = self.root
@@ -75,11 +78,8 @@ class RenpyProject:
                 f"Invalid Ren'Py project: missing '{RENPY_GAME_DIR}/' in {canonical}"
             )
 
-        # RenForge's own state lives outside the game folder; created on use.
-        cache_dir = project_state_dir(canonical)
         object.__setattr__(self, "root", canonical)
         object.__setattr__(self, "game_dir", game_dir)
-        object.__setattr__(self, "cache_dir", cache_dir)
 
     @property
     def abs_root(self) -> Path:

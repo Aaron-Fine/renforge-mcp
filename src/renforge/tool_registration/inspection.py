@@ -6,6 +6,8 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from ..util.files import receipt_path
+
 TOOL_NAMES = (
     "renforge_diff_screenshots",
     "renforge_scene_tree",
@@ -90,8 +92,19 @@ def build_wrappers(context):
         `omitted` completeness hint. `detail` is `semantic` (default), `layout`
         or `raw`; `layers`/`types`/`screen`/`ids` scope the result.
         `include=["color","style","overflow"]` opts into composited colour,
-        declared style, and best-effort text overflow. `format="wireframe"` adds
-        an ASCII map. `save_as` persists a snapshot under `<state>/scenes/`;
+        declared style (including integer `xmaximum`/`ymaximum`), and a text
+        overflow verdict. Only `text`, `button`, and `input` nodes get a verdict:
+        the effective ceiling is the tighter of the widget's absolute
+        `xmaximum`/`ymaximum` (minus integer padding and margins) and the child
+        text's own absolute maximum; the unwrapped text size is compared with
+        the inner box, text that must wrap counts as x overflow, and the wrapped
+        height is compared with the inner height for y clipping. A y verdict
+        requires an absolute x maximum; a y-only request is unavailable. An
+        x-only result is `complete: false` with `unmeasured_axes: ["y"]`.
+        Relative maximums are recorded but not compared, vertical text is not
+        measured, and absent pixel maximums return `available: false` with a
+        reason. `format="wireframe"` adds an
+        ASCII map. `save_as` persists a snapshot under `<state>/scenes/`;
         `diff_against` diffs the live scene against a saved snapshot.
         """
         return _log_tool_call(
@@ -150,6 +163,12 @@ def build_wrappers(context):
         statements, ``screen`` its displayable tree, and ``id`` (a control id
         from ``renforge_observe``) or ``source`` (a ``file:line`` from observe or
         an input candidate) the statement there with its enclosing conditions.
+        ``search`` finds case-insensitive text in every loaded statement
+        (dialogue, Python source, conditions, menu choices, jump targets).
+        ``variables`` reads named store variables or dotted fields as data
+        (the one selector that returns game state rather than code); nothing
+        is called or evaluated. ``limit`` (1-2000) bounds the statements,
+        nodes, or index entries returned.
         """
         return _log_tool_call(
             name="renforge_explain",
@@ -319,7 +338,13 @@ def build_wrappers(context):
         crosshair_y: int = -1,
         rulers: bool = False,
     ) -> dict:
-        """Persist a screenshot under the project's controlled capture directory."""
+        """Persist a screenshot in RenForge's capture folder (``<state>/captures/``).
+
+        ``path`` is the PNG's absolute path. ``relative_path`` and
+        ``files_touched`` follow the receipt rule: project-relative inside the
+        project, else absolute POSIX, so with the default state folder
+        ``relative_path`` is ``path`` in POSIX form (``/`` on every OS).
+        """
         def _capture() -> dict:
             from io import BytesIO
             from PIL import Image
@@ -343,8 +368,12 @@ def build_wrappers(context):
             project_root, target = write_project_capture(project_path, name, png)
             with Image.open(BytesIO(png)) as image:
                 size = {"width": image.width, "height": image.height}
+            # Receipts name a file outside the project by its absolute path,
+            # and the capture folder is normally outside it (the state folder).
+            relative_path = receipt_path(project_root, target)
             return {"ok": True, "name": name, "path": str(target),
-                    "relative_path": str(target.relative_to(project_root)),
+                    "relative_path": relative_path,
+                    "files_touched": [relative_path],
                     "sha256": hashlib.sha256(png).hexdigest(), "size": size}
 
         return _log_tool_call(

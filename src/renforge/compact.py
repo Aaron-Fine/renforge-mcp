@@ -27,6 +27,11 @@ def _centre(bounds: Any) -> dict[str, int] | None:
 
 
 def compact_control(control: Mapping[str, Any], *, chrome: bool = False) -> dict[str, Any]:
+    """Return one control without default values, render detail or a click point at its centre.
+
+    ``chrome`` keeps only the id, text and any unusual enabled, clickable,
+    visible or covered state.
+    """
     out: dict[str, Any] = {}
     for key, value in control.items():
         if key in _DROPPED:
